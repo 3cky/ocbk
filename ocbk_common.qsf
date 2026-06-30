@@ -1,0 +1,118 @@
+# ============================================================================
+#  ocbk - common settings (device, sources, pin map)
+#  BK-0010 CPU bring-up on the 1chipMSX / OneChipBook (EP1C12Q240C8).
+#  Pin assignments copied from ocb-test / esemsx3 emsx_top_common.qsf.
+# ============================================================================
+
+# --- Device ---------------------------------------------------------------
+set_global_assignment -name FAMILY Cyclone
+set_global_assignment -name DEVICE EP1C12Q240C8
+set_global_assignment -name STRATIX_DEVICE_IO_STANDARD LVTTL
+
+# --- vm1 core configuration (global Verilog macros) -----------------------
+# Quartus does not propagate `define across separately-listed Verilog files, so
+# set the core defparam selectors as global macros. Mirrors src/cpu/vm1_config.v
+# (used by the simulation flow). 0 = FF register file / microcode revision A.
+set_global_assignment -name VERILOG_MACRO "CONFIG_VM1_CORE_REG_USES_RAM=0"
+set_global_assignment -name VERILOG_MACRO "CONFIG_VM1_CORE_MULG_VERSION=0"
+
+# --- Source files ---------------------------------------------------------
+# vm1 core (vendored Verilog-2001)
+set_global_assignment -name VERILOG_FILE src/cpu/vm1.v
+set_global_assignment -name VERILOG_FILE src/cpu/vm1_qbus.v
+# vm1_vcram_syn.v (synth stub) replaces the sim-only vm1_simlib.v; the FF
+# register-file path leaves this RAM unused, so the stub is stripped.
+set_global_assignment -name VERILOG_FILE src/cpu/vm1_vcram_syn.v
+set_global_assignment -name VERILOG_FILE src/cpu/vm1_plm.v
+set_global_assignment -name VERILOG_FILE src/cpu/vm1_tve.v
+# ocbk SystemVerilog (package first)
+set_global_assignment -name SYSTEMVERILOG_FILE src/qbus_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/qbus_mem.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/qbus_slot.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/ocbk_top.sv
+
+# --- Timing constraints ---------------------------------------------------
+set_global_assignment -name SDC_FILE ocbk_constrains.sdc
+
+# --- Unused pins / configuration device -----------------------------------
+# Everything not assigned below - including the entire cartridge-slot block
+# PIN_121-180 - is reserved as a tri-stated input.
+set_global_assignment -name RESERVE_ALL_UNUSED_PINS "AS INPUT TRI-STATED"
+set_global_assignment -name RESERVE_ALL_UNUSED_PINS_NO_OUTPUT_GND "AS INPUT TRI-STATED"
+set_global_assignment -name RESERVE_ASDO_AFTER_CONFIGURATION "AS INPUT TRI-STATED"
+set_global_assignment -name CYCLONE_CONFIGURATION_DEVICE EPCS4
+set_global_assignment -name USE_CONFIGURATION_DEVICE ON
+set_global_assignment -name GENERATE_RBF_FILE ON
+
+# ==========================================================================
+#  Pin locations
+# ==========================================================================
+# Clock
+set_location_assignment PIN_28  -to pClk21m
+# Green LEDs
+set_location_assignment PIN_43  -to pLed[0]
+set_location_assignment PIN_44  -to pLed[1]
+set_location_assignment PIN_45  -to pLed[2]
+set_location_assignment PIN_46  -to pLed[3]
+set_location_assignment PIN_47  -to pLed[4]
+set_location_assignment PIN_48  -to pLed[5]
+set_location_assignment PIN_49  -to pLed[6]
+set_location_assignment PIN_50  -to pLed[7]
+# Red power LED
+set_location_assignment PIN_240 -to pLedPwr
+
+# ==========================================================================
+#  I/O properties
+# ==========================================================================
+set_instance_assignment -name PCI_IO ON -to pClk21m
+set_instance_assignment -name GLOBAL_SIGNAL "GLOBAL CLOCK" -to pClk21m
+
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pLed[0]
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pLed[0]
+set_instance_assignment -name PCI_IO ON -to pLed[0]
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pLed[1]
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pLed[1]
+set_instance_assignment -name PCI_IO ON -to pLed[1]
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pLed[2]
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pLed[2]
+set_instance_assignment -name PCI_IO ON -to pLed[2]
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pLed[3]
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pLed[3]
+set_instance_assignment -name PCI_IO ON -to pLed[3]
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pLed[4]
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pLed[4]
+set_instance_assignment -name PCI_IO ON -to pLed[4]
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pLed[5]
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pLed[5]
+set_instance_assignment -name PCI_IO ON -to pLed[5]
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pLed[6]
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pLed[6]
+set_instance_assignment -name PCI_IO ON -to pLed[6]
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pLed[7]
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pLed[7]
+set_instance_assignment -name PCI_IO ON -to pLed[7]
+
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pLedPwr
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pLedPwr
+
+# ==========================================================================
+#  Cartridge-slot Q-bus pin map (FORWARD SEAM - commented out for Phase 1)
+# ==========================================================================
+# Uncomment together with qbus_slot SLOT_ENABLE=1 (and add the matching inout
+# ports to ocbk_top) to bring the internal Q-bus out to the physical cartridge
+# slot for real BK hardware. Pins from esemsx3 emsx_top_common.qsf (PIN_121-180,
+# all unused by Phase 1). REQUIRES an external bidirectional 5V<->3.3V level-
+# shifter: Cyclone I is 3.3V LVTTL, not 5V-tolerant (PCI clamp only).
+#
+#   ad_n[15:0] <-> pSltAdr[15:0]   PIN_164,163,166,165,168,167,158,156,
+#                                   160,139,143,141,159,162,161,140
+#   sync_n      -> pSltMerq_n  PIN_135      din_n  -> pSltRd_n   PIN_137
+#   dout_n      -> pSltWr_n    PIN_136      wtbt_n -> pSltIorq_n PIN_134
+#   rply_n     <-  pSltWait_n  PIN_128 (open-collector, board pull-up)
+#   transceiver dir -> pSltBdir_n PIN_133
+#   (DMA/IRQ/iako/init/sp/sel/bsy -> pSltDat[7:0] PIN_170..178 + spares
+#    pSltRsv5/16 PIN_126/138, pSltSw1/2 PIN_179/180, pSltCs* PIN_122..124)
+#
+# set_location_assignment PIN_164 -to pSltAdr[0]
+# set_location_assignment PIN_163 -to pSltAdr[1]
+# ... (full block added at slot bring-up)

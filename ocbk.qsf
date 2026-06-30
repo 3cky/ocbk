@@ -1,0 +1,9 @@
+# Analysis & Synthesis Assignments
+# ================================
+set_global_assignment -name TOP_LEVEL_ENTITY ocbk_top
+
+# Import Common Settings
+# ======================
+source ocbk_common.qsf
+
+set_global_assignment -name LAST_QUARTUS_VERSION 11.0
