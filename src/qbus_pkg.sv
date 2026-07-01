@@ -1,7 +1,7 @@
 // qbus_pkg - shared Q-bus constants for the ocbk BK-0010 core.
 //
 // The Q-bus itself is carried as plain tri-state wires shared at the parent
-// (cpu_test) level - every participant (the vm1 core, the qbus_mem slave, and
+// (cpu_test) level - every participant (the vm1 core, the qbus_sdram slave, and
 // the optional qbus_slot bridge) connects to the same inverted, active-low nets
 // and follows open-collector / drive-Z discipline, exactly as vm1.v already does
 // (`x ? 1'b0 : 1'bZ` and `ad_n = ena ? ~out : 1'bZ`). SystemVerilog interfaces

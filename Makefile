@@ -20,10 +20,10 @@ all: compile collect
 # --- simulation regressions (no Quartus required) -------------------------
 sim:
 	./sim/bk10/run.sh
-	./sim/run_cosim.sh
+	./sim/run_sdram_cosim.sh
 
 # --- FPGA build -----------------------------------------------------------
-compile: mem/bk10_prog.hex
+compile: mem/ram_test.hex
 	@echo ">> Phase 1 - Analysis & Synthesis"
 	$(QUARTUS_MAP) $(PROJECT).qpf
 	@echo ">> Phase 2 - Fitter (Place & Route)"
@@ -43,8 +43,8 @@ compile: mem/bk10_prog.hex
 	$(QUARTUS_CPF) -c $(PROJECT).cof
 	mv -f $(PROJECT).pof recovery.pof
 
-mem/bk10_prog.hex: mem/gen_mem.py
-	cd mem && python3 gen_mem.py bk10_prog.hex
+mem/ram_test.hex: mem/gen_mem.py
+	cd mem && python3 gen_mem.py ram_test.hex
 
 collect:
 	mkdir -p $(PARKING)

@@ -18,7 +18,7 @@ if {[get_collection_size $cpu_div] > 0 && [get_collection_size $vco] > 0} {
     create_generated_clock -name cpu_clk -source $vco -divide_by 32 $cpu_div
 }
 
-# Q-bus address latch: qbus_mem captures the bus address transparently on the
+# Q-bus address latch: qbus_sdram captures the bus address transparently on the
 # SYNC strobe (as real multiplexed-bus peripherals do), so SYNC is a slow, logic-
 # derived clock. Declare it and cut it from analysis - the captured address is
 # stable by bus protocol when SYNC asserts (validated cycle-exact by the cosim),
@@ -29,6 +29,32 @@ if {[get_collection_size $qsync] > 0} {
     create_clock -name qbus_sync -period 331.0 $qsync
     set_false_path -from [get_clocks {qbus_sync}]
     set_false_path -to   [get_clocks {qbus_sync}]
+}
+
+# SDRAM I/O timing, relative to the SDRAM controller clock (PLL clk0 = 96.65 MHz).
+# Delay values mirror esemsx3 / ocb-test. The PLL-generated clock name is matched
+# by wildcard; if it comes up empty, check the exact name in the fitter's
+# derive_pll_clocks report and update the pattern.
+# ----------------------------------------------------------------------------
+set sdram_clk [get_clocks {*altpll_inst|pll|clk\[0\]}]
+if {[get_collection_size $sdram_clk] > 0} {
+    set sdram_out_ports [get_ports {pMemDat[*] pMemAdr[*] pMemBa0 pMemBa1 \
+        pMemLdq pMemUdq pMemWe_n pMemCas_n pMemRas_n pMemCs_n}]
+    set_input_delay  -clock $sdram_clk -max 6.4 [get_ports pMemDat[*]]
+    set_input_delay  -clock $sdram_clk -min 3.2 [get_ports pMemDat[*]]
+    set_output_delay -clock $sdram_clk -max  1.5 $sdram_out_ports
+    set_output_delay -clock $sdram_clk -min -0.8 $sdram_out_ports
+}
+
+# Clock-domain crossing: the qbus_sdram wait-state FSM (cpu_clk) and the SDRAM
+# controller (sys_clk = PLL clk0) exchange data only through synchronisers and a
+# request/payload handshake held stable for the whole transaction (req toggle,
+# req payload, sampled read data, init_done). Cut both directions so TimeQuest
+# does not time these quasi-static / multi-flop-synchronised crossings.
+# ----------------------------------------------------------------------------
+if {[get_collection_size $sdram_clk] > 0 && [get_collection_size $cpu_div] > 0} {
+    set_false_path -from [get_clocks {cpu_clk}] -to $sdram_clk
+    set_false_path -from $sdram_clk -to [get_clocks {cpu_clk}]
 }
 
 # LEDs are async status outputs (no setup/hold relationship); leave unconstrained.

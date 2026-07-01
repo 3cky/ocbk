@@ -1,71 +1,76 @@
 #!/usr/bin/env python3
-"""Generate the BK-0010 RAM image for the qbus_mem block RAM.
+"""Generate the BK-0010 ROM image for the qbus_sdram on-chip ROM (Phase 2).
 
-Single source of truth for the on-chip test program, transcribed from the
-upstream bk10 timing testbench (cpu11/vm1/hdl/syn/sim/bk10/bk10_tb.v). Emits a
+Single source of truth for the small ROM-resident RAM-test program. Emits a
 $readmemh-compatible hex file (one 16-bit word per line, word-addressed from
-000000), loadable by both Icarus (simulation) and Quartus (RAM inference).
+ROM base 100000), loadable by both Icarus (cosim) and Quartus (block-RAM init).
 
-The CPU boots from the 2-word ROM bootstrap (JMP @#001000) handled inline in
-qbus_mem.sv; this image is only the RAM region 000000-007777.
+The 1801ВМ1 reset reads 177716 -> 100000 and begins executing at 100000, so word
+index 0 of this image is the first instruction. The program exercises the
+RAM-in-SDRAM datapath: word writes + read-back compares at a few RAM addresses
+(crossing an SDRAM row), then a byte write whose masking is verified (the
+untouched byte of the word must survive). On any mismatch it branches to a
+distinct failure self-loop; on full success it parks in the success self-loop.
+
+  success self-loop PC = 100072 (octal)   <- both oracles / LEDs key off this
+  failure self-loop PC = 100100 (octal)
+
+ROM_WORDS words are emitted (zero-filled past the program) to match the
+qbus_sdram block-RAM depth.
 """
 import sys
 
-RAM_WORDS = 2048  # 000000-007777, word-addressed (byte addr / 2)
+ROM_WORDS = 256  # on-chip ROM depth (words), 100000.. ; program uses ~33 words
 
-# word-index (byte address / 2) -> value (octal). Keyed by the same hex word
-# indices used in bk10_tb.v (program at byte 001000 = word 0x100; data at byte
-# 002000 = word 0x200; self-loop at byte 001076 = word 0x11F).
+# word-index (from ROM base 100000) -> value (octal). Branch offsets are
+# pre-computed: off = target_word - (branch_word + 1), as an 8-bit signed value
+# folded into the low byte of the branch opcode.  fail label = word index 30.
 PROG = {
-    # setup
-    0x100: 0o012700, 0x101: 0o002000,   # MOV #002000,R0
-    0x102: 0o012701, 0x103: 0o002000,   # MOV #002000,R1
-    0x104: 0o012710, 0x105: 0o012345,   # MOV #012345,@R0
-    # T01 / T02
-    0x106: 0o010002,                    # MOV R0,R2
-    0x107: 0o011002,                    # MOV @R0,R2
-    # T03 + restore R0
-    0x108: 0o012002,                    # MOV (R0)+,R2
-    0x109: 0o012700, 0x10A: 0o002000,
-    # T04 + restore R0
-    0x10B: 0o014002,                    # MOV -(R0),R2
-    0x10C: 0o012700, 0x10D: 0o002000,
-    # T05 (indexed, 2 words)
-    0x10E: 0o016002, 0x10F: 0o000000,   # MOV 0(R0),R2
-    # T06 + restore mem[002000]
-    0x110: 0o010011,                    # MOV R0,@R1
-    0x111: 0o012711, 0x112: 0o012345,
-    # T07 + restore R1
-    0x113: 0o010021,                    # MOV R0,(R1)+
-    0x114: 0o012701, 0x115: 0o002000,
-    # T08 + restore R1
-    0x116: 0o010041,                    # MOV R0,-(R1)
-    0x117: 0o012701, 0x118: 0o002000,
-    # T09 (indexed dst, 2 words)
-    0x119: 0o010061, 0x11A: 0o000000,   # MOV R0,0(R1)
-    # T10 / T11 / T12 + self-loop
-    0x11B: 0o005002,                    # CLR R2
-    0x11C: 0o000400,                    # BR .+2
-    0x11D: 0o012702, 0x11E: 0o001234,   # MOV #001234,R2
-    0x11F: 0o000777,                    # BR . (self-loop)
-    # data area at 002000
-    0x200: 0o012345,
+    # --- word-write test @ 001000 ---
+    0x00: 0o012700, 0x01: 0o001000,   # MOV #001000,R0
+    0x02: 0o012701, 0x03: 0o052525,   # MOV #052525,R1   (pattern P1)
+    0x04: 0o010110,                   # MOV R1,(R0)       store word
+    0x05: 0o011002,                   # MOV (R0),R2       read back
+    0x06: 0o020102,                   # CMP R1,R2
+    0x07: 0o001026,                   # BNE fail          (off=30-8=22=o26)
+    # --- word-write test @ 002000 (different SDRAM row) ---
+    0x08: 0o012700, 0x09: 0o002000,   # MOV #002000,R0
+    0x0A: 0o012701, 0x0B: 0o025252,   # MOV #025252,R1   (pattern P2)
+    0x0C: 0o010110,                   # MOV R1,(R0)
+    0x0D: 0o011002,                   # MOV (R0),R2
+    0x0E: 0o020102,                   # CMP R1,R2
+    0x0F: 0o001016,                   # BNE fail          (off=30-16=14=o16)
+    # --- byte-write masking test @ 003000 ---
+    0x10: 0o012700, 0x11: 0o003000,   # MOV #003000,R0
+    0x12: 0o012701, 0x13: 0o177777,   # MOV #177777,R1   prime whole word = FFFF
+    0x14: 0o010110,                   # MOV R1,(R0)
+    0x15: 0o112710, 0x16: 0o000125,   # MOVB #125,(R0)   low byte only -> 0125
+    0x17: 0o011002,                   # MOV (R0),R2       read full word back
+    0x18: 0o012703, 0x19: 0o177525,   # MOV #177525,R3   expected (hi=0377 kept)
+    0x1A: 0o020302,                   # CMP R3,R2
+    0x1B: 0o001002,                   # BNE fail          (off=30-28=2=o2)
+    # --- success ---
+    0x1C: 0o005003,                   # CLR R3            success marker
+    0x1D: 0o000777,                   # success: BR .     park (PC=100072)
+    # --- failure ---
+    0x1E: 0o012704, 0x1F: 0o000001,   # fail: MOV #1,R4   failure marker
+    0x20: 0o000777,                   # BR .              park (PC=100100)
 }
 
 
 def main():
-    out = sys.argv[1] if len(sys.argv) > 1 else "bk10_prog.hex"
-    mem = [0] * RAM_WORDS
+    out = sys.argv[1] if len(sys.argv) > 1 else "ram_test.hex"
+    mem = [0] * ROM_WORDS
     for idx, val in PROG.items():
-        if idx >= RAM_WORDS:
-            raise SystemExit(f"word index {idx:o} exceeds RAM_WORDS={RAM_WORDS}")
+        if idx >= ROM_WORDS:
+            raise SystemExit(f"word index {idx:o} exceeds ROM_WORDS={ROM_WORDS}")
         mem[idx] = val
-    # No header/comment lines: Quartus RAM inference via $readmemh is picky and
-    # may reject comments. One 16-bit hex word per line, word-addressed from 0.
+    # One 16-bit hex word per line, word-addressed from 0 (= BK address 100000).
+    # No comments: Quartus block-RAM inference via $readmemh is picky.
     with open(out, "w") as f:
         for w in mem:
             f.write(f"{w:04x}\n")
-    print(f"wrote {out} ({RAM_WORDS} words)")
+    print(f"wrote {out} ({ROM_WORDS} words)")
 
 
 if __name__ == "__main__":

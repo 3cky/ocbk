@@ -80,26 +80,34 @@ contention must be *modelled deliberately*, not left to emerge.
 
 ## 4. Phases
 
-Each phase ends with a concrete, testable milestone. 
+Each phase ends with a concrete, testable milestone.
 
 ### Phase 0 — Platform validation ✅ DONE Built/validated in `ocb-test`.
 - Clocking (single ×9 VCO), SDRAM BIST, VGA output, display bring-up.
 - **Done:** 1024×768@60 displays full-screen; SDRAM passes BIST at 96.65 MHz; one-PLL
   tree fits and closes timing.
 
-### Phase 1 — CPU bring-up
+### Phase 1 — CPU bring-up ✅ DONE
 - Bring `vm1` (1801ВМ1) up standalone on EP1C12 (currently only fitted for Cyclone III/DE0).
 - Wrap its Q-bus (`sync/din/dout/wtbt/rply`, inverted `ad[15:0]`, `dclo/aclo` reset).
 - Port the `sim/bk10` timing methodology; confirm per-instruction cycle counts.
 - **Milestone:** CPU executes from a block-RAM test program; instruction timing matches
   the reference cycle counts.
 
-### Phase 2 — Memory subsystem (BK RAM in SDRAM)
-- Q-bus ⇄ SDRAM bridge: map RAM `000000–077777`, ROM `100000–177577`, I/O `177600–177777`.
-- Deterministic **wait-state generator** in the 12.08 MHz domain (hide SDRAM latency
-  behind a fixed, BK-correct RPLY count); CDC handshake to the 96.65 MHz SDRAM domain.
-- ROM image (BK MONITOR) in block RAM or SDRAM.
-- **Milestone:** CPU runs the BK MONITOR ROM out of SDRAM-backed memory; timing stable.
+### Phase 2 — Memory subsystem (BK RAM in SDRAM) ✅ DONE
+- Q-bus ⇄ SDRAM bridge (`src/qbus_sdram.sv` + vendored `src/sdram_ctrl.sv`): RAM
+  `000000–077777` now lives in the board SDRAM; ROM `100000–177577` + I/O
+  `177600–177777` stay on-chip. Byte-granular writes (DQM) supported.
+- Deterministic **wait-state FSM** in the CPU-clock domain keeps RPLY at the fixed
+  N_RAM/N_ROM counts; the SDRAM controller runs in the 96.65 MHz domain and is
+  reached via a request-toggle CDC handshake. Because `cpu_clk = sys_clk/32`, an
+  SDRAM access completes far inside one CPU cycle, so its latency is fully hidden.
+- ROM image: a small ROM-resident **RAM-test program** (`mem/gen_mem.py`) rather
+  than the full MONITOR — word + byte writes are read back and verified from SDRAM.
+- **Done:** fits **2149 / 12060 LEs (18 %)**, 1 PLL; timing closes (all slacks
+  positive). Cosim (`sim/run_sdram_cosim.sh`) proves the datapath correct and the
+  RAM RPLY latency deterministic; on-board the RAM-test parks in its success loop.
+  *(Full BK MONITOR ROM deferred — it needs the video path, Phases 3–5.)*
 
 ### Phase 3 — 037 arbiter / video address generation
 - Retarget `va_037`/`vp_037` logic from К565РУ5 strobes to SDRAM requests, keeping the
@@ -169,5 +177,5 @@ Each phase ends with a concrete, testable milestone.
 
 ---
 
-*Status: Phase 0 complete. Next: Phase 1 (vm1 bring-up on EP1C12).*
+*Status: Phases 0–2 complete. Next: Phase 3 (037 arbiter / video address generation).*
 *See also the project memory note `bk-on-1chipmsx-feasibility` for the bring-up history.*

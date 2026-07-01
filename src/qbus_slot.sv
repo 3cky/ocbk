@@ -3,7 +3,7 @@
 // Maps the shared internal Q-bus (inverted, active-low, open-collector) out to
 // the physical 1chipMSX/OneChipBook cartridge-slot pins, so real BK Q-bus
 // hardware can be attached later. It is a first-class participant on the same
-// shared nets as the vm1 core and the qbus_mem slave.
+// shared nets as the vm1 core and the qbus_sdram slave.
 //
 //   PARAMETER SLOT_ENABLE
 //     0 (Phase 1 default) : the bridge drives NOTHING - all slot pins are

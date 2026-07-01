@@ -27,7 +27,8 @@ set_global_assignment -name VERILOG_FILE src/cpu/vm1_plm.v
 set_global_assignment -name VERILOG_FILE src/cpu/vm1_tve.v
 # ocbk SystemVerilog (package first)
 set_global_assignment -name SYSTEMVERILOG_FILE src/qbus_pkg.sv
-set_global_assignment -name SYSTEMVERILOG_FILE src/qbus_mem.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/sdram_ctrl.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/qbus_sdram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/qbus_slot.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/ocbk_top.sv
 
@@ -94,6 +95,66 @@ set_instance_assignment -name PCI_IO ON -to pLed[7]
 
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pLedPwr
 set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pLedPwr
+
+# ==========================================================================
+#  SDRAM (16-bit SDR; pins copied verbatim from ocb-test / esemsx3, board-proven)
+# ==========================================================================
+set_location_assignment PIN_38  -to pMemClk
+set_location_assignment PIN_39  -to pMemCke
+set_location_assignment PIN_197 -to pMemCs_n
+set_location_assignment PIN_196 -to pMemRas_n
+set_location_assignment PIN_195 -to pMemCas_n
+set_location_assignment PIN_194 -to pMemWe_n
+set_location_assignment PIN_223 -to pMemUdq
+set_location_assignment PIN_193 -to pMemLdq
+set_location_assignment PIN_200 -to pMemBa0
+set_location_assignment PIN_201 -to pMemBa1
+set_location_assignment PIN_203 -to pMemAdr[0]
+set_location_assignment PIN_206 -to pMemAdr[1]
+set_location_assignment PIN_207 -to pMemAdr[2]
+set_location_assignment PIN_208 -to pMemAdr[3]
+set_location_assignment PIN_235 -to pMemAdr[4]
+set_location_assignment PIN_234 -to pMemAdr[5]
+set_location_assignment PIN_233 -to pMemAdr[6]
+set_location_assignment PIN_228 -to pMemAdr[7]
+set_location_assignment PIN_227 -to pMemAdr[8]
+set_location_assignment PIN_226 -to pMemAdr[9]
+set_location_assignment PIN_202 -to pMemAdr[10]
+set_location_assignment PIN_225 -to pMemAdr[11]
+set_location_assignment PIN_224 -to pMemAdr[12]
+set_location_assignment PIN_181 -to pMemDat[0]
+set_location_assignment PIN_182 -to pMemDat[1]
+set_location_assignment PIN_183 -to pMemDat[2]
+set_location_assignment PIN_184 -to pMemDat[3]
+set_location_assignment PIN_185 -to pMemDat[4]
+set_location_assignment PIN_186 -to pMemDat[5]
+set_location_assignment PIN_187 -to pMemDat[6]
+set_location_assignment PIN_188 -to pMemDat[7]
+set_location_assignment PIN_222 -to pMemDat[8]
+set_location_assignment PIN_219 -to pMemDat[9]
+set_location_assignment PIN_218 -to pMemDat[10]
+set_location_assignment PIN_217 -to pMemDat[11]
+set_location_assignment PIN_216 -to pMemDat[12]
+set_location_assignment PIN_215 -to pMemDat[13]
+set_location_assignment PIN_214 -to pMemDat[14]
+set_location_assignment PIN_213 -to pMemDat[15]
+
+# SDRAM I/O properties (clock/cke get PCI_IO; data bus weak pull-ups; all 4 mA)
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pMemClk
+set_instance_assignment -name PCI_IO ON -to pMemClk
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pMemCke
+set_instance_assignment -name PCI_IO ON -to pMemCke
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pMemCs_n
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pMemRas_n
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pMemCas_n
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pMemWe_n
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pMemUdq
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pMemLdq
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pMemBa0
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pMemBa1
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pMemAdr
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pMemDat
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pMemDat
 
 # ==========================================================================
 #  Cartridge-slot Q-bus pin map (FORWARD SEAM - commented out for Phase 1)
