@@ -33,6 +33,13 @@ set_global_assignment -name SYSTEMVERILOG_FILE src/va_037_sync.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/cpu_sdram_dp.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/qbus_mem_sdram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/qbus_slot.sv
+# Phase-4 video pipeline
+set_global_assignment -name SYSTEMVERILOG_FILE src/palette_apply.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/fb_video.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/fb_readout.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/fb_linebuf.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/vga_timing.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/vga_out.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/ocbk_top.sv
 
 # --- Timing constraints ---------------------------------------------------
@@ -64,6 +71,37 @@ set_location_assignment PIN_49  -to pLed[6]
 set_location_assignment PIN_50  -to pLed[7]
 # Red power LED
 set_location_assignment PIN_240 -to pLedPwr
+# DIP switches (copied from ocb-test / esemsx3; ON pulls low)
+set_location_assignment PIN_53 -to pDip[0]
+set_location_assignment PIN_54 -to pDip[1]
+set_location_assignment PIN_55 -to pDip[2]
+set_location_assignment PIN_56 -to pDip[3]
+set_location_assignment PIN_57 -to pDip[4]
+set_location_assignment PIN_58 -to pDip[5]
+set_location_assignment PIN_59 -to pDip[6]
+set_location_assignment PIN_60 -to pDip[7]
+# VGA sync (copied from ocb-test / esemsx3: pVideoVS_n=PIN_74, pVideoHS_n=PIN_75)
+set_location_assignment PIN_74 -to pVideoVS_n
+set_location_assignment PIN_75 -to pVideoHS_n
+# VGA RGB - 6-bit R-2R DAC per channel (esemsx3 pin order, bit0..bit5)
+set_location_assignment PIN_95  -to pDac_VR[0]
+set_location_assignment PIN_98  -to pDac_VR[1]
+set_location_assignment PIN_99  -to pDac_VR[2]
+set_location_assignment PIN_100 -to pDac_VR[3]
+set_location_assignment PIN_101 -to pDac_VR[4]
+set_location_assignment PIN_104 -to pDac_VR[5]
+set_location_assignment PIN_85 -to pDac_VG[0]
+set_location_assignment PIN_86 -to pDac_VG[1]
+set_location_assignment PIN_87 -to pDac_VG[2]
+set_location_assignment PIN_88 -to pDac_VG[3]
+set_location_assignment PIN_93 -to pDac_VG[4]
+set_location_assignment PIN_94 -to pDac_VG[5]
+set_location_assignment PIN_77 -to pDac_VB[0]
+set_location_assignment PIN_78 -to pDac_VB[1]
+set_location_assignment PIN_79 -to pDac_VB[2]
+set_location_assignment PIN_82 -to pDac_VB[3]
+set_location_assignment PIN_83 -to pDac_VB[4]
+set_location_assignment PIN_84 -to pDac_VB[5]
 
 # ==========================================================================
 #  I/O properties
@@ -98,6 +136,40 @@ set_instance_assignment -name PCI_IO ON -to pLed[7]
 
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pLedPwr
 set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pLedPwr
+
+# DIP switch inputs (weak pull-up; mirrors ocb-test / esemsx3)
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pDip[0]
+set_instance_assignment -name PCI_IO ON -to pDip[0]
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pDip[1]
+set_instance_assignment -name PCI_IO ON -to pDip[1]
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pDip[2]
+set_instance_assignment -name PCI_IO ON -to pDip[2]
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pDip[3]
+set_instance_assignment -name PCI_IO ON -to pDip[3]
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pDip[4]
+set_instance_assignment -name PCI_IO ON -to pDip[4]
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pDip[5]
+set_instance_assignment -name PCI_IO ON -to pDip[5]
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pDip[6]
+set_instance_assignment -name PCI_IO ON -to pDip[6]
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pDip[7]
+set_instance_assignment -name PCI_IO ON -to pDip[7]
+
+# VGA sync outputs (24 mA, fast slew; mirrors ocb-test / esemsx3)
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pVideoVS_n
+set_instance_assignment -name CURRENT_STRENGTH_NEW 24MA -to pVideoVS_n
+set_instance_assignment -name SLOW_SLEW_RATE OFF -to pVideoVS_n
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pVideoHS_n
+set_instance_assignment -name CURRENT_STRENGTH_NEW 24MA -to pVideoHS_n
+set_instance_assignment -name SLOW_SLEW_RATE OFF -to pVideoHS_n
+
+# VGA RGB DAC outputs (4 mA, weak pull-up; mirrors ocb-test / esemsx3)
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pDac_VR
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pDac_VR
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pDac_VG
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pDac_VG
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pDac_VB
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pDac_VB
 
 # ==========================================================================
 #  SDRAM (16-bit SDR; pins copied verbatim from ocb-test / esemsx3, board-proven)

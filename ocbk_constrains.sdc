@@ -57,4 +57,27 @@ if {[get_collection_size $sdram_clk] > 0 && [get_collection_size $cpu_div] > 0} 
     set_false_path -from $sdram_clk -to [get_clocks {cpu_clk}]
 }
 
+# Pixel clock (PLL clk1 = 64.43 MHz) <-> SDRAM/system clock (clk0 = 96.65 MHz):
+# same-VCO RELATED clocks, so TimeQuest would time the 3:2 crossing (~5.17 ns
+# transfer) and fail closure spuriously. Every real crossing is protected by
+# design - the vga_out->fb_readout line request is a toggle + payload handshake
+# (2-FF synced, payload stable ~21 us around the toggle), fb_linebuf is a
+# ping-pong dual-clock RAM whose banks are never written while displayed, and
+# fb_front_valid is 2-FF synced in vga_out - so cut both directions.
+# ----------------------------------------------------------------------------
+set pix_clk [get_clocks {*altpll_inst|pll|clk\[1\]}]
+if {[get_collection_size $sdram_clk] > 0 && [get_collection_size $pix_clk] > 0} {
+    set_false_path -from $sdram_clk -to $pix_clk
+    set_false_path -from $pix_clk -to $sdram_clk
+}
+
+# DIP switches are quasi-static config inputs (screen_mode is 2-FF synced);
+# no timing relationship to any clock.
+# ----------------------------------------------------------------------------
+set_false_path -from [get_ports {pDip[*]}]
+
+# VGA outputs: all registered on the pixel clock inside vga_out; the R-2R DAC
+# and monitor sync inputs have no meaningful setup/hold at 64.43 MHz, so they
+# are left unconstrained (as the hardware-validated ocb-test build).
+
 # LEDs are async status outputs (no setup/hold relationship); leave unconstrained.

@@ -14,8 +14,8 @@
 // Domains: the ROM/IO wait-state FSM runs on cpu_clk (fixed N_ROM, as the validated
 // qbus_sdram FSM); the datapath/arbiter/controller run on sclk (sys_clk). Bus
 // strobes are synchronous to sclk (cpu_clk = sclk/32), so cpu_sdram_dp samples them
-// directly. Spare arbiter ports (readout / video fetch / FB write) are tied off here
-// for Phase 3 and exposed in Phase 4.
+// directly. The Phase-4 video clients (readout / 037 fetch / FB write, all sclk
+// domain) pass through to arbiter ports 1/2/3 via the v1_*/v2_*/v3_* ports.
 module qbus_mem_sdram #(
     parameter         MEMFILE     = "mem/ram_test.hex",
     parameter integer ROM_WORDS   = 256,
@@ -44,6 +44,21 @@ module qbus_mem_sdram #(
     input  logic        wtbt_n,
     output wire         rply_n,     // open-collector; ROM/IO only (RAM = va_037_sync)
     output logic        mem_ready,  // RAM SDRAM access complete -> 037 done-gate
+
+    // ---- Phase-4 video clients (sclk domain; arbiter ports 1/2/3) --------
+    input  logic                 v1_req,     // [1] panel readout (read-only)
+    input  logic [ADDR_BITS-1:0] v1_addr,
+    output logic                 v1_gnt,
+    output logic                 v1_rvalid,
+    input  logic                 v2_req,     // [2] 037 video fetch (read-only)
+    input  logic [ADDR_BITS-1:0] v2_addr,
+    output logic                 v2_gnt,
+    output logic                 v2_rvalid,
+    input  logic                 v3_req,     // [3] FB word write
+    input  logic [ADDR_BITS-1:0] v3_addr,
+    input  logic [DQ_BITS-1:0]   v3_wdata,
+    output logic                 v3_gnt,
+    output logic [DQ_BITS-1:0]   v_rdata,    // shared arbiter read data
 
     // ---- SDRAM device pins ----------------------------------------------
     output logic                s_cke,
@@ -109,15 +124,21 @@ module qbus_mem_sdram #(
         .gnt(dp_gnt), .rvalid(dp_rvalid), .rdata_i(arb_rdata)
     );
 
-    // Arbiter ports: [0] = CPU; [1] readout, [2] 037 fetch, [3] FB write (Phase 4).
-    wire [NREQ-1:0]           p_req    = {3'b000, dp_req};
-    wire [NREQ-1:0]           p_we     = {3'b000, dp_we};
-    wire [NREQ*ADDR_BITS-1:0] p_addr   = { {(3*ADDR_BITS){1'b0}}, dp_addr };
-    wire [NREQ*DQ_BITS-1:0]   p_wdata  = { {(3*DQ_BITS){1'b0}},   dp_wdata };
+    // Arbiter ports: [0] = CPU (highest); [1] readout, [2] 037 fetch, [3] FB write.
+    wire [NREQ-1:0]           p_req    = {v3_req,  v2_req,  v1_req,  dp_req};
+    wire [NREQ-1:0]           p_we     = {1'b1,    1'b0,    1'b0,    dp_we};
+    wire [NREQ*ADDR_BITS-1:0] p_addr   = {v3_addr, v2_addr, v1_addr, dp_addr};
+    wire [NREQ*DQ_BITS-1:0]   p_wdata  = {v3_wdata, {(2*DQ_BITS){1'b0}}, dp_wdata};
     wire [NREQ*2-1:0]         p_be     = { 6'b111111, dp_be };
     wire [NREQ-1:0]           p_gnt, p_rvalid;
     assign dp_gnt    = p_gnt[0];
     assign dp_rvalid = p_rvalid[0];
+    assign v1_gnt    = p_gnt[1];
+    assign v1_rvalid = p_rvalid[1];
+    assign v2_gnt    = p_gnt[2];
+    assign v2_rvalid = p_rvalid[2];
+    assign v3_gnt    = p_gnt[3];
+    assign v_rdata   = arb_rdata;
 
     wire                 cmd_req, cmd_we, cmd_ready, rd_valid;
     wire [ADDR_BITS-1:0] cmd_addr;
