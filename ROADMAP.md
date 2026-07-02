@@ -109,7 +109,7 @@ Each phase ends with a concrete, testable milestone.
   RAM RPLY latency deterministic; on-board the RAM-test parks in its success loop.
   *(Full BK MONITOR ROM deferred — it needs the video path, Phases 3–5.)*
 
-### Phase 3 — 037 arbiter / video address generation ✅ CORE DONE
+### Phase 3 — 037 arbiter / video address generation ✅ DONE
 
 **Strategy: the 037 becomes the RAM arbiter front-end** (chosen over a side-model that
 leaves `qbus_sdram` owning RPLY). Cycle-accuracy is then *structural* — the 037 model
@@ -123,8 +123,8 @@ into `src/ocbk_top.sv` — the 037 owns RAM RPLY, RAM lives in SDRAM via the arb
 done-gate interlock is in place. The SoC cosim (`ref037_soc_tb`) runs the program from
 SDRAM and reproduces `golden_037.txt` exactly even under worst-case fetch contention
 (done-gate never perturbs timing at 3 MHz). Fits **2199/12060 LEs (18%)**, 1 PLL, timing
-closes (all slacks positive). *Remaining for full Phase 3: connect the 037 video-fetch
-port (arbiter port 2) to a real read stream — folded into Phase 4 with the FB consumer.*
+closes (all slacks positive). *The remaining item — the real video-fetch read stream on
+arbiter port 2 — landed with Phase 4 (`fb_video`).*
 
 - Retarget `va_037` from К565РУ5 strobes to SDRAM requests as a **near-verbatim port**
   (`va_037_sync`): run it off `sys_clk` with two clock-enables — `en_pos` (6.04 MHz,
@@ -148,7 +148,7 @@ port (arbiter port 2) to a real read stream — folded into Phase 4 with the FB 
   (the with/without-display timing delta is correct), validated against a reference
   oracle (original `va_037` + behavioural К565РУ5 + CPU).
 
-### Phase 4 — Video output pipeline (1024×768@60)
+### Phase 4 — Video output pipeline (1024×768@60) ✅ DONE
 
 Pipeline (three model-independent seams — swappable without touching each other):
 **037 fetch → `palette_apply(screen_mode)` → 4-bit-index framebuffer → readout+CLUT+scale.**
@@ -172,6 +172,25 @@ Pipeline (three model-independent seams — swappable without touching each othe
 - **×2 horizontal / ×3 vertical** integer upscale → exact 1024×768 fill, correct 2:3 BK
   pixel shape. Drive the validated 64.43 MHz / 1024×768@60 timing.
 - **Milestone:** BK framebuffer contents shown full-screen, borderless, correctly scaled.
+
+**Done:** `src/fb_video.sv` (037 taps → port-2 fetch → `palette_apply` → FIFO → port-3
+FB writes, beam-counter destinations so scroll works like real hardware, back-buffer
+swap at the vgate frame edge), `src/fb_readout.sv` (port-1 line prefetch, **paced ≥24
+sys_clk/word** — load-bearing, the fixed-priority arbiter has no fairness), dual-clock
+ping-pong `src/fb_linebuf.sv` (1 M4K), `src/vga_out.sv` + vendored `src/vga_timing.sv`
+(64.43 MHz clk1 off the same PLL, triple-ahead line scheduling, fixed CLUT, RGB gated
+until `fb_front_valid`). Verified by `sim/run_video.sh` (palette unit tb; fb_video FB
+compare incl. mid-frame scroll + M256; readout pixel-exact vs geometry; full-chain
+`video_pipe_tb` pixel-exact at the DAC vs a Python-rendered frame) and the **Phase-4
+cycle-accuracy gate** `sim/ref037/ref037_soc_video_tb.v`: golden window exact with the
+readout live, then 64 display lines of real 4-port contention with the CPU self-loop
+beat pattern intact (any done-gate RPLY extension breaks the diff). ROM test program
+(`mem/gen_mem.py`, now a mini-assembler; parks pinned at 100004/100012) draws colour
+bars + border + diagonal into video RAM; `sim/video/run_draw_check.sh` (slow, one-off)
+proves the PDP-11 draw code matches `render_image()`, which `gen_expected.py` imports —
+the cosim validates the exact shipped picture. Fits **3363/12060 LEs (28%)**, 1 M4K,
+1 PLL, timing closes (setup +0.409 ns); sys↔pixel false-pathed (same-VCO related pair,
+all real crossings toggle-handshake or ping-pong-guarded).
 
 ### Phase 5 — SoC integration & boot
 - Wire vm1 + 037 + SDRAM + ROM + reset/IPL into one top.
@@ -228,10 +247,12 @@ Pipeline (three model-independent seams — swappable without touching each othe
 
 ---
 
-*Status: Phases 0–2 complete; Phase 3 core done (037-as-arbiter integrated in ocbk_top:
-va_037_sync owns RAM RPLY, RAM in SDRAM via sdram_arbiter + cpu_sdram_dp + done-gate;
-SoC cosim matches golden_037.txt; fits 18% / 1 PLL / timing closes). Next: Phase 4 video
-output — decoded 4-bit-index framebuffer, `palette_apply` seam, connect the 037
-video-fetch port + readout/FB arbiter clients.*
+*Status: Phases 0–4 complete — the BK video pipeline is live end to end: 037-owned RAM
+RPLY (cycle-exact under full 4-port SDRAM contention, gated by ref037_soc_video_tb),
+decoded double-buffered framebuffer in SDRAM, 1024×768@60 scan-out with fixed CLUT and
+×2/×3 scale; the ROM test program draws the test picture (bars/border/diagonal). Fits
+28% / 1 M4K / 1 PLL / timing closes. Next: Phase 5 SoC boot (full MONITOR ROM — needs
+the ROM-in-SDRAM plan from the `bk-video-pipeline-decision` memory note: boot-loader
+from EPCS, N_ROM latency work) and Phase 6 peripherals (PS/2 keyboard first).*
 *See also the project memory notes `bk-on-1chipmsx-feasibility` (bring-up history) and
 `bk-video-pipeline-decision` (Phase 3/4 design).*

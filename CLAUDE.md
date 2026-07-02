@@ -12,8 +12,9 @@ behaviour.
 **Read [ROADMAP.md](ROADMAP.md) first** — it is the authoritative implementation
 plan: the source building blocks, the validated platform constraints, the settled
 clock tree, and the phase-by-phase milestones. Every change should map to a phase
-there; update ROADMAP.md when scope or status changes. **Phases 1 (CPU bring-up)
-and 2 (BK RAM in SDRAM) are done**; see README.md for the current result.
+there; update ROADMAP.md when scope or status changes. **Phases 1 (CPU bring-up),
+2 (BK RAM in SDRAM), 3 (037 arbiter) and 4 (video pipeline) are done**; see
+README.md for the current result.
 
 ## Build & test
 
@@ -30,18 +31,30 @@ stages directly when iterating, e.g. `quartus_map ocbk.qpf`, `quartus_sta ocbk.q
 
 ## Verification discipline (do not skip)
 
-Cycle accuracy is the whole point. Two oracles must stay green:
+Cycle accuracy is the whole point. All `make sim` oracles must stay green:
 - `sim/bk10/run.sh` — the upstream timing testbench vs `sim/bk10/golden.txt`
   (the CPU core's per-instruction cycle counts). Independent of the SDRAM work.
-- `sim/run_sdram_cosim.sh` — the **synthesizable** `qbus_sdram` slave + its
-  `sdram_ctrl` against a behavioural SDRAM model, running the ROM RAM-test program.
-  Checks datapath correctness (word/byte read-back) *and* that the RAM RPLY latency
-  is deterministic (SDRAM hidden).
+- `sim/ref037/run.sh` — four diffs vs `golden_037.txt` (with-display timing):
+  the reference netlist, the retimed `va_037_sync`, the SoC integration with a
+  synthetic port-2 saturator (worst-case bound), and **`ref037_soc_video_tb`** —
+  the Phase-4 gate: real video pipeline on all 4 arbiter ports, golden window
+  exact, then 64 display lines with the CPU self-loop beat pattern (15/16/17,
+  4-sum=64) intact. Error prints carry a `FETCH-` prefix so run.sh's
+  `/^FETCH/`-only reduce filter lets them break the diff — keep that convention.
+- `sim/run_sdram_cosim.sh` — the Phase-2 `qbus_sdram` slave (word/byte datapath +
+  deterministic RPLY). Runs the `--core-only` ROM (no picture draw — hours slow).
+- `sim/run_video.sh` — palette unit tb; `fb_video_tb` (FB words vs a tap-driven
+  expected model, mid-frame scroll, M256); `vga_out_tb` (timing geometry + pixel-
+  exact readout); `video_pipe_tb` (full chain, every active pixel at the DAC vs a
+  Python-rendered frame of the **shipped** picture).
+- `sim/video/run_draw_check.sh` — **slow (~10 min), not in `make sim`**: proves
+  the ROM's hand-assembled PDP-11 draw code writes exactly `render_image()`.
+  Run it whenever `mem/gen_mem.py`'s program or picture changes.
 
-Any change touching the core, the Q-bus, memory, or clocking must keep both
-passing. When tuning bus/RPLY timing, trace the **reference** waveform first
+Any change touching the core, the Q-bus, memory, video, or clocking must keep all
+of it passing. When tuning bus/RPLY timing, trace the **reference** waveform first
 (instrument `cpu11/vm1/.../sim/bk10/bk10_tb.v`) — that is ground truth. Note the
-golden checks *timing*, not write data — only the SDRAM cosim verifies RAM values.
+golden checks *timing*, not write data — only the SDRAM/video cosims verify values.
 
 ## Architecture & conventions
 
@@ -63,9 +76,26 @@ golden checks *timing*, not write data — only the SDRAM cosim verifies RAM val
   slot pin map lives commented in `ocbk_common.qsf`. Real BK hardware needs an
   external 5V↔3.3V level-shifter (Cyclone I is not 5V-tolerant).
 - On-chip RAM is tight (~239 Kbit). BK RAM (000000–077777) lives in the board
-  **SDRAM** via `qbus_sdram` (Phase 2 done); only ROM + I/O stay on-chip. The
-  vendored `src/sdram_ctrl.sv` (from `ocb-test`) gained a 2-bit `cmd_be` byte mask
-  for the BK's byte writes — re-sync from upstream but keep that hook.
+  **SDRAM** via the 037-fronted arbiter path (`qbus_mem_sdram`; the Phase-2
+  `qbus_sdram` is retired from the build but kept for its cosim); only ROM + I/O
+  stay on-chip. The vendored `src/sdram_ctrl.sv` (from `ocb-test`) gained a 2-bit
+  `cmd_be` byte mask for the BK's byte writes — re-sync from upstream but keep
+  that hook. `src/vga_timing.sv` is likewise vendored verbatim from `ocb-test`.
+- **Video pipeline conventions (Phase 4)** — mirror these in RTL, cosims and
+  `gen_expected.py` alike: FB = 512 slots/line × 4-bit post-palette index ×
+  256 lines, 128 words/line, slot `s` of a word at bits `[4s+3:4s]`, LSB-first in
+  beam order; FB0 = SDRAM word `0x010000`, FB1 = `0x018000`, double-buffered
+  (writer swaps at the vgate frame edge, reader latches `fb_front` at its vblank
+  line-0 request). FB *destination* comes from beam counters, fetch *address* from
+  `video_va` (else scroll breaks). Scroll: row r fetches vram line
+  `(RA − 0o330 + r) & 0xFF` (netlist-proven). CLUT (in `vga_out`): 0=black 1=blue
+  2=green 3=red 15=white — also the CRT colour-tweak hook. `screen_mode`
+  (mono-512 / colour-256) = DIP1 (OFF=colour), touches only `palette_apply`.
+- **SDRAM arbiter ports** (fixed priority, 0 highest): 0=CPU, 1=panel readout,
+  2=037 video fetch, 3=FB write. There is **no fairness** — the readout MUST stay
+  paced (`fb_readout` PACE ≥24 sys_clk/word); an unpaced port-1 burst starves
+  ports 2/3 for a whole line. Client contract: hold req+fields until the 1-cycle
+  gnt, then drop req for ≥1 cycle (`served` mask).
 
 ## Gotchas (learned the hard way)
 
@@ -102,9 +132,24 @@ golden checks *timing*, not write data — only the SDRAM cosim verifies RAM val
   `ocbk_constrains.sdc` false-paths both directions
   of the `cpu_clk`↔`sys_clk` crossing. Reset is gated on SDRAM `init_done` (CPU held
   in reset until the controller's ~200 µs init completes).
+- **sys_clk↔pix_clk are same-VCO *related* clocks** (96.65/64.43, 3:2): without
+  the SDC `set_false_path` pair TimeQuest times the ~5.17 ns transfer and fails
+  closure spuriously. All real crossings are a toggle+2-FF handshake (line
+  request; payload stable ~21 µs around the toggle), the ping-pong `fb_linebuf`
+  (a bank is never written while displayed — the triple-ahead scheduling
+  guarantees it), or 2-FF-synced quasi-statics (`fb_front_valid`, `screen_mode`).
+- **`fb_linebuf` must stay the plainest dual-clock RAM** (one write-always, one
+  registered-read-always, same width both ports) — that's what Quartus 11 infers
+  a single M4K from and Icarus simulates; mixed widths or dcfifo break one or the
+  other. Check the fit report stays at exactly 1 M4K / 4096 bits.
 - `mem/ram_test.hex` is **generated** by `mem/gen_mem.py` (the single source of
-  truth for the ROM-resident RAM-test program; word 0 = BK address 100000) and is
-  gitignored — `make` regenerates it.
+  truth for the ROM program — a small label-resolving PDP-11 assembler — AND the
+  test picture via `render_image()`, imported by `sim/video/gen_expected.py`;
+  word 0 = BK address 100000) and is gitignored — `make` regenerates it. The
+  success/failure park loops are pinned at **100004/100012** (hardcoded in
+  `ocbk_top.sv` and `qbus_sdram_tb.sv`) — they must never move; new code goes
+  after the `start` label. After changing the draw code or picture, run
+  `sim/video/run_draw_check.sh`.
 
 ## Temp files
 
