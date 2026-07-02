@@ -58,7 +58,13 @@ module va_037_sync (
 
     // ---- taps for the Phase-3 SDRAM-request translation --------------------
     output logic        cpu_grant,   // RASEL rising for a CPU access (issue point)
-    output logic [13:1] video_va     // video fetch word address (VA counter)
+    output logic [13:1] video_va,    // video fetch word address (VA counter)
+
+    // ---- taps for the Phase-4 video pipeline (output-only, oracle-safe) ----
+    output logic        vid_fetch,   // one sys_clk pulse per video word slot
+    output logic        vid_line_en, // beam row is displayed (WTI line-mask term)
+    output logic        hgate,       // horizontal blanking gate
+    output logic        vgate        // vertical blanking gate
 );
 
    // -----------------------------------------------------------------------
@@ -137,6 +143,14 @@ module va_037_sync (
    always_ff @(posedge clk) RASEL_d <= RASEL;
    assign cpu_grant = RASEL & ~RASEL_d & ~PIN_nSYNC & ~A[15];  // CPU-access grant edge
    assign video_va  = VA[13:1];
+
+   // Phase-4 taps: pure reads of existing state, no logic change.
+   // vid_fetch pulses at PC==1 (VA[4:1] increments at PC==7, video CAS window is
+   // PC==2..3), so VA is stable and the pulse leads the slot by 6 CLKIN.
+   assign vid_fetch   = en_neg & ~HGATE & ~VGATE & (PC == 3'd1);
+   assign vid_line_en = M256 | (LC[6] & LC[7]);   // same line term as PIN_WTI
+   assign hgate       = HGATE;
+   assign vgate       = VGATE;
 
    // -----------------------------------------------------------------------
    // Clocked-transparent latches (updated every sys_clk, gated by condition)

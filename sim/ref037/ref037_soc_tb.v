@@ -110,6 +110,7 @@ module ref037_soc_tb;
     wire       va_ras, va_we, va_ne, va_nbs, va_wti, va_wtd, va_vsync, va_grant;
     wire [13:1] video_va;
     wire        mem_ready;
+    wire        va_vfetch, va_line_en, va_hgate, va_vgate;
     va_037_sync pr037 (
         .clk(sys_clk), .en_pos(en_pos), .en_neg(en_neg), .mem_ready(mem_ready),
         .PIN_R(~dclo), .PIN_C(1'b0),
@@ -117,8 +118,30 @@ module ref037_soc_tb;
         .PIN_nWTBT(wtbt), .PIN_nRPLY(rply037_n),
         .PIN_A(va_a), .PIN_nCAS(va_cas), .PIN_nRAS(va_ras), .PIN_nWE(va_we),
         .PIN_nE(va_ne), .PIN_nBS(va_nbs), .PIN_WTI(va_wti), .PIN_WTD(va_wtd),
-        .PIN_nVSYNC(va_vsync), .cpu_grant(va_grant), .video_va(video_va)
+        .PIN_nVSYNC(va_vsync), .cpu_grant(va_grant), .video_va(video_va),
+        .vid_fetch(va_vfetch), .vid_line_en(va_line_en),
+        .hgate(va_hgate), .vgate(va_vgate)
     );
+
+    // ---- Phase-4 tap sanity: exactly 32 vid_fetch pulses per display line ----
+    // Prints only on error; the FETCH- prefix passes run.sh's reduce filter
+    // (which keeps only /^FETCH/ lines), so an error breaks the golden diff.
+    reg        vf_line_open = 1'b0;   // saw the hgate fall that opens this line
+    reg        va_hgate_d   = 1'b0;
+    integer    vf_cnt       = 0;
+    always @(posedge sys_clk) begin
+        va_hgate_d <= va_hgate;
+        if (va_vfetch) vf_cnt = vf_cnt + 1;
+        if (va_hgate & ~va_hgate_d) begin          // line-end edge
+            if (vf_line_open && vf_cnt != 32)
+                $display("FETCH-VIDTAP-ERROR: %0d fetches in display line", vf_cnt);
+            vf_line_open = 1'b0;
+        end
+        if (~va_hgate & va_hgate_d & ~va_vgate) begin  // line-start edge
+            vf_line_open = 1'b1;
+            vf_cnt       = 0;
+        end
+    end
 
     // ---- CPU SDRAM datapath (arbiter port 0) --------------------------------
     wire                dp_req, dp_we;

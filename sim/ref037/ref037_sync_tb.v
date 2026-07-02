@@ -174,7 +174,8 @@ va_037_sync pr037_sync (
    .PIN_nWTBT(wtbt), .PIN_nRPLY(rply037_n),
    .PIN_A(va_a), .PIN_nCAS(va_cas), .PIN_nRAS(va_ras), .PIN_nWE(va_we),
    .PIN_nE(va_ne), .PIN_nBS(va_nbs), .PIN_WTI(va_wti), .PIN_WTD(va_wtd),
-   .PIN_nVSYNC(va_vsync), .cpu_grant(va_grant), .video_va(va_video)
+   .PIN_nVSYNC(va_vsync), .cpu_grant(va_grant), .video_va(va_video),
+   .vid_fetch(), .vid_line_en(), .hgate(), .vgate()
 );
 
 //______________________________________________________________________________
