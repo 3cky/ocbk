@@ -37,7 +37,7 @@
 // real BK-0010 -> DIP switch 1 here: OFF = colour-256 (default), ON = mono-512.
 //
 // LEDs (liveness):
-//   pLedPwr (red)  : solid once the CPU reaches the SUCCESS self-loop at 100072
+//   pLedPwr (red)  : solid once the CPU reaches the SUCCESS self-loop at 100004
 //                    (RAM-test passed: every word/byte write verified from SDRAM).
 //   pLed[7]        : system heartbeat off the PLL (FPGA configured + PLL locked).
 //   pLed[6]        : SDRAM init_done (lit once the controller finished init).
@@ -415,11 +415,11 @@ module ocbk_top (
     );
 
     // ---- liveness --------------------------------------------------------
-    // Reached the SUCCESS self-loop at byte 100072 (RAM test passed; sticky).
+    // Reached the SUCCESS self-loop at byte 100004 (RAM test passed; sticky).
     logic reached_loop;
     always_ff @(posedge cpu_clk_n or negedge dclo_n) begin
         if (!dclo_n)                                   reached_loop <= 1'b0;
-        else if (fetch_stb && bus_addr == 16'o100072)  reached_loop <= 1'b1;
+        else if (fetch_stb && bus_addr == 16'o100004)  reached_loop <= 1'b1;
     end
 
     // Transaction counter (moves while the CPU executes).

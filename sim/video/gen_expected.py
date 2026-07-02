@@ -18,20 +18,20 @@ Conventions mirrored from the RTL (palette_apply.sv / fb_video.sv):
 Full-screen mono only (the mode/palette seams are covered by palette_tb and
 fb_video_tb; the full chain adds nothing mode-specific).
 
-Phase 8 replaces the synthetic pattern with the image drawn by the ROM test
-program (imported from mem/gen_mem.py), so the same cosim then validates the
-exact shipped picture.
+The video RAM content is the exact picture the ROM test program draws
+(mem/gen_mem.py render_image() - single source of truth), so the cosim
+validates the shipped image end to end.
 """
 
 import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "..", "mem"))
+from gen_mem import render_image  # noqa: E402
 
 RA = 0o330          # standard full-screen scroll base (177664 = 0o1330)
 MODE_MONO = True
-
-
-def vram_word(i):
-    """Deterministic pattern, word i of the 8K-word BK video RAM."""
-    return (i ^ (i << 7) ^ 0x9E37) & 0xFFFF
 
 
 def render_fb(vram, ra):
@@ -50,7 +50,7 @@ def render_fb(vram, ra):
 
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
-    vram = [vram_word(i) for i in range(8192)]
+    vram = render_image()
     fb = render_fb(vram, RA)
 
     with open(os.path.join(here, "video_ram.hex"), "w") as f:

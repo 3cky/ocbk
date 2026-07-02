@@ -8,8 +8,9 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# ensure the ROM image exists (single source of truth = mem/gen_mem.py)
-( cd ../mem && python3 gen_mem.py ram_test.hex >/dev/null )
+# ensure the ROM image exists (single source of truth = mem/gen_mem.py).
+# --core-only: parks + RAM test without the Phase-4 picture draw (too slow here).
+( cd ../mem && python3 gen_mem.py ram_test_core.hex --core-only >/dev/null )
 
 SP="$(mktemp -d)"
 trap 'rm -rf "$SP"' EXIT

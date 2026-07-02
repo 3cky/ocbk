@@ -9,18 +9,21 @@
 //
 // Checks:
 //   (a) datapath correctness  - the program self-verifies its word/byte writes
-//       and parks in the SUCCESS self-loop (PC 100072), never the FAILURE loop
-//       (PC 100100);
+//       and parks in the SUCCESS self-loop (PC 100004), never the FAILURE loop
+//       (PC 100012);
 //   (b) deterministic timing  - every RAM access replies a fixed number of CPU
 //       cycles after DIN/DOUT (the SDRAM latency is fully hidden behind RPLY).
+//
+// Runs the --core-only ROM variant (parks + RAM test, no Phase-4 picture draw:
+// the ~8K-word fill would take hours of sim time and adds nothing here).
 //
 `timescale 1ns / 100ps
 
 `define CPU_HALF 167                  // ~3 MHz CPU clock, matching bk10_tb
 `define SDR_HALF 5                    // ~100 MHz SDRAM clock (~96.65 MHz target)
 
-`define PC_SUCCESS 16'o100072
-`define PC_FAIL    16'o100100
+`define PC_SUCCESS 16'o100004
+`define PC_FAIL    16'o100012
 
 module qbus_sdram_tb;
 
@@ -73,7 +76,7 @@ module qbus_sdram_tb;
    wire            dut_fetch;
 
    qbus_sdram #(
-      .MEMFILE("../mem/ram_test.hex"),
+      .MEMFILE("../mem/ram_test_core.hex"),
       .CLK_FREQ_HZ(2_000_000),         // short init/refresh for sim (functional)
       .ROW_BITS(ROWB), .COL_BITS(COLB), .BA_BITS(BAB),
       .DQ_BITS(DQB), .CAS_LATENCY(CL)
