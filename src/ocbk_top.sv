@@ -68,6 +68,7 @@ module ocbk_top (
     logic cpu_clk;          // ~3.02 MHz CPU clock     -> pin_clk_p
     logic cpu_clk_n;        // inverted CPU clock      -> pin_clk_n
     logic dot_ena;          // 12.08 MHz enable strobe (reserved, Phase 4)
+    logic en_pos, en_neg;   // ÷16 037 CLKIN enables (on CPU edges; see va_037_sync)
     logic dclo_n;           // CPU reset  (active low) - released first
     logic aclo_n;           // power-fail (active low) - released later
     logic locked;           // PLL locked
@@ -119,6 +120,10 @@ module ocbk_top (
     assign dot_ena   = (divc[2:0] == 3'b000);   // 96.65/8  = 12.08 MHz strobe
     assign cpu_clk   =  divc[4];                 // 96.65/32 = 3.02 MHz, 50% duty
     assign cpu_clk_n = ~divc[4];
+    // 037 CLKIN enables (÷16), phased to fire ON the CPU clock edges (CPU=CLKIN/2)
+    // so the retimed 037 matches the reference CPU:037 phase (see va_037_sync).
+    assign en_pos    = (divc[3:0] == 4'd15);     // "posedge CLKIN" (divc -> 0/16)
+    assign en_neg    = (divc[3:0] == 4'd7);      // "negedge CLKIN" (divc -> 8/24)
 
     // --- SDRAM-domain reset (release a couple sys_clk after PLL lock) ----
     logic srst_n_meta, srst_n;
@@ -159,6 +164,39 @@ module ocbk_top (
     wire        dmgo_n, bsy_n;
     wire [2:1]  sel_n;
 
+    // RAM RPLY + its cycle-stealing timing come from the retimed 037; ROM/IO reply
+    // from qbus_mem_sdram. The 037's RPLY (hard-driven) is converted to open-collector
+    // here so it wire-ANDs onto the shared rply_n. mem_ready is the RAM SDRAM done-gate.
+    wire        rply037_n;
+    wire        mem_ready;
+    assign rply_n = (rply037_n === 1'b0) ? 1'b0 : 1'bZ;
+
+    va_037_sync u_037 (
+        .clk       (sys_clk),
+        .en_pos    (en_pos),
+        .en_neg    (en_neg),
+        .mem_ready (mem_ready),
+        .PIN_R     (~dclo_n),          // 037 held in reset with the CPU (until init)
+        .PIN_C     (1'b0),
+        .PIN_nAD   (ad_n),
+        .PIN_nSYNC (sync_n),
+        .PIN_nDIN  (din_n),
+        .PIN_nDOUT (dout_n),
+        .PIN_nWTBT (wtbt_n),
+        .PIN_nRPLY (rply037_n),
+        .PIN_A     (),                 // DRAM-mux pins unused (RAM is in SDRAM)
+        .PIN_nCAS  (),
+        .PIN_nRAS  (),
+        .PIN_nWE   (),
+        .PIN_nE    (),
+        .PIN_nBS   (),
+        .PIN_WTI   (),
+        .PIN_WTD   (),
+        .PIN_nVSYNC(),
+        .cpu_grant (),                 // (Phase 4: video fetch translation)
+        .video_va  ()
+    );
+
     // ---- vm1 core (1801ВМ1) ---------------------------------------------
     vm1 u_cpu (
         .pin_clk_p (cpu_clk),
@@ -186,11 +224,13 @@ module ocbk_top (
         .pin_bsy_n (bsy_n)
     );
 
-    // ---- Q-bus RAM-in-SDRAM slave (RAM->SDRAM, ROM/IO on-chip) -----------
+    // ---- memory subsystem: ROM/IO on-chip (N_ROM) + RAM datapath in SDRAM
+    //      (cpu_sdram_dp + sdram_arbiter + sdram_ctrl). RAM RPLY is owned by the 037
+    //      above via mem_ready; this block drives rply_n only for ROM/IO. ----------
     wire [15:0] bus_addr;
     wire        fetch_stb;
-    qbus_sdram #(.MEMFILE("mem/ram_test.hex")) u_mem (
-        .clk      (cpu_clk_n),      // wait-state FSM advances on the inverted CPU clock
+    qbus_mem_sdram #(.MEMFILE("mem/ram_test.hex")) u_mem (
+        .cpu_clk  (cpu_clk_n),      // ROM/IO wait FSM advances on the inverted CPU clock
         .reset    (~dclo_n),
         .sclk     (sys_clk),
         .srst_n   (srst_n),
@@ -201,6 +241,7 @@ module ocbk_top (
         .dout_n   (dout_n),
         .wtbt_n   (wtbt_n),
         .rply_n   (rply_n),
+        .mem_ready(mem_ready),
         .s_cke    (pMemCke),
         .s_cs_n   (pMemCs_n),
         .s_ras_n  (pMemRas_n),

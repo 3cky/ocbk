@@ -20,6 +20,8 @@ all: compile collect
 # --- simulation regressions (no Quartus required) -------------------------
 sim:
 	./sim/bk10/run.sh
+	./sim/ref037/run.sh
+	./sim/run_sdram_arbiter.sh
 	./sim/run_sdram_cosim.sh
 
 # --- FPGA build -----------------------------------------------------------

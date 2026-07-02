@@ -109,19 +109,66 @@ Each phase ends with a concrete, testable milestone.
   RAM RPLY latency deterministic; on-board the RAM-test parks in its success loop.
   *(Full BK MONITOR ROM deferred — it needs the video path, Phases 3–5.)*
 
-### Phase 3 — 037 arbiter / video address generation
-- Retarget `va_037`/`vp_037` logic from К565РУ5 strobes to SDRAM requests, keeping the
-  decode (`nE`/`nBS`), the scroll register (`177664`), video address counters (СТА/СС),
-  and **arbitration timing**.
-- Reproduce the CPU/video cycle-stealing so RPLY timing tracks raster position.
+### Phase 3 — 037 arbiter / video address generation ✅ CORE DONE
+
+**Strategy: the 037 becomes the RAM arbiter front-end** (chosen over a side-model that
+leaves `qbus_sdram` owning RPLY). Cycle-accuracy is then *structural* — the 037 model
+*is* the timing oracle — rather than tuned.
+
+**Done:** reference oracle (`sim/ref037/`, `golden_037.txt`) established the ground-truth
+with-display cycle counts; `src/va_037_sync.sv` (retimed 037, bit-exact vs golden),
+`src/sdram_arbiter.sv` (4-client fixed-priority non-preemptive + `served` mask),
+`src/cpu_sdram_dp.sv` (RAM datapath + done-gate) and `src/qbus_mem_sdram.sv` integrate
+into `src/ocbk_top.sv` — the 037 owns RAM RPLY, RAM lives in SDRAM via the arbiter, the
+done-gate interlock is in place. The SoC cosim (`ref037_soc_tb`) runs the program from
+SDRAM and reproduces `golden_037.txt` exactly even under worst-case fetch contention
+(done-gate never perturbs timing at 3 MHz). Fits **2199/12060 LEs (18%)**, 1 PLL, timing
+closes (all slacks positive). *Remaining for full Phase 3: connect the 037 video-fetch
+port (arbiter port 2) to a real read stream — folded into Phase 4 with the FB consumer.*
+
+- Retarget `va_037` from К565РУ5 strobes to SDRAM requests as a **near-verbatim port**
+  (`va_037_sync`): run it off `sys_clk` with two clock-enables — `en_pos` (6.04 MHz,
+  the `posedge CLKIN` grid) and `en_neg` (offset by 8, the `negedge CLKIN` grid) — so
+  every state transition stays on the original enable grid and **`tb_037` remains a
+  valid netlist-equivalence oracle**. Drop the RAS/CAS/AMUX *pins*, keep the logic.
+- Keep the decode (`nE`/`nBS`), the scroll register (`177664`) + `M256`, the video
+  address counters (СТА/СС), and the **`RASEL` grant FSM** — the grant timing *is* the
+  CPU/video cycle-stealing. The 037 owns **RAM RPLY**; ROM/IO stay on-chip with the
+  fixed `N_ROM` reply (the 037's `nE` already gates them out of the DRAM path).
+- Hand the `177716` start-address register to the 037 (retire the `REG_SYS` fake in
+  `qbus_sdram`).
+- Split `qbus_sdram` into an `sdram_arbiter` (`sys_clk`) + the physical `sdram_ctrl`.
+  The arbiter serves **4 clients**: CPU RAM R/W (timing set by the 037 grant, *not* the
+  arbiter), the 037 video fetch (48.8 Hz), the framebuffer write, and the Phase-4
+  readout (60 Hz, hard-real-time). Bandwidth is a non-issue (<10 %); the risk is
+  worst-case *latency* on one CPU access under readout+refresh contention — this ends
+  the Phase-2 "latency fully hidden, no interlock" luxury, so an **RPLY done-gate**
+  (extend RPLY on a late read rather than latch stale data) lands here.
 - **Milestone:** CPU + 037 share SDRAM; cycle counts match real BK *with display active*
-  (the with/without-display timing delta is correct).
+  (the with/without-display timing delta is correct), validated against a reference
+  oracle (original `va_037` + behavioural К565РУ5 + CPU).
 
 ### Phase 4 — Video output pipeline (1024×768@60)
-- Decode BK video page: 512×256 monochrome and 256×256 4-colour, honouring vertical
-  scroll.
-- Framebuffer in SDRAM (BK writes at 48.8 Hz; readout at 60 Hz, double-buffered to bound
-  tearing) **or** direct line-buffered read.
+
+Pipeline (three model-independent seams — swappable without touching each other):
+**037 fetch → `palette_apply(screen_mode)` → 4-bit-index framebuffer → readout+CLUT+scale.**
+
+- **Decode is beam-synchronous, on the fetch/write side** (not at readout): a
+  `palette_apply` block between the 037 fetch and the FB write, modelling the palette
+  stage that is *external to the 037*. BK-0010 has a single fixed palette, so this is a
+  static map now; the seam is where BK-0011M's programmable, beam-raced palette drops in
+  (Phase 7) — one block swap, FB/readout/arbiter unchanged.
+- **Framebuffer:** decoded, **4-bit post-palette physical-colour index**, double-buffered
+  in SDRAM (swap at BK frame boundary; bounds tearing). *Not* a raw shadow copy — that
+  would lose the per-scanline palette history BK-0011M needs. Store a **canonical 512
+  mono-position slots/line** in both modes (mono: 1 bit→1 slot; colour: 2 bits→2 identical
+  slots), so readout stays mode-agnostic.
+- **Screen mode** (mono-512 vs colour-256) is a physical monitor/cable switch on real
+  BK-0010 — *not* address-space state. In the FPGA it's a static `screen_mode` config
+  input (DIP/menu); it touches only `palette_apply`. The 037 fetch is mode-independent.
+- **Fixed CLUT** (4-bit index → RGB): 0=black `0x000000`, 1=blue `0x0000FF`, 2=green
+  `0x00FF00`, 3=red `0xFF0000`, 15=white (mono foreground). The CLUT is the CRT
+  colour-tweak hook (e.g. green-phosphor mono = index 15 → `0x00FF00`).
 - **×2 horizontal / ×3 vertical** integer upscale → exact 1024×768 fill, correct 2:3 BK
   pixel shape. Drive the validated 64.43 MHz / 1024×768@60 timing.
 - **Milestone:** BK framebuffer contents shown full-screen, borderless, correctly scaled.
@@ -159,7 +206,10 @@ Each phase ends with a concrete, testable milestone.
 - **Cycle accuracy** is the headline goal: `vm1` is gate-faithful, so the risk is the
   *memory/arbitration* side — reproducing the 037's RPLY/wait timing on a much faster
   SDRAM. Keep all wait-states in the 12.08 MHz domain; validate against the `bk10`
-  methodology at every phase that touches memory (2, 3, 7).
+  methodology at every phase that touches memory (2, 3, 7). From Phase 3 on the SDRAM is
+  *contended* (CPU + video fetch + FB write + readout), so a CPU access is no longer
+  guaranteed to hide inside its RPLY window by margin alone — an **RPLY done-gate**
+  interlock (Phase 3) makes a late read extend RPLY instead of latching stale data.
 - **One-PLL discipline:** never add a second PLL. New clocks must be ÷N of the ×9 VCO or
   fabric clock-enables.
 - **Resource budget:** vm1 + 037 + SDRAM ctrl + scaler is a small fraction of the 12,060
@@ -169,13 +219,19 @@ Each phase ends with a concrete, testable milestone.
 
 ## 6. Open questions / decisions deferred
 
-- Framebuffer vs. direct line-buffered readout in Phase 4 (framebuffer chosen for the
-  48.8→60 reclock; confirm bandwidth headroom — budget says <10% of SDRAM, ample).
+- ~~Framebuffer vs. direct line-buffered readout in Phase 4~~ — **decided:** decoded,
+  double-buffered framebuffer in SDRAM (the 48.8→60 reclock + tearing bound require a
+  full-frame buffer; a line buffer only works genlocked). Bandwidth <10% of SDRAM.
 - Exact BK MONITOR / BASIC ROM images and licensing for bundling.
 - BK FDD/disk controller variant to emulate in Phase 8 (and Nextor-like vs native).
 - Whether to keep a native-rate analog-RGB output as a secondary, judder-free path.
 
 ---
 
-*Status: Phases 0–2 complete. Next: Phase 3 (037 arbiter / video address generation).*
-*See also the project memory note `bk-on-1chipmsx-feasibility` for the bring-up history.*
+*Status: Phases 0–2 complete; Phase 3 core done (037-as-arbiter integrated in ocbk_top:
+va_037_sync owns RAM RPLY, RAM in SDRAM via sdram_arbiter + cpu_sdram_dp + done-gate;
+SoC cosim matches golden_037.txt; fits 18% / 1 PLL / timing closes). Next: Phase 4 video
+output — decoded 4-bit-index framebuffer, `palette_apply` seam, connect the 037
+video-fetch port + readout/FB arbiter clients.*
+*See also the project memory notes `bk-on-1chipmsx-feasibility` (bring-up history) and
+`bk-video-pipeline-decision` (Phase 3/4 design).*

@@ -28,7 +28,10 @@ set_global_assignment -name VERILOG_FILE src/cpu/vm1_tve.v
 # ocbk SystemVerilog (package first)
 set_global_assignment -name SYSTEMVERILOG_FILE src/qbus_pkg.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/sdram_ctrl.sv
-set_global_assignment -name SYSTEMVERILOG_FILE src/qbus_sdram.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/sdram_arbiter.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/va_037_sync.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/cpu_sdram_dp.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/qbus_mem_sdram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/qbus_slot.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/ocbk_top.sv
 
