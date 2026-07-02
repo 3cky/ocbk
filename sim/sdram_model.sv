@@ -8,8 +8,9 @@
 // AUTO REFRESH, LOAD MODE and NOP are accepted and ignored.
 //
 // Storage is a flat array of MEM_WORDS entries indexed by the linear address
-// {bank,row,col}; sized for the modest contiguous region the BK RAM test touches
-// (not the full 32 MB device), keeping it Icarus-friendly.
+// {bank,row,col}; sized for the contiguous region the cosims touch - BK RAM plus
+// both Phase-4 framebuffers (FB1 ends at 0x01FFFF) - not the full 32 MB device,
+// keeping it Icarus-friendly.
 `timescale 1ns / 1ps
 
 module sdram_model #(
@@ -19,7 +20,7 @@ module sdram_model #(
     parameter int DQ_BITS     = 16,
     parameter int CAS_LATENCY = 2,
     parameter int KEY_BITS    = BA_BITS + ROW_BITS + COL_BITS,
-    parameter int MEM_WORDS   = 1 << 16
+    parameter int MEM_WORDS   = 1 << 17
 ) (
     input  logic                clk,
     input  logic                cke,
