@@ -67,3 +67,26 @@ else
    echo "ref037 (SoC integration) equivalence: FAIL (see diff above)" >&2
    exit 1
 fi
+
+# --- Phase 4 cycle-accuracy gate: same SoC but with the REAL video pipeline on
+#     all four arbiter ports (readout on a true 3:2 pixel clock + fetch/palette/
+#     FB-write), run on past display start. Golden window must match exactly;
+#     display-phase self-loop iterations are checked against the reference beat
+#     pattern inside the tb (violations print FETCH-* lines -> the diff fails). ---
+iverilog -g2012 -o "$SP/ref037socv.vvp" -s ref037_soc_video_tb \
+   "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
+   "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" \
+   ../../src/va_037_sync.sv ../../src/cpu_sdram_dp.sv ../../src/sdram_arbiter.sv \
+   ../../src/sdram_ctrl.sv ../../src/fb_video.sv ../../src/palette_apply.sv \
+   ../../src/fb_readout.sv ../../src/fb_linebuf.sv ../../src/vga_out.sv \
+   ../../src/vga_timing.sv ../sdram_model.sv \
+   ref037_soc_video_tb.v 2>&1 | grep -v 'sorry:' || true
+
+vvp -n "$SP/ref037socv.vvp" 2>/dev/null | reduce > "$SP/out_socv.txt"
+
+if diff -u golden_037.txt "$SP/out_socv.txt"; then
+   echo "ref037 (SoC + real video pipeline, 4-port contention) equivalence: PASS"
+else
+   echo "ref037 (SoC + real video pipeline) equivalence: FAIL (see diff above)" >&2
+   exit 1
+fi
