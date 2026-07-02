@@ -14,6 +14,12 @@
 // no write buffer and no read-after-write hazard. Everything is in the sys_clk
 // domain; the bus strobes are synchronous to it (cpu_clk = sys_clk/32), so they are
 // sampled directly, exactly as va_037_sync samples them.
+//
+// DATIO(B) read-modify-write cycles (INC/BIS/XOR/... on memory) are two sequential
+// accesses under one SYNC: the read completes (D_DONE), the strobes go idle, then
+// DOUT arrives and the write is issued through the normal D_IDLE path (address
+// latch and sel_ram are SYNC-framed, so they still hold). mem_ready drops during
+// the write phase, done-gating the 037's second RPLY exactly like a plain write.
 module cpu_sdram_dp #(
     parameter int ADDR_BITS = 24,
     parameter int DQ_BITS   = 16
@@ -90,8 +96,14 @@ module cpu_sdram_dp #(
                 D_RD_WAIT: if (rvalid) begin rd_hold <= rdata_i; state <= D_DONE; end
                 D_WR_REQ:  if (gnt)    begin req <= 1'b0; state <= D_DONE; end
                 D_DONE: begin
-                    // Hold done + read data until the CPU ends the bus cycle.
-                    if (sync_n) state <= D_IDLE;
+                    // Hold done + read data until the CPU releases the strobes.
+                    // Exit on strobes-idle, NOT on SYNC: a DATIO/DATIOB read-
+                    // modify-write cycle (INC/BIS/XOR/... on memory) runs DIN
+                    // then DOUT under ONE continuous SYNC - waiting for SYNC
+                    // here would sit through the DOUT phase and silently drop
+                    // the write. With the strobes-idle exit the write phase
+                    // re-enters D_IDLE and issues as a normal posted write.
+                    if (din_n && dout_n) state <= D_IDLE;
                 end
                 default: state <= D_IDLE;
             endcase

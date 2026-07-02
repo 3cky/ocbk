@@ -230,7 +230,7 @@ module ref037_soc_tb;
         if (~sync && sel_ram && addr >= `TEST_LO && addr < `TEST_HI) begin
             if (have_baseline)
                 $display("FETCH %06o cycles=%0d", prev_addr, nclk - prev_nclk);
-            if (prev_addr == 16'o001076) loop_n = loop_n + 1;
+            if (prev_addr == 16'o001136) loop_n = loop_n + 1;
             if (loop_n == 6) $finish;       // enough self-loop samples captured
             prev_nclk = nclk; prev_addr = addr; have_baseline = 1'b1;
         end
@@ -259,10 +259,24 @@ module ref037_soc_tb;
         u_mem.mem[16'h116] = 16'o010041;
         u_mem.mem[16'h117] = 16'o012701; u_mem.mem[16'h118] = 16'o002000;
         u_mem.mem[16'h119] = 16'o010061; u_mem.mem[16'h11A] = 16'o000000;
-        u_mem.mem[16'h11B] = 16'o005002;
-        u_mem.mem[16'h11C] = 16'o000400;
-        u_mem.mem[16'h11D] = 16'o012702; u_mem.mem[16'h11E] = 16'o001234;
-        u_mem.mem[16'h11F] = 16'o000777;
+        // RMW (DATIO/DATIOB) coverage - see ref037_tb.v; FAIL park 001124.
+        // This is the only make-sim path exercising read-modify-write through
+        // cpu_sdram_dp (a DATIO write phase was silently dropped pre-fix).
+        u_mem.mem[16'h11B] = 16'o012700; u_mem.mem[16'h11C] = 16'o002000;
+        u_mem.mem[16'h11D] = 16'o005010;
+        u_mem.mem[16'h11E] = 16'o005210;
+        u_mem.mem[16'h11F] = 16'o062710; u_mem.mem[16'h120] = 16'o000005;
+        u_mem.mem[16'h121] = 16'o052710; u_mem.mem[16'h122] = 16'o000120;
+        u_mem.mem[16'h123] = 16'o042710; u_mem.mem[16'h124] = 16'o000100;
+        u_mem.mem[16'h125] = 16'o105210;
+        u_mem.mem[16'h126] = 16'o011002;
+        u_mem.mem[16'h127] = 16'o020227; u_mem.mem[16'h128] = 16'o000027;
+        u_mem.mem[16'h129] = 16'o001401;
+        u_mem.mem[16'h12A] = 16'o000777;                 // RMW FAIL park (001124)
+        u_mem.mem[16'h12B] = 16'o005002;
+        u_mem.mem[16'h12C] = 16'o000400;
+        u_mem.mem[16'h12D] = 16'o012702; u_mem.mem[16'h12E] = 16'o001234;
+        u_mem.mem[16'h12F] = 16'o000777;                 // self-loop (001136)
         u_mem.mem[16'h200] = 16'o012345;
     end
 

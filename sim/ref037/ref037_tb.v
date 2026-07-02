@@ -231,10 +231,24 @@ initial begin
    ram[16'h116] = 16'o010041;
    ram[16'h117] = 16'o012701; ram[16'h118] = 16'o002000;
    ram[16'h119] = 16'o010061; ram[16'h11A] = 16'o000000;
-   ram[16'h11B] = 16'o005002;
-   ram[16'h11C] = 16'o000400;
-   ram[16'h11D] = 16'o012702; ram[16'h11E] = 16'o001234;
-   ram[16'h11F] = 16'o000777;
+   // RMW (DATIO/DATIOB) coverage: CLR/INC/ADD/BIS/BIC/INCB on memory, then a
+   // value self-check - a wrong RMW result parks in the FAIL loop at 001124,
+   // which changes the fetch trace and breaks the golden diff.
+   ram[16'h11B] = 16'o012700; ram[16'h11C] = 16'o002000;
+   ram[16'h11D] = 16'o005010;
+   ram[16'h11E] = 16'o005210;
+   ram[16'h11F] = 16'o062710; ram[16'h120] = 16'o000005;
+   ram[16'h121] = 16'o052710; ram[16'h122] = 16'o000120;
+   ram[16'h123] = 16'o042710; ram[16'h124] = 16'o000100;
+   ram[16'h125] = 16'o105210;
+   ram[16'h126] = 16'o011002;
+   ram[16'h127] = 16'o020227; ram[16'h128] = 16'o000027;
+   ram[16'h129] = 16'o001401;
+   ram[16'h12A] = 16'o000777;                            // RMW FAIL park (001124)
+   ram[16'h12B] = 16'o005002;
+   ram[16'h12C] = 16'o000400;
+   ram[16'h12D] = 16'o012702; ram[16'h12E] = 16'o001234;
+   ram[16'h12F] = 16'o000777;                            // self-loop (001136)
    ram[16'h200] = 16'o012345;
 end
 

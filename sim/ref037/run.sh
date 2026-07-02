@@ -22,7 +22,7 @@ iverilog -g2012 -o "$SP/ref037.vvp" -s ref037_tb \
    "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" "$K037/va_037.v" \
    ref037_tb.v 2>&1 | grep -v 'sorry:' || true
 
-reduce() { awk '/^FETCH/ { if ($2=="001076") { c++; if (c<=4) print } else print }'; }
+reduce() { awk '/^FETCH/ { if ($2=="001136") { c++; if (c<=4) print } else print }'; }
 
 # Reduce: unique instruction prefix, then the first 4 self-loop samples.
 vvp -n "$SP/ref037.vvp" 2>/dev/null | reduce > "$SP/out.txt"

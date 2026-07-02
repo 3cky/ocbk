@@ -121,6 +121,15 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   the write point — do **not** reuse the SYNC-latched value for byte masking (that
   corrupts word writes; the cycle-count oracles never check write data, so it slips
   through sim silently — only the SDRAM cosim verifies values).
+- **DATIO(B) read-modify-write cycles run DIN then DOUT under ONE SYNC** (INC/BIS/
+  XOR/... on memory). A bus slave FSM must return to idle on *strobes-idle*, never
+  on SYNC-rise — waiting for SYNC sits through the DOUT phase and silently drops
+  the write (found on hardware: the test picture's XOR diagonal vanished while MOV
+  bars worked; `cpu_sdram_dp` had exactly this bug). The oracle test programs
+  originally contained *no* memory-RMW instruction, so nothing in sim caught it —
+  the ref037 program + `golden_037.txt` and the gen_mem RAM test now include an
+  RMW block with a value self-check (a wrong result parks at a distinct fail PC,
+  which breaks the golden diff). Keep RMW coverage in any future bus-path oracle.
 - **CDC for SDRAM:** the wait-state FSM (`cpu_clk`) launches an SDRAM access via a
   request-*toggle* into the `sys_clk` adapter; read data is sampled back at the
   fixed RPLY point. This is safe while a worst-case access (~200 ns, incl. a

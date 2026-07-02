@@ -204,6 +204,19 @@ def build(core_only):
     a.emit(0o012703, 0o177525)               # MOV #177525,R3  expected
     a.emit(0o020302)                         # CMP R3,R2
     a.br(BNE, "fail")
+    # --- RMW (DATIO/DATIOB) test: read-modify-write cycles run DIN then DOUT
+    #     under ONE SYNC - the write phase must land in SDRAM (this is the bus
+    #     shape the picture draw's XOR/BIS depend on) --------------------------
+    a.emit(0o012700, 0o001000)               # MOV #001000,R0
+    a.emit(0o005010)                         # CLR (R0)
+    a.emit(0o005210)                         # INC (R0)        -> 1
+    a.emit(0o062710, 0o000005)               # ADD #5,(R0)     -> 6
+    a.emit(0o052710, 0o000120)               # BIS #120,(R0)   -> 126
+    a.emit(0o042710, 0o000100)               # BIC #100,(R0)   -> 026
+    a.emit(0o105210)                         # INCB (R0)       -> 027
+    a.emit(0o011002)                         # MOV (R0),R2
+    a.emit(0o020227, 0o000027)               # CMP R2,#27
+    a.br(BNE, "fail")
     a.br(BR, "success")
 
     if not core_only:
