@@ -49,6 +49,12 @@ compile: mem/ram_test.hex
 mem/ram_test.hex: mem/gen_mem.py
 	cd mem && python3 gen_mem.py ram_test.hex
 
+# Phase-5 EPCS boot blob (BK-0010.01 MONITOR + BASIC Vilnius), appended to the
+# POF as an ocbk.cof hex_block page at flash offset 0x40000.
+mem/boot_blob.hex: mem/gen_boot_blob.py mem/roms/monit10.rom \
+		mem/roms/basic10_1.rom mem/roms/basic10_2.rom mem/roms/basic10_3.rom
+	cd mem && python3 gen_boot_blob.py
+
 collect:
 	mkdir -p $(PARKING)
 	-mv -f recovery.pof $(PARKING)/
