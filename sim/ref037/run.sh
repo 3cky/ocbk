@@ -75,13 +75,16 @@ else
 fi
 
 # --- SoC integration: va_037_sync owns RAM RPLY, RAM in real SDRAM via the
-#     arbiter + cpu_sdram_dp + done-gate, with the 037 fetch streaming contention.
-#     Must still reproduce the golden (timing preserved) and run out of SDRAM. ---
+#     REAL qbus_mem_sdram (ROM/IO FSM + arbiter + cpu_sdram_dp + done-gate),
+#     with the 037 fetch streaming contention. Must still reproduce the golden
+#     (timing preserved) and run out of SDRAM. Run twice: program in RAM
+#     (on-chip bootstrap, rom_ext_en=0) and +romprog (Phase-5 ROM-in-SDRAM). ---
 iverilog -g2012 -o "$SP/ref037soc.vvp" -s ref037_soc_tb \
    "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
    "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" \
-   ../../src/va_037_sync.sv ../../src/cpu_sdram_dp.sv ../../src/sdram_arbiter.sv \
-   ../../src/sdram_ctrl.sv ../sdram_model.sv \
+   ../../src/qbus_pkg.sv ../../src/va_037_sync.sv ../../src/cpu_sdram_dp.sv \
+   ../../src/sdram_arbiter.sv ../../src/sdram_ctrl.sv ../../src/qbus_mem_sdram.sv \
+   ../sdram_model.sv \
    ref037_soc_tb.v 2>&1 | grep -v 'sorry:' || true
 
 vvp -n "$SP/ref037soc.vvp" 2>/dev/null | reduce > "$SP/out_soc.txt"
@@ -93,6 +96,15 @@ else
    exit 1
 fi
 
+vvp -n "$SP/ref037soc.vvp" +romprog 2>/dev/null | reduce 101136 > "$SP/out_soc_rom.txt"
+
+if diff -u golden_037_rom.txt "$SP/out_soc_rom.txt"; then
+   echo "ref037 (SoC integration, ROM-in-SDRAM program) equivalence: PASS"
+else
+   echo "ref037 (SoC integration, ROM-in-SDRAM) equivalence: FAIL (see diff above)" >&2
+   exit 1
+fi
+
 # --- Phase 4 cycle-accuracy gate: same SoC but with the REAL video pipeline on
 #     all four arbiter ports (readout on a true 3:2 pixel clock + fetch/palette/
 #     FB-write), run on past display start. Golden window must match exactly;
@@ -101,8 +113,9 @@ fi
 iverilog -g2012 -o "$SP/ref037socv.vvp" -s ref037_soc_video_tb \
    "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
    "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" \
-   ../../src/va_037_sync.sv ../../src/cpu_sdram_dp.sv ../../src/sdram_arbiter.sv \
-   ../../src/sdram_ctrl.sv ../../src/fb_video.sv ../../src/palette_apply.sv \
+   ../../src/qbus_pkg.sv ../../src/va_037_sync.sv ../../src/cpu_sdram_dp.sv \
+   ../../src/sdram_arbiter.sv ../../src/sdram_ctrl.sv ../../src/qbus_mem_sdram.sv \
+   ../../src/fb_video.sv ../../src/palette_apply.sv \
    ../../src/fb_readout.sv ../../src/fb_linebuf.sv ../../src/vga_out.sv \
    ../../src/vga_timing.sv ../sdram_model.sv \
    ref037_soc_video_tb.v 2>&1 | grep -v 'sorry:' || true
@@ -113,5 +126,17 @@ if diff -u golden_037.txt "$SP/out_socv.txt"; then
    echo "ref037 (SoC + real video pipeline, 4-port contention) equivalence: PASS"
 else
    echo "ref037 (SoC + real video pipeline) equivalence: FAIL (see diff above)" >&2
+   exit 1
+fi
+
+# --- Phase 5 gate: same 4-port contention run but executing FROM the SDRAM ROM
+#     region - golden window exact AND the ROM self-loop stays FLAT (13 cycles)
+#     for 64 display lines (any done-gate RPLY extension on a ROM fetch breaks it).
+vvp -n "$SP/ref037socv.vvp" +romprog 2>/dev/null | reduce 101136 > "$SP/out_socv_rom.txt"
+
+if diff -u golden_037_rom.txt "$SP/out_socv_rom.txt"; then
+   echo "ref037 (SoC + video, ROM-in-SDRAM under 4-port contention) equivalence: PASS"
+else
+   echo "ref037 (SoC + video, ROM-in-SDRAM) equivalence: FAIL (see diff above)" >&2
    exit 1
 fi

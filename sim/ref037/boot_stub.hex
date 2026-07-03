@@ -1,0 +1,4 @@
+// Minimal on-chip bootstrap for the ref037 SoC cosims ($readmemh, hex words):
+// 000137 001000 = JMP @#001000 (the RAM test program preloaded in SDRAM).
+005f
+0200

@@ -283,6 +283,7 @@ module ocbk_top (
     qbus_mem_sdram #(.MEMFILE("mem/ram_test.hex")) u_mem (
         .cpu_clk  (cpu_clk_n),      // ROM/IO wait FSM advances on the inverted CPU clock
         .reset    (~dclo_n),
+        .rom_ext_en(1'b0),          // Phase 5: becomes boot_ok & ~DIP2 with the EPCS loader
         .sclk     (sys_clk),
         .srst_n   (srst_n),
         .init_done(init_done),

@@ -20,6 +20,12 @@
 // DOUT arrives and the write is issued through the normal D_IDLE path (address
 // latch and sel_ram are SYNC-framed, so they still hold). mem_ready drops during
 // the write phase, done-gating the 037's second RPLY exactly like a plain write.
+//
+// Phase 5: SDRAM-backed ROM reads (sel_romr) ride the same read path - the linear
+// addr[15:1] map puts ROM 100000-177577 at SDRAM words 0x4000-0x7F7F, below the
+// framebuffers. ROM is read-only here: a ROM write (or the DOUT phase of a ROM
+// DATIO) is never issued to the SDRAM - the qbus_mem_sdram front-end replies and
+// ignores it, so nothing in this FSM changes for it.
 module cpu_sdram_dp #(
     parameter int ADDR_BITS = 24,
     parameter int DQ_BITS   = 16
@@ -33,6 +39,7 @@ module cpu_sdram_dp #(
     input  logic                 dout_n,
     input  logic                 wtbt_n,
     input  logic                 sel_ram,   // this access targets RAM (SYNC-framed)
+    input  logic                 sel_romr,  // targets SDRAM-backed ROM (read-only)
     input  logic [15:0]          addr,      // latched RAM word address (true)
     input  logic [15:0]          ad_true,   // current bus data (true = ~ad_n), for writes
 
@@ -59,8 +66,8 @@ module cpu_sdram_dp #(
 
     logic [15:0] rd_hold;
 
-    wire is_read  = sel_ram && !din_n;
-    wire is_write = sel_ram && !dout_n;
+    wire is_read  = (sel_ram || sel_romr) && !din_n;
+    wire is_write = sel_ram && !dout_n;       // ROM writes never reach the SDRAM
     // Byte op is WTBT sampled at DOUT time (dual-purpose WTBT).
     wire byte_op  = !wtbt_n;
 
@@ -112,6 +119,6 @@ module cpu_sdram_dp #(
 
     assign mem_ready = (state == D_DONE);
     assign rdata     = rd_hold;
-    assign rdata_oe  = (state == D_DONE) && !din_n && sel_ram;   // read data phase
+    assign rdata_oe  = (state == D_DONE) && !din_n && (sel_ram || sel_romr);
 
 endmodule

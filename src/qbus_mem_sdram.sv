@@ -2,14 +2,29 @@
 //
 // Supersedes qbus_sdram for the integrated top. Under Strategy A the 037
 // (va_037_sync) owns RAM RPLY and its cycle-stealing timing; this block provides:
-//   * ROM 100000-137777 + I/O 177716 on-chip, with the fixed N_ROM reply (the 037
+//   * ROM 100000-177577 + I/O on-chip decode, with the fixed N_ROM reply (the 037
 //     never sees these - they are outside its DRAM), driving rply_n itself; and
 //   * the RAM 000000-077777 DATA path into the board SDRAM through sdram_arbiter +
 //     cpu_sdram_dp, producing mem_ready for the 037's RPLY done-gate.
 // RAM RPLY is NOT driven here (va_037_sync drives it, gated by mem_ready).
 //
-// The 037's own registers (177664 scroll) are owned by va_037_sync, so they are
-// excluded from the I/O decode here to avoid a double reply.
+// Phase 5 ROM source (rom_ext_en):
+//   0 = the on-chip ROM_WORDS image (the boot-fallback / DIP-selected test ROM);
+//   1 = ROM reads are served from SDRAM through the same cpu_sdram_dp port-0 path
+//       as RAM (linear map: ROM word at SDRAM word addr[15:1] = 0x4000-0x7F7F).
+//       The reply keeps the fixed N_ROM count but is done-gated on mem_ready -
+//       a late SDRAM word EXTENDS RPLY (mirroring the 037's RAM gate) instead of
+//       latching stale data. ROM is not 037-arbitrated (real BK mask ROM is not
+//       cycle-stolen); ROM writes are replied to and ignored in both modes (a
+//       real BK would bus-timeout -> trap 4; fidelity deferred to Phase 9).
+//
+// The 037's own registers (177664 scroll) are owned by va_037_sync, and the
+// CPU-internal block 177700-177713 (CSR/error/timer) is decoded, replied and
+// data-driven by the 1801ВМ1 itself - both are excluded from the I/O decode
+// here to avoid a double reply / bus contention. I/O stubs served here:
+//   177716 = SYS_START | bit-2 write-flag (set on write, cleared after read);
+//   177660 = keyboard status stub (bit 6 VIRQ-mask writable, cold 1; bit 7 = 0);
+//   all other decoded I/O reads return 0 (BkEmu register semantics).
 //
 // Domains: the ROM/IO wait-state FSM runs on cpu_clk (fixed N_ROM, as the validated
 // qbus_sdram FSM); the datapath/arbiter/controller run on sclk (sys_clk). Bus
@@ -30,6 +45,7 @@ module qbus_mem_sdram #(
     // ---- slow domain (CPU clock) ----------------------------------------
     input  logic        cpu_clk,    // ROM/IO wait FSM clock (= pin_clk_n)
     input  logic        reset,      // active high (= ~dclo_n)
+    input  logic        rom_ext_en, // 1 = serve ROM reads from SDRAM (quasi-static)
 
     // ---- SDRAM domain ---------------------------------------------------
     input  logic        sclk,       // sys_clk (96.65 MHz)
@@ -90,15 +106,28 @@ module qbus_mem_sdram #(
 
     wire sel_ram = !sync_n && (addr <  RAM_TOP);
     wire sel_rom = !sync_n && (addr >= RAM_TOP) && (addr < IO_BASE);
-    // I/O here excludes the 037's own scroll register (177664), owned by va_037_sync.
-    wire sel_io  = !sync_n && (addr >= IO_BASE) && (addr != 16'o177664);
+    // I/O here excludes the 037's own scroll register (177664, owned by
+    // va_037_sync) and the CPU-internal block 177700-177713 (the 1801ВМ1
+    // replies and drives data for those itself - an external reply/drive
+    // there is a bus fight; MONITOR touches the internal timer constantly).
+    wire sel_io  = !sync_n && (addr >= IO_BASE) && (addr != 16'o177664)
+                           && !((addr >= CPUREG_LO) && (addr <= CPUREG_HI));
+
+    // ROM source select: external (SDRAM via cpu_sdram_dp) vs on-chip image.
+    wire sel_romx = sel_rom && rom_ext_en;      // SDRAM-backed ROM access
 
     // ---- ROM / I/O read data --------------------------------------------
+    logic sel1_wflag;   // 177716 bit 2: set on write, cleared after read
+    logic kbd_mask;     // 177660 bit 6: VIRQ mask, cold 1 (interrupts off)
+
     wire [15:0]        rom_off = addr - RAM_TOP;
     wire [ROM_AW-1:0]  rom_idx = rom_off[ROM_AW:1];
     wire               rom_hit = (rom_off[15:1] < ROM_WORDS);
     wire [15:0] rom_word = rom_hit ? rom[rom_idx] : 16'o000000;
-    wire [15:0] io_word  = (addr == REG_SYS) ? SYS_START : 16'o000000;
+    wire [15:0] io_word  =
+        (addr == REG_SYS)    ? (SYS_START | (sel1_wflag ? 16'o000004 : 16'o0)) :
+        (addr == REG_KBD_ST) ? (kbd_mask ? 16'o000100 : 16'o000000)            :
+        16'o000000;
     wire [15:0] rd_romio = sel_rom ? rom_word : io_word;
 
     // =====================================================================
@@ -118,7 +147,7 @@ module qbus_mem_sdram #(
     cpu_sdram_dp #(.ADDR_BITS(ADDR_BITS), .DQ_BITS(DQ_BITS)) u_dp (
         .clk(sclk), .rst_n(~reset),
         .sync_n(sync_n), .din_n(din_n), .dout_n(dout_n), .wtbt_n(wtbt_n),
-        .sel_ram(sel_ram), .addr(addr), .ad_true(~ad_n),
+        .sel_ram(sel_ram), .sel_romr(sel_romx), .addr(addr), .ad_true(~ad_n),
         .rdata(ram_rdata), .rdata_oe(ram_rdata_oe), .mem_ready(mem_ready),
         .req(dp_req), .we(dp_we), .addr_o(dp_addr), .wdata_o(dp_wdata), .be_o(dp_be),
         .gnt(dp_gnt), .rvalid(dp_rvalid), .rdata_i(arb_rdata)
@@ -181,6 +210,8 @@ module qbus_mem_sdram #(
     logic [2:0]  wcnt;
     logic        drive_data, reply;
     logic [15:0] rdata;
+    logic        dbg_romgate;   // diagnostic: an external-ROM read RPLY was extended
+                                // past the fixed N_ROM count (sim observability only)
 
     wire selected = sel_rom | sel_io;
     wire is_read  = !din_n;
@@ -190,6 +221,7 @@ module qbus_mem_sdram #(
         fetch_stb <= 1'b0;
         if (reset) begin
             state <= S_IDLE; drive_data <= 1'b0; reply <= 1'b0; wcnt <= '0;
+            sel1_wflag <= 1'b0; kbd_mask <= 1'b1; dbg_romgate <= 1'b0;
         end else begin
             unique case (state)
                 S_IDLE: begin
@@ -202,13 +234,27 @@ module qbus_mem_sdram #(
                 end
                 S_WAIT: begin
                     if (wcnt == 0) begin
-                        reply <= 1'b1;
-                        if (is_read) begin
-                            rdata      <= rd_romio;
-                            drive_data <= 1'b1;
-                            fetch_stb  <= 1'b1;
+                        if (sel_romx && is_read && !mem_ready) begin
+                            // done-gate: the SDRAM ROM word is late - hold RPLY
+                            // (extends the cycle) instead of replying over stale
+                            // data. Should never happen at BK clock rates; the
+                            // ROM-region golden diff catches it if it does.
+                            dbg_romgate <= 1'b1;
+                        end else begin
+                            reply <= 1'b1;
+                            if (is_read) begin
+                                rdata      <= rd_romio;
+                                drive_data <= !sel_romx;   // SDRAM ROM data: u_dp drives
+                                fetch_stb  <= 1'b1;
+                            end
+                            // I/O register side effects at the reply point (BkEmu
+                            // semantics; rdata latched above still sees the old flag)
+                            if (sel_io && addr == REG_SYS)
+                                sel1_wflag <= is_write;    // set on write, clear on read
+                            if (sel_io && addr == REG_KBD_ST && is_write)
+                                kbd_mask <= ~ad_n[6];      // write data (inverted bus)
+                            state <= S_REPLY;
                         end
-                        state <= S_REPLY;
                     end else
                         wcnt <= wcnt - 1'b1;
                 end
