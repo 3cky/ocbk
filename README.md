@@ -4,26 +4,36 @@ Running the Soviet **Elektronika BK-0010/0011M** (PDP-11-class) as alternative
 firmware on the OneChipBook board (Altera Cyclone I **EP1C12Q240C8**, Quartus II
 11.0). See [ROADMAP.md](ROADMAP.md) for the full plan.
 
-## Status: Phase 4 — video output pipeline ✅
+## Status: Phase 5 — SoC boot ✅ (BASIC Vilnius banner on screen)
 
-The `vm1` (1801ВМ1) core runs on the EP1C12 with the retimed **1801ВП1-037**
-(`va_037_sync`) owning RAM RPLY and its cycle-stealing grant timing, **BK RAM
-(000000–077777) in the board SDRAM** behind a 4-port arbiter, and the full video
-path live: the 037 video fetch is decoded through the BK-0010 fixed palette into a
-**double-buffered 4-bit-index framebuffer in SDRAM** and scanned out at
-**1024×768@60** (×2H/×3V integer scale, 6-bit R-2R VGA DAC). The ROM-resident test
-program draws a test picture (colour bars, border, diagonal) into video RAM and
-then runs the RAM test. `screen_mode` (colour-256 / mono-512, the physical monitor
-cable switch on a real BK) is DIP switch 1 (OFF = colour). The cartridge-slot
-Q-bus seam stays a disabled forward seam (`qbus_slot`, `SLOT_ENABLE=0`).
+**The board cold-boots the real BK-0010.01 firmware**: at power-up the EPCS
+loader copies the **MONITOR + BASIC Vilnius ROM set** (32 KB, `mem/roms/`, from
+the BkEmu project) from the config flash into SDRAM (~22 ms, CPU held in reset),
+then the `vm1` (1801ВМ1) core boots it — through the authentic 177716 start
+vector — to the **БЕЙСИК ВИЛЬНЮС banner** on the panel.
 
-- Fits in **3363 / 12060 LEs (28%)**, **1 M4K**, **1 PLL**; timing closes.
-- Cycle accuracy holds under full 4-port SDRAM contention: the SoC cosim
-  reproduces the with-display golden (`golden_037.txt`) exactly with the real
-  video pipeline running, through 64 display lines of fetch + FB-write + readout
-  traffic (`sim/ref037/ref037_soc_video_tb.v`).
+The retimed **1801ВП1-037** (`va_037_sync`) owns RAM RPLY and its cycle-stealing
+grant timing; **BK RAM (000000–077777) and ROM (100000–177577) live in the board
+SDRAM** behind a 4-port arbiter (ROM is *not* 037-arbitrated — real mask ROM is
+never cycle-stolen — and keeps the fixed `N_ROM` reply, done-gated against a late
+SDRAM word). The 037 video fetch is decoded through the BK-0010 fixed palette
+into a **double-buffered 4-bit-index framebuffer in SDRAM** and scanned out at
+**1024×768@60** (×2H/×3V integer scale, 6-bit R-2R VGA DAC). `screen_mode`
+(colour-256 / mono-512, the physical monitor cable switch on a real BK) is DIP
+switch 1 (OFF = colour); **DIP 2 ON** boots the on-chip Phase-4 test ROM instead
+(test picture + RAM test — the hardware regression image, also the automatic
+fallback if the flash blob fails validation).
+
+- Fits in **3660 / 12060 LEs (30%)**, **1 M4K**, **1 ASMI block**, **1 PLL**;
+  timing closes.
+- Cycle accuracy holds under full 4-port SDRAM contention for RAM *and* ROM
+  execution: the SoC cosims reproduce both goldens (`golden_037.txt`,
+  `golden_037_rom.txt` — the ROM self-loop is *flat*, no cycle-stealing) exactly,
+  including a run where the SDRAM is populated by the real EPCS loader
+  (`sim/ref037/`, nine diffs).
 - The full-chain video cosim is pixel-exact at the DAC pins against a
-  Python-rendered frame of the shipped picture (`sim/video/video_pipe_tb.sv`).
+  Python-rendered frame (`sim/video/video_pipe_tb.sv`); the real MONITOR
+  cold-boot is smoke-checked in sim (`sim/run_boot_check.sh`).
 
 ## Layout
 
@@ -34,7 +44,11 @@ src/sdram_ctrl.sv vendored single-word SDR SDRAM controller (+byte-enable)
 src/va_037_sync.sv retimed 1801ВП1-037 (RAM RPLY / grants / video counters)
 src/sdram_arbiter.sv 4-port fixed-priority SDRAM arbiter (CPU/readout/fetch/FB)
 src/cpu_sdram_dp.sv CPU RAM datapath (arbiter port 0) + RPLY done-gate
-src/qbus_mem_sdram.sv ROM/IO on-chip (N_ROM) + RAM datapath + arbiter + ctrl
+src/qbus_mem_sdram.sv ROM/IO front-end (N_ROM + done-gate) + datapath + arbiter
+                + ctrl + the boot-writer mux (EPCS loader -> port 0)
+src/epcs_boot.sv EPCS flash -> SDRAM boot loader (SPI via cyclone_asmiblock)
+mem/roms/       BK-0010.01 ROM set (monit10 + BASIC Vilnius, from BkEmu)
+mem/gen_boot_blob.py boot-blob builder (header/checksum + COF hex page)
 src/fb_video.sv  037 fetch -> palette -> FB writer (ports 2+3, buffer swap)
 src/palette_apply.sv BK-0010 fixed palette stage (the BK-0011M seam, Phase 7)
 src/fb_readout.sv paced FB line prefetcher (port 1) + pixel-side CDC
@@ -69,17 +83,21 @@ Requires Icarus Verilog for `sim`, and Quartus II 11.0
 
 ## On-board behaviour
 
-The panel shows the test picture full-screen and borderless: four vertical
-colour bars (black/blue/green/red), an all-ones border (red in colour mode,
-white in mono), and the main diagonal drawn in inverted colour. DIP 1 flips
-colour-256 (OFF) / mono-512 (ON) decode.
+Power-up shows the **BASIC Vilnius startup screen** full-screen and borderless
+(keyboard input arrives with Phase 6; СТОП will then drop to the MONITOR
+prompt). DIP 1 flips colour-256 (OFF) / mono-512 (ON) decode. DIP 2 ON boots
+the on-chip test image instead: four vertical colour bars, an all-ones border
+(red in colour mode, white in mono), the main diagonal in inverted colour, and
+the SDRAM RAM test.
 
 ### LEDs
 
-- **Red power LED** — solid once the CPU reaches the **success** self-loop at
-  `100004` (every word/byte RAM-test write verified back out of SDRAM).
+- **Red power LED** — normal boot: solid once the ROM blob is loaded, verified
+  and selected. Fallback/test mode: solid once the CPU reaches the **success**
+  self-loop at `100004` (every word/byte RAM-test write verified from SDRAM).
 - **pLed[7]** — system heartbeat off the PLL (FPGA configured / PLL locked).
-- **pLed[6]** — SDRAM `init_done` (lit once the controller finished its init).
+- **pLed[6]** — SDRAM `init_done`; **blinks** if the flash blob failed
+  validation (the board then falls back to the on-chip test image).
 - **pLed[5:0]** — top bits of a transaction counter (move while the CPU executes;
   heartbeat blinking with these frozen would indicate the CPU is hung).
 
@@ -103,5 +121,7 @@ colour-256 (OFF) / mono-512 (ON) decode.
   exchange data only through a request-toggle handshake + synchronisers; the SDC
   false-paths both directions. Read data is sampled at the (fixed) RPLY point,
   guaranteed stable because an SDRAM access finishes well within one CPU cycle.
-- Full BK MONITOR/BASIC ROM and the video path arrive in Phases 3–5; the ROM region
-  beyond the small RAM-test program is currently unmapped (reads return 0).
+- **ROM writes are replied-to and ignored** (a real BK would time out to trap 4);
+  the timeout-fidelity question is deferred to Phase 9.
+- Keyboard (177660–177663, the 1801ВП1-014), tape/audio and interrupts arrive in
+  Phase 6 — until then 177660 reads the cold status stub and no key events occur.

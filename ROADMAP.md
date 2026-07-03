@@ -192,7 +192,7 @@ the cosim validates the exact shipped picture. Fits **3363/12060 LEs (28%)**, 1 
 1 PLL, timing closes (setup +0.409 ns); sys↔pixel false-pathed (same-VCO related pair,
 all real crossings toggle-handshake or ping-pong-guarded).
 
-### Phase 5 — SoC integration & boot ✅ built, hardware bring-up pending
+### Phase 5 — SoC integration & boot ✅ DONE (banner confirmed on hardware)
 
 The full **BK-0010.01 ROM set** (monit10 + BASIC Vilnius ×3, 32,640 bytes filling
 100000–177577 exactly; committed in `mem/roms/`, sourced from the BkEmu project —
@@ -237,9 +237,16 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
 - `sim/run_boot_check.sh` (slow, manual): cold-boots the real MONITOR on the full
   SoC — no bus X, screen clear observed; dumps a bus trace for BkEmu diffing.
 - Fits **3660/12060 LEs (30%)**, 1 M4K, 1 ASMI block, 1 PLL; STA closes.
-- **Milestone:** cold-boot to the authentic power-up screen (BASIC Vilnius
-  banner); the MONITOR prompt via СТОП comes with the Phase-6 keyboard.
-  *Remaining: flash + banner photo on the board.*
+- **EPCS bit-order gotcha (cost one flash cycle):** the RPD is in RBF/LSB-first
+  bit order, NOT physical-flash order (RPD Page_0 == `.rbf` verbatim);
+  `quartus_cpf` reverses hex_block bytes into it and `quartus_pgm -m AS`
+  reverses again onto the chip — the two cancel, so COF hex bytes land on flash
+  verbatim for an MSB-first SPI read. The first flash (pre-reversed hex) failed
+  validation and *proved the fallback path on hardware*: test picture +
+  blinking pLed[6], exactly as designed.
+- **Milestone MET (2026-07-03): cold-boots to the BASIC Vilnius banner** on the
+  panel; DIP2 regression path (Phase-4 test picture) intact. The MONITOR prompt
+  via СТОП comes with the Phase-6 keyboard.
 
 ### Phase 6 — Peripherals
 - PS/2 keyboard → BK keyboard matrix at `177660–177663` (037 decodes `nBS`).
@@ -292,15 +299,15 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
 
 ---
 
-*Status: Phases 0–5 complete in RTL+sim — the full BK-0010.01 ROM set (MONITOR +
-BASIC Vilnius) boots from SDRAM behind the done-gated fixed-N_ROM path, loaded at
-power-up from the EPCS flash by `epcs_boot` through the boot-writer mux; ROM-region
-execution is oracle-gated (`golden_037_rom.txt`, flat self-loop under full 4-port
-contention); the real MONITOR cold-boot is smoke-checked in sim (no bus contention,
-screen clear runs). Fits 30% / 1 M4K / 1 ASMI / 1 PLL / timing closes; `make` builds
-`fw/recovery.pof` with the blob page (verified by `make blob-check`). Remaining for
-the Phase-5 milestone: `make flash` + the BASIC Vilnius banner on the panel. Next:
-Phase 6 peripherals (PS/2 keyboard first — СТОП then gives the MONITOR prompt).*
+*Status: Phases 0–5 complete — **the board cold-boots the real BK-0010.01
+firmware to the BASIC Vilnius banner** (confirmed on hardware 2026-07-03): the
+EPCS loader copies MONITOR+BASIC into SDRAM at power-up, ROM executes behind the
+done-gated fixed-N_ROM path, oracle-gated for cycle accuracy under full 4-port
+contention (`golden_037.txt` + `golden_037_rom.txt`, nine ref037 diffs). Fits
+30% / 1 M4K / 1 ASMI / 1 PLL / timing closes. Next: Phase 6 peripherals — PS/2
+keyboard (1801ВП1-014 at 177660–177663, netlist available in ~/projects/other/
+fpga/k1801/014) first, so СТОП gives the MONITOR prompt and BASIC becomes
+interactive; then tape/audio and the interrupt wiring.*
 *See also the project memory notes `bk-on-1chipmsx-feasibility` (bring-up history),
 `bk-video-pipeline-decision` (Phase 3/4 design) and `bkemu-reference-and-roms`
 (BkEmu is the canonical BK reference; ROMs committed in-tree).*
