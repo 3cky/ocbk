@@ -192,9 +192,53 @@ the cosim validates the exact shipped picture. Fits **3363/12060 LEs (28%)**, 1 
 1 PLL, timing closes (setup +0.409 ns); sys↔pixel false-pathed (same-VCO related pair,
 all real crossings toggle-handshake or ping-pong-guarded).
 
-### Phase 5 — SoC integration & boot
-- Wire vm1 + 037 + SDRAM + ROM + reset/IPL into one top.
-- **Milestone:** cold-boots to the BK MONITOR prompt on screen.
+### Phase 5 — SoC integration & boot ✅ built, hardware bring-up pending
+
+The full **BK-0010.01 ROM set** (monit10 + BASIC Vilnius ×3, 32,640 bytes filling
+100000–177577 exactly; committed in `mem/roms/`, sourced from the BkEmu project —
+BK ROMs are non-restricted for emulator use) boots from SDRAM:
+
+- **ROM-in-SDRAM:** ROM exceeds on-chip memory (262 Kbit > 239 Kbit device total),
+  so ROM reads ride the CPU datapath (`cpu_sdram_dp`, arbiter port 0) via the
+  linear `addr[15:1]` map (words 0x4000–0x7F7F, below the framebuffers), selected
+  by `rom_ext_en`. ROM is *not* 037-arbitrated (real mask ROM is never
+  cycle-stolen): `qbus_mem_sdram` keeps the fixed `N_ROM=2` reply, **done-gated**
+  on `mem_ready` (a late word extends RPLY; sticky `dbg_romgate` diagnostic).
+  Measured worst port-0 read latency: 37 sys_clk under full 4-port video
+  contention vs the ~64 sys_clk window — the gate never fires. ROM writes:
+  reply + ignore (real BK would trap 4 on timeout; fidelity deferred to Phase 9).
+- **Cycle-accuracy oracle grown:** `golden_037_rom.txt` (generated from the
+  reference netlist only) — the same program words executed *from ROM*; key
+  property: ROM execution is **flat** (self-loop constant 13 cycles vs the RAM
+  loop's 17,15,16,16 beat). The SoC cosims now instantiate the *real*
+  `qbus_mem_sdram` and reproduce both goldens; the video tb holds the flat-13
+  invariant across 64 display lines of 4-port contention. 9 ref037 diffs total.
+- **EPCS boot loader:** `src/epcs_boot.sv` (SPI mode-0, DCLK = sys_clk/8 =
+  12.08 MHz; EPCS4 plain READ 0x03 is only ~20–25 MHz-capable) reads the blob at
+  flash offset 0x40000 through the `cyclone_asmiblock` primitive, validates
+  magic/length/checksum, and streams words through the **boot-writer mux** onto
+  arbiter port 0 during reset-hold (~22 ms; CPU DCLO held until `boot_done`).
+  Failure or **DIP2** falls back to the on-chip Phase-4 test ROM (parks
+  100004/100012 unchanged — the hardware regression path); pLed[6] blinks on a
+  bad blob. Gates: `sim/run_epcs_boot.sh` (in `make sim`; word-exact SDRAM load +
+  corrupted-blob run) and the ref037 `+bootload` run (flash→loader→SDRAM→fetch,
+  golden exact).
+- **Flash flow:** `mem/gen_boot_blob.py` builds the blob (bytes pre-bit-reversed
+  for the COF page — `quartus_cpf` bit-reverses `hex_block` data in EPCS POFs);
+  `ocbk.cof` carries it at offset 262144; `make blob-check` byte-verifies the
+  flashable POF page. `make flash` stays one-shot.
+- **Live-boot bug fixes found by the oracle discipline:** `sel_io` replied and
+  drove data for 177700–177713 — the 1801ВМ1 decodes that block internally
+  (CSR/error/`vm1_tve` timer), a guaranteed bus fight the moment MONITOR touches
+  the timer; excluded. I/O stubs now follow BkEmu semantics: 177716 = start
+  address + bit-2 write-flag, 177660 = keyboard status stub (bit 6 writable,
+  cold 1).
+- `sim/run_boot_check.sh` (slow, manual): cold-boots the real MONITOR on the full
+  SoC — no bus X, screen clear observed; dumps a bus trace for BkEmu diffing.
+- Fits **3660/12060 LEs (30%)**, 1 M4K, 1 ASMI block, 1 PLL; STA closes.
+- **Milestone:** cold-boot to the authentic power-up screen (BASIC Vilnius
+  banner); the MONITOR prompt via СТОП comes with the Phase-6 keyboard.
+  *Remaining: flash + banner photo on the board.*
 
 ### Phase 6 — Peripherals
 - PS/2 keyboard → BK keyboard matrix at `177660–177663` (037 decodes `nBS`).
@@ -247,12 +291,15 @@ all real crossings toggle-handshake or ping-pong-guarded).
 
 ---
 
-*Status: Phases 0–4 complete — the BK video pipeline is live end to end: 037-owned RAM
-RPLY (cycle-exact under full 4-port SDRAM contention, gated by ref037_soc_video_tb),
-decoded double-buffered framebuffer in SDRAM, 1024×768@60 scan-out with fixed CLUT and
-×2/×3 scale; the ROM test program draws the test picture (bars/border/diagonal). Fits
-28% / 1 M4K / 1 PLL / timing closes. Next: Phase 5 SoC boot (full MONITOR ROM — needs
-the ROM-in-SDRAM plan from the `bk-video-pipeline-decision` memory note: boot-loader
-from EPCS, N_ROM latency work) and Phase 6 peripherals (PS/2 keyboard first).*
-*See also the project memory notes `bk-on-1chipmsx-feasibility` (bring-up history) and
-`bk-video-pipeline-decision` (Phase 3/4 design).*
+*Status: Phases 0–5 complete in RTL+sim — the full BK-0010.01 ROM set (MONITOR +
+BASIC Vilnius) boots from SDRAM behind the done-gated fixed-N_ROM path, loaded at
+power-up from the EPCS flash by `epcs_boot` through the boot-writer mux; ROM-region
+execution is oracle-gated (`golden_037_rom.txt`, flat self-loop under full 4-port
+contention); the real MONITOR cold-boot is smoke-checked in sim (no bus contention,
+screen clear runs). Fits 30% / 1 M4K / 1 ASMI / 1 PLL / timing closes; `make` builds
+`fw/recovery.pof` with the blob page (verified by `make blob-check`). Remaining for
+the Phase-5 milestone: `make flash` + the BASIC Vilnius banner on the panel. Next:
+Phase 6 peripherals (PS/2 keyboard first — СТОП then gives the MONITOR prompt).*
+*See also the project memory notes `bk-on-1chipmsx-feasibility` (bring-up history),
+`bk-video-pipeline-decision` (Phase 3/4 design) and `bkemu-reference-and-roms`
+(BkEmu is the canonical BK reference; ROMs committed in-tree).*

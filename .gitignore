@@ -41,3 +41,4 @@ mem/boot_blob_flash.hex
 sim/video/video_ram.hex
 sim/video/fb_exp.hex
 sim/video/img_exp.hex
+sim/boot_trace.txt
