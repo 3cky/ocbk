@@ -73,15 +73,20 @@ distclean: clean
 flash: $(PARKING)/recovery.pof
 	$(QUARTUS_PGM) -c "$(PGM_CABLE)" -m AS -o "PV;$(PARKING)/recovery.pof"
 
-# Verify the ROM blob inside the flashable POF: convert to raw RPD and
-# byte-compare the hex_block page at 0x40000 against boot_blob.bin (the POF
-# stores hex_block bytes bit-reversed; the blob's Intel HEX pre-reverses, so
-# the RPD must equal the true bytes exactly).
+# Verify the ROM blob inside the flashable POF: convert to RPD and compare the
+# hex_block page at 0x40000 against boot_blob.bin. The RPD is in RBF/LSB-first
+# bit order, NOT physical-flash order: quartus_cpf bit-reverses hex_block bytes
+# into it and quartus_pgm -m AS reverses again onto the chip (verified: RPD
+# Page_0 equals ocbk.rbf verbatim) - so the RPD page must hold rev(blob), and
+# the PHYSICAL flash then holds the blob verbatim for the loader's MSB-first
+# SPI read.
 blob-check: $(PARKING)/recovery.pof mem/boot_blob.hex
 	$(QUARTUS_CPF) -c $(PARKING)/recovery.pof $(PARKING)/recovery.rpd
 	python3 -c "import sys; \
+	  rev = bytes(int(format(i,'08b')[::-1],2) for i in range(256)); \
 	  rpd = open('$(PARKING)/recovery.rpd','rb').read(); \
 	  blob = open('mem/boot_blob.bin','rb').read(); \
 	  got = rpd[0x40000:0x40000+len(blob)]; \
-	  sys.exit(0 if got == blob else 'blob-check: MISMATCH at 0x40000')"
-	@echo ">> blob-check: POF hex_block page matches boot_blob.bin"
+	  sys.exit(0 if got == bytes(rev[b] for b in blob) \
+	           else 'blob-check: MISMATCH at 0x40000')"
+	@echo ">> blob-check: POF hex_block page holds rev(blob) = blob on flash"

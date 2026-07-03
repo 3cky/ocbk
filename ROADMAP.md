@@ -223,10 +223,11 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   bad blob. Gates: `sim/run_epcs_boot.sh` (in `make sim`; word-exact SDRAM load +
   corrupted-blob run) and the ref037 `+bootload` run (flash→loader→SDRAM→fetch,
   golden exact).
-- **Flash flow:** `mem/gen_boot_blob.py` builds the blob (bytes pre-bit-reversed
-  for the COF page — `quartus_cpf` bit-reverses `hex_block` data in EPCS POFs);
-  `ocbk.cof` carries it at offset 262144; `make blob-check` byte-verifies the
-  flashable POF page. `make flash` stays one-shot.
+- **Flash flow:** `mem/gen_boot_blob.py` builds the blob (true bytes in the COF
+  HEX — `quartus_cpf` bit-reverses into the RPD and `quartus_pgm -m AS` reverses
+  again onto the chip, so an MSB-first SPI read returns the HEX verbatim);
+  `ocbk.cof` carries it at offset 262144; `make blob-check` verifies the
+  flashable POF page (= rev(blob) in RPD order). `make flash` stays one-shot.
 - **Live-boot bug fixes found by the oracle discipline:** `sel_io` replied and
   drove data for 177700–177713 — the 1801ВМ1 decodes that block internally
   (CSR/error/`vm1_tve` timer), a guaranteed bus fight the moment MONITOR touches

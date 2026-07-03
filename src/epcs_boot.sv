@@ -7,12 +7,15 @@
 // externally (the "boot-writer mux" reserved in sdram_arbiter.sv) - the CPU is
 // still in DCLO while this runs, so port 0 is otherwise idle.
 //
-// Flash bit order: quartus_cpf bit-reverses hex_block data pages when building
-// the EPCS POF (verified on Quartus 11.0: pattern written via a COF hex_block
-// comes back bit-reversed in the RPD), so gen_boot_blob.py pre-reverses every
-// byte at Intel-HEX emission. The flash therefore holds the TRUE blob bytes and
-// this loader is a plain MSB-first SPI shift, matching the behavioural
-// sim/epcs_model.sv (which $readmemh's the true-byte boot_blob_flash.hex).
+// Flash bit order (hardware-verified): quartus_cpf bit-reverses hex_block bytes
+// into the POF/RPD (the RPD is in RBF/LSB-first bit order - its Page_0 equals
+// the .rbf verbatim), and quartus_pgm -m AS bit-reverses AGAIN when programming
+// the EPCS. The two reversals cancel: the physical flash holds the Intel-HEX
+// bytes verbatim as seen by an MSB-first SPI READ, so gen_boot_blob.py emits
+// true bytes and this loader is a plain MSB-first shift, matching the
+// behavioural sim/epcs_model.sv. (A first attempt pre-reversed the HEX on the
+// mistaken belief RPD = physical bytes; on the board the loader then read
+// rev(blob) and parked in the checksum-fail fallback.)
 //
 // SPI: mode 0, DCLK = clk/8 (12.08 MHz at the 96.65 MHz sys_clk - EPCS4 plain
 // READ is only rated to ~20-25 MHz). MOSI advances at the DCLK fall, MISO is

@@ -195,11 +195,14 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   `sim/video/run_draw_check.sh`.
 - `mem/boot_blob.{bin,hex}` + `boot_blob_flash.hex` are **generated** by
   `mem/gen_boot_blob.py` from the committed `mem/roms/*.rom` (gitignored,
-  `make` regenerates). The COF Intel HEX is **pre-bit-reversed** —
-  `quartus_cpf` bit-reverses `hex_block` data pages when building an EPCS POF
-  (AS bitstreams are LSB-first; verified on 11.0 via POF→RPD compare), so the
-  flash ends up holding the true bytes and `epcs_boot` is a plain MSB-first
-  SPI shift. `make blob-check` verifies the page inside `fw/recovery.pof`.
+  `make` regenerates). **EPCS bit-order (hardware-verified, subtle):** the COF
+  Intel HEX carries **true bytes**. `quartus_cpf` bit-reverses `hex_block`
+  bytes into the POF/RPD — but the RPD is in **RBF/LSB-first bit order, not
+  physical-flash order** (its Page_0 equals the `.rbf` verbatim) — and
+  `quartus_pgm -m AS` reverses **again** onto the chip, so the two cancel and
+  an MSB-first SPI READ returns the HEX bytes verbatim. Do NOT pre-reverse
+  (that was tried; on the board the loader read rev(blob) and fell back).
+  `make blob-check` verifies the RPD page = rev(blob).
 
 ## Temp files
 
