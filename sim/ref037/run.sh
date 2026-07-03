@@ -22,15 +22,31 @@ iverilog -g2012 -o "$SP/ref037.vvp" -s ref037_tb \
    "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" "$K037/va_037.v" \
    ref037_tb.v 2>&1 | grep -v 'sorry:' || true
 
-reduce() { awk '/^FETCH/ { if ($2=="001136") { c++; if (c<=4) print } else print }'; }
-
 # Reduce: unique instruction prefix, then the first 4 self-loop samples.
+# $1 = self-loop address (001136 for the RAM program, 101136 for +romprog).
+reduce() { awk -v loop="${1:-001136}" \
+   '/^FETCH/ { if ($2==loop) { c++; if (c<=4) print } else print }'; }
+
 vvp -n "$SP/ref037.vvp" 2>/dev/null | reduce > "$SP/out.txt"
 
 if diff -u golden_037.txt "$SP/out.txt"; then
    echo "ref037 (reference va_037) cycle counts: PASS"
 else
    echo "ref037 (reference va_037) cycle counts: FAIL (see diff above)" >&2
+   exit 1
+fi
+
+# --- Phase 5 ROM-region oracle: the same program words executed FROM ROM
+#     (fixed N_ROM reply, no 037 cycle-stealing on fetches; RAM data traffic
+#     still stolen). golden_037_rom.txt is generated from this reference run
+#     only. Key property: the ROM self-loop is FLAT (constant cycles) - any
+#     later SDRAM-induced RPLY extension on ROM fetches breaks this diff. ---
+vvp -n "$SP/ref037.vvp" +romprog 2>/dev/null | reduce 101136 > "$SP/out_rom.txt"
+
+if diff -u golden_037_rom.txt "$SP/out_rom.txt"; then
+   echo "ref037 (reference va_037, ROM-region program) cycle counts: PASS"
+else
+   echo "ref037 (reference, ROM-region) cycle counts: FAIL (see diff above)" >&2
    exit 1
 fi
 
@@ -46,6 +62,15 @@ if diff -u golden_037.txt "$SP/out_sync.txt"; then
    echo "ref037 (retimed va_037_sync) equivalence: PASS"
 else
    echo "ref037 (retimed va_037_sync) equivalence: FAIL (see diff above)" >&2
+   exit 1
+fi
+
+vvp -n "$SP/ref037s.vvp" +romprog 2>/dev/null | reduce 101136 > "$SP/out_sync_rom.txt"
+
+if diff -u golden_037_rom.txt "$SP/out_sync_rom.txt"; then
+   echo "ref037 (retimed va_037_sync, ROM-region program) equivalence: PASS"
+else
+   echo "ref037 (retimed, ROM-region) equivalence: FAIL (see diff above)" >&2
    exit 1
 fi
 

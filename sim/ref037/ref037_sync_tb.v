@@ -16,6 +16,9 @@
 
 `define TEST_LO 16'o001000
 `define TEST_HI 16'o002000
+// +romprog: the same program words placed in ROM at 101000 (see ref037_tb.v).
+`define ROM_TEST_LO 16'o101000
+`define ROM_TEST_HI 16'o102000
 
 module ref037_sync_tb;
 
@@ -134,9 +137,11 @@ end
 integer    prev_nclk;
 reg [15:0] prev_addr;
 reg        have_baseline;
+reg        romprog;            // +romprog: program (and window) in the ROM region
 
 always @(negedge din) begin
-   if (~sync && sel_ram && addr >= `TEST_LO && addr < `TEST_HI) begin
+   if (~sync && (romprog ? (sel_rom && addr >= `ROM_TEST_LO && addr < `ROM_TEST_HI)
+                         : (sel_ram && addr >= `TEST_LO     && addr < `TEST_HI))) begin
       if (have_baseline)
          $display("FETCH %06o cycles=%0d", prev_addr, nclk - prev_nclk);
       prev_nclk     = nclk;
@@ -181,44 +186,53 @@ va_037_sync pr037_sync (
 //______________________________________________________________________________
 // Program + memory init (identical to ref037_tb.v)
 //
+// One word table, copied to RAM at 001000 (default) or ROM at 101000
+// (+romprog) - see ref037_tb.v for the rationale.
+reg [15:0] prog [0:16'h2F];
 integer ii;
 initial begin
    for (ii = 0; ii < 16384; ii = ii + 1) ram[ii] = 16'o000000;
    for (ii = 0; ii < 8192;  ii = ii + 1) rom[ii] = 16'o000000;
-   rom[0] = 16'o000137; rom[1] = 16'o001000;
-   ram[16'h100] = 16'o012700; ram[16'h101] = 16'o002000;
-   ram[16'h102] = 16'o012701; ram[16'h103] = 16'o002000;
-   ram[16'h104] = 16'o012710; ram[16'h105] = 16'o012345;
-   ram[16'h106] = 16'o010002;
-   ram[16'h107] = 16'o011002;
-   ram[16'h108] = 16'o012002;
-   ram[16'h109] = 16'o012700; ram[16'h10A] = 16'o002000;
-   ram[16'h10B] = 16'o014002;
-   ram[16'h10C] = 16'o012700; ram[16'h10D] = 16'o002000;
-   ram[16'h10E] = 16'o016002; ram[16'h10F] = 16'o000000;
-   ram[16'h110] = 16'o010011;
-   ram[16'h111] = 16'o012711; ram[16'h112] = 16'o012345;
-   ram[16'h113] = 16'o010021;
-   ram[16'h114] = 16'o012701; ram[16'h115] = 16'o002000;
-   ram[16'h116] = 16'o010041;
-   ram[16'h117] = 16'o012701; ram[16'h118] = 16'o002000;
-   ram[16'h119] = 16'o010061; ram[16'h11A] = 16'o000000;
-   // RMW (DATIO/DATIOB) coverage - see ref037_tb.v; FAIL park 001124.
-   ram[16'h11B] = 16'o012700; ram[16'h11C] = 16'o002000;
-   ram[16'h11D] = 16'o005010;
-   ram[16'h11E] = 16'o005210;
-   ram[16'h11F] = 16'o062710; ram[16'h120] = 16'o000005;
-   ram[16'h121] = 16'o052710; ram[16'h122] = 16'o000120;
-   ram[16'h123] = 16'o042710; ram[16'h124] = 16'o000100;
-   ram[16'h125] = 16'o105210;
-   ram[16'h126] = 16'o011002;
-   ram[16'h127] = 16'o020227; ram[16'h128] = 16'o000027;
-   ram[16'h129] = 16'o001401;
-   ram[16'h12A] = 16'o000777;                            // RMW FAIL park (001124)
-   ram[16'h12B] = 16'o005002;
-   ram[16'h12C] = 16'o000400;
-   ram[16'h12D] = 16'o012702; ram[16'h12E] = 16'o001234;
-   ram[16'h12F] = 16'o000777;                            // self-loop (001136)
+   prog['h00] = 16'o012700; prog['h01] = 16'o002000;
+   prog['h02] = 16'o012701; prog['h03] = 16'o002000;
+   prog['h04] = 16'o012710; prog['h05] = 16'o012345;
+   prog['h06] = 16'o010002;
+   prog['h07] = 16'o011002;
+   prog['h08] = 16'o012002;
+   prog['h09] = 16'o012700; prog['h0A] = 16'o002000;
+   prog['h0B] = 16'o014002;
+   prog['h0C] = 16'o012700; prog['h0D] = 16'o002000;
+   prog['h0E] = 16'o016002; prog['h0F] = 16'o000000;
+   prog['h10] = 16'o010011;
+   prog['h11] = 16'o012711; prog['h12] = 16'o012345;
+   prog['h13] = 16'o010021;
+   prog['h14] = 16'o012701; prog['h15] = 16'o002000;
+   prog['h16] = 16'o010041;
+   prog['h17] = 16'o012701; prog['h18] = 16'o002000;
+   prog['h19] = 16'o010061; prog['h1A] = 16'o000000;
+   // RMW (DATIO/DATIOB) coverage - see ref037_tb.v; FAIL park 001124/101124.
+   prog['h1B] = 16'o012700; prog['h1C] = 16'o002000;
+   prog['h1D] = 16'o005010;
+   prog['h1E] = 16'o005210;
+   prog['h1F] = 16'o062710; prog['h20] = 16'o000005;
+   prog['h21] = 16'o052710; prog['h22] = 16'o000120;
+   prog['h23] = 16'o042710; prog['h24] = 16'o000100;
+   prog['h25] = 16'o105210;
+   prog['h26] = 16'o011002;
+   prog['h27] = 16'o020227; prog['h28] = 16'o000027;
+   prog['h29] = 16'o001401;
+   prog['h2A] = 16'o000777;                              // RMW FAIL park
+   prog['h2B] = 16'o005002;
+   prog['h2C] = 16'o000400;
+   prog['h2D] = 16'o012702; prog['h2E] = 16'o001234;
+   prog['h2F] = 16'o000777;                              // self-loop
+   if ($test$plusargs("romprog")) begin
+      rom[0] = 16'o000137; rom[1] = 16'o101000;
+      for (ii = 0; ii < 16'h30; ii = ii + 1) rom[16'h100 + ii] = prog[ii];
+   end else begin
+      rom[0] = 16'o000137; rom[1] = 16'o001000;
+      for (ii = 0; ii < 16'h30; ii = ii + 1) ram[16'h100 + ii] = prog[ii];
+   end
    ram[16'h200] = 16'o012345;
 end
 
@@ -227,6 +241,7 @@ end
 //
 initial begin
    nclk = 0; prev_nclk = 0; have_baseline = 1'b0;
+   romprog = $test$plusargs("romprog");
    ram_oe = 0; rom_oe = 0; io_oe = 0;
    rply_ext_n = 1'b1; wr_committed = 1'b0;
    ram_data = 0; rom_data = 0; io_data = 0;
