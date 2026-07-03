@@ -61,6 +61,16 @@ module qbus_mem_sdram #(
     output wire         rply_n,     // open-collector; ROM/IO only (RAM = va_037_sync)
     output logic        mem_ready,  // RAM SDRAM access complete -> 037 done-gate
 
+    // ---- boot-writer mux onto arbiter port 0 (sclk domain) ----------------
+    // While boot_active the EPCS loader owns port 0 (the CPU is still in DCLO,
+    // so cpu_sdram_dp is guaranteed idle) - the external mux reserved in
+    // sdram_arbiter.sv; the arbiter itself is unchanged.
+    input  logic                 boot_active,
+    input  logic                 bw_req,
+    input  logic [ADDR_BITS-1:0] bw_addr,
+    input  logic [DQ_BITS-1:0]   bw_wdata,
+    output logic                 bw_gnt,
+
     // ---- Phase-4 video clients (sclk domain; arbiter ports 1/2/3) --------
     input  logic                 v1_req,     // [1] panel readout (read-only)
     input  logic [ADDR_BITS-1:0] v1_addr,
@@ -153,14 +163,22 @@ module qbus_mem_sdram #(
         .gnt(dp_gnt), .rvalid(dp_rvalid), .rdata_i(arb_rdata)
     );
 
+    // Boot-writer mux: during boot the EPCS loader is port 0 (word writes only).
+    wire                 p0_req   = boot_active ? bw_req   : dp_req;
+    wire                 p0_we    = boot_active ? 1'b1     : dp_we;
+    wire [ADDR_BITS-1:0] p0_addr  = boot_active ? bw_addr  : dp_addr;
+    wire [DQ_BITS-1:0]   p0_wdata = boot_active ? bw_wdata : dp_wdata;
+    wire [1:0]           p0_be    = boot_active ? 2'b11    : dp_be;
+
     // Arbiter ports: [0] = CPU (highest); [1] readout, [2] 037 fetch, [3] FB write.
-    wire [NREQ-1:0]           p_req    = {v3_req,  v2_req,  v1_req,  dp_req};
-    wire [NREQ-1:0]           p_we     = {1'b1,    1'b0,    1'b0,    dp_we};
-    wire [NREQ*ADDR_BITS-1:0] p_addr   = {v3_addr, v2_addr, v1_addr, dp_addr};
-    wire [NREQ*DQ_BITS-1:0]   p_wdata  = {v3_wdata, {(2*DQ_BITS){1'b0}}, dp_wdata};
-    wire [NREQ*2-1:0]         p_be     = { 6'b111111, dp_be };
+    wire [NREQ-1:0]           p_req    = {v3_req,  v2_req,  v1_req,  p0_req};
+    wire [NREQ-1:0]           p_we     = {1'b1,    1'b0,    1'b0,    p0_we};
+    wire [NREQ*ADDR_BITS-1:0] p_addr   = {v3_addr, v2_addr, v1_addr, p0_addr};
+    wire [NREQ*DQ_BITS-1:0]   p_wdata  = {v3_wdata, {(2*DQ_BITS){1'b0}}, p0_wdata};
+    wire [NREQ*2-1:0]         p_be     = { 6'b111111, p0_be };
     wire [NREQ-1:0]           p_gnt, p_rvalid;
-    assign dp_gnt    = p_gnt[0];
+    assign dp_gnt    = p_gnt[0] & ~boot_active;
+    assign bw_gnt    = p_gnt[0] &  boot_active;
     assign dp_rvalid = p_rvalid[0];
     assign v1_gnt    = p_gnt[1];
     assign v1_rvalid = p_rvalid[1];

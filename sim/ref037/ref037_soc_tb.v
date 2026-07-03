@@ -21,6 +21,11 @@
 //   * FETCH-ROMGATE-ERROR - the ROM done-gate extended RPLY past the fixed count;
 //   * FETCH-P0LAT-ERROR   - a port-0 read exceeded the 48 sys_clk latency budget
 //     (the N_ROM=2 window is ~64 sys_clk; worst-case contention estimate is ~28).
+// +romprog +bootload: the SDRAM ROM region is NOT preloaded - a synthetic mini
+// boot blob (same header format, length 0x130 words) is placed in the EPCS flash
+// model instead and the real epcs_boot loader copies it through the boot-writer
+// mux on port 0 during reset-hold, exactly as ocbk_top boots. The golden must
+// still match: flash -> SDRAM -> fetch, end to end at cycle accuracy.
 //
 `timescale 1ns / 1ps
 
@@ -136,6 +141,7 @@ module ref037_soc_tb;
 
     // ---- the REAL integration module (ROM/IO FSM + dp + arbiter + ctrl) ------
     reg  romprog;                    // +romprog: ROM-in-SDRAM mode (rom_ext_en)
+    reg  bootload;                   // +bootload: populate SDRAM through epcs_boot
     wire init_done;
     wire s_cke, s_cs_n, s_ras_n, s_cas_n, s_we_n;
     wire [1:0]  s_ba, s_dqm;
@@ -145,10 +151,33 @@ module ref037_soc_tb;
     wire        fetch_stb;
     wire [DW-1:0] v_rdata_nc;
 
+    // EPCS loader + flash model (quiet unless +bootload starts them)
+    wire spi_dclk, spi_ncs, spi_mosi;
+    tri1 spi_miso;
+    wire bw_req, bw_gnt, boot_active, boot_done, boot_ok;
+    wire [AB-1:0] bw_addr;
+    wire [15:0]   bw_wdata;
+
+    epcs_model u_flash (
+        .dclk(spi_dclk), .ncs(spi_ncs), .mosi(spi_mosi), .miso(spi_miso)
+    );
+    epcs_boot #(.ADDR_BITS(AB)) u_boot (
+        .clk(sys_clk), .rst_n(srst_n), .start(init_done && bootload),
+        .spi_dclk(spi_dclk), .spi_ncs(spi_ncs),
+        .spi_mosi(spi_mosi), .spi_miso(spi_miso),
+        .bw_req(bw_req), .bw_addr(bw_addr), .bw_wdata(bw_wdata), .bw_gnt(bw_gnt),
+        .boot_active(boot_active), .boot_done(boot_done), .boot_ok(boot_ok)
+    );
+
     qbus_mem_sdram #(.MEMFILE("boot_stub.hex")) u_ms (
         .cpu_clk  (~clk),            // as ocbk_top: FSM on the inverted CPU clock
         .reset    (~dclo),
         .rom_ext_en(romprog),
+        .boot_active(boot_active),
+        .bw_req   (bw_req),
+        .bw_addr  (bw_addr),
+        .bw_wdata (bw_wdata),
+        .bw_gnt   (bw_gnt),
         .sclk     (sys_clk),
         .srst_n   (srst_n),
         .init_done(init_done),
@@ -271,7 +300,29 @@ module ref037_soc_tb;
         prog['h2F] = 16'o000777;                 // self-loop
 
         for (ii = 0; ii < (1<<17); ii = ii + 1) u_mem.mem[ii] = 16'o000000;
-        if ($test$plusargs("romprog")) begin
+        if ($test$plusargs("bootload")) begin : mk_blob
+            // +bootload: build a synthetic mini-blob (length 0x130 words) in the
+            // flash model; the loader populates the SDRAM ROM region itself.
+            reg [15:0] w, csum;
+            csum = 16'd0;
+            for (ii = 0; ii < 16'h130; ii = ii + 1) begin
+                if      (ii == 0)          w = 16'o000137;   // JMP @#101000
+                else if (ii == 1)          w = 16'o101000;
+                else if (ii >= 16'h100 && ii < 16'h130) w = prog[ii - 16'h100];
+                else                       w = 16'o000000;
+                u_flash.flash['h40008 + 2*ii]     = w[7:0];
+                u_flash.flash['h40008 + 2*ii + 1] = w[15:8];
+                csum = csum + w;
+            end
+            u_flash.flash['h40000] = 8'h42;      // magic "BK"
+            u_flash.flash['h40001] = 8'h4B;
+            u_flash.flash['h40002] = 8'h30;      // length = 0x0130 words
+            u_flash.flash['h40003] = 8'h01;
+            u_flash.flash['h40004] = csum[7:0];
+            u_flash.flash['h40005] = csum[15:8];
+            u_flash.flash['h40006] = 8'h00;
+            u_flash.flash['h40007] = 8'h00;
+        end else if ($test$plusargs("romprog")) begin
             u_mem.mem[16'h4000] = 16'o000137;    // JMP @#101000 (from SDRAM ROM)
             u_mem.mem[16'h4001] = 16'o101000;
             for (ii = 0; ii < 16'h30; ii = ii + 1)
@@ -286,15 +337,21 @@ module ref037_soc_tb;
     // ---- reset (wait SDRAM init) + sim limit ---------------------------------
     initial begin
         nclk=0; prev_nclk=0; have_baseline=1'b0;
-        romprog = $test$plusargs("romprog");
+        romprog  = $test$plusargs("romprog");
+        bootload = $test$plusargs("bootload");
         pa=2'b11; sp=1'b1; dmgi=1'b1; irq=3'b111; virq=1'b1;
         dclo=1'b0; aclo=1'b0;
 
-        wait (init_done); @(negedge clk);
+        wait (init_done);
+        if (bootload) begin                 // as ocbk_top: CPU held until loaded
+            wait (boot_done);
+            if (!boot_ok) $display("FETCH-BOOT-ERROR: loader ended boot_ok=0");
+        end
+        @(negedge clk);
         repeat (8) @(negedge clk); dclo = 1'b1;
         repeat (4) @(negedge clk); aclo = 1'b1;
 
-        #2_000_000;
+        #2_500_000;
         $finish;
     end
 

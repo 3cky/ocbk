@@ -84,7 +84,7 @@ iverilog -g2012 -o "$SP/ref037soc.vvp" -s ref037_soc_tb \
    "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" \
    ../../src/qbus_pkg.sv ../../src/va_037_sync.sv ../../src/cpu_sdram_dp.sv \
    ../../src/sdram_arbiter.sv ../../src/sdram_ctrl.sv ../../src/qbus_mem_sdram.sv \
-   ../sdram_model.sv \
+   ../../src/epcs_boot.sv ../sdram_model.sv ../epcs_model.sv \
    ref037_soc_tb.v 2>&1 | grep -v 'sorry:' || true
 
 vvp -n "$SP/ref037soc.vvp" 2>/dev/null | reduce > "$SP/out_soc.txt"
@@ -102,6 +102,19 @@ if diff -u golden_037_rom.txt "$SP/out_soc_rom.txt"; then
    echo "ref037 (SoC integration, ROM-in-SDRAM program) equivalence: PASS"
 else
    echo "ref037 (SoC integration, ROM-in-SDRAM) equivalence: FAIL (see diff above)" >&2
+   exit 1
+fi
+
+# --- Phase 5 boot path: the SDRAM ROM region is populated by the REAL EPCS
+#     loader (flash model -> epcs_boot -> boot-writer mux on port 0) during
+#     reset-hold, exactly as ocbk_top boots. Golden must still match. ---
+vvp -n "$SP/ref037soc.vvp" +romprog +bootload 2>/dev/null | reduce 101136 \
+   > "$SP/out_soc_boot.txt"
+
+if diff -u golden_037_rom.txt "$SP/out_soc_boot.txt"; then
+   echo "ref037 (SoC integration, EPCS-loader boot path) equivalence: PASS"
+else
+   echo "ref037 (SoC, EPCS-loader boot) equivalence: FAIL (see diff above)" >&2
    exit 1
 fi
 

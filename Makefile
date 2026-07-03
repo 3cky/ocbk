@@ -13,7 +13,7 @@ QUARTUS_CPF  := $(QUARTUS_BIN)/quartus_cpf
 QUARTUS_PGM  := $(QUARTUS_BIN)/quartus_pgm
 PGM_CABLE    := USB-Blaster
 
-.PHONY: all compile collect sim clean distclean flash
+.PHONY: all compile collect sim clean distclean flash blob-check
 
 all: compile collect
 
@@ -24,9 +24,10 @@ sim:
 	./sim/run_sdram_arbiter.sh
 	./sim/run_sdram_cosim.sh
 	./sim/run_video.sh
+	./sim/run_epcs_boot.sh
 
 # --- FPGA build -----------------------------------------------------------
-compile: mem/ram_test.hex
+compile: mem/ram_test.hex mem/boot_blob.hex
 	@echo ">> Phase 1 - Analysis & Synthesis"
 	$(QUARTUS_MAP) $(PROJECT).qpf
 	@echo ">> Phase 2 - Fitter (Place & Route)"
@@ -71,3 +72,16 @@ distclean: clean
 
 flash: $(PARKING)/recovery.pof
 	$(QUARTUS_PGM) -c "$(PGM_CABLE)" -m AS -o "PV;$(PARKING)/recovery.pof"
+
+# Verify the ROM blob inside the flashable POF: convert to raw RPD and
+# byte-compare the hex_block page at 0x40000 against boot_blob.bin (the POF
+# stores hex_block bytes bit-reversed; the blob's Intel HEX pre-reverses, so
+# the RPD must equal the true bytes exactly).
+blob-check: $(PARKING)/recovery.pof mem/boot_blob.hex
+	$(QUARTUS_CPF) -c $(PARKING)/recovery.pof $(PARKING)/recovery.rpd
+	python3 -c "import sys; \
+	  rpd = open('$(PARKING)/recovery.rpd','rb').read(); \
+	  blob = open('mem/boot_blob.bin','rb').read(); \
+	  got = rpd[0x40000:0x40000+len(blob)]; \
+	  sys.exit(0 if got == blob else 'blob-check: MISMATCH at 0x40000')"
+	@echo ">> blob-check: POF hex_block page matches boot_blob.bin"

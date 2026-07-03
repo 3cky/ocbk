@@ -28,19 +28,25 @@
 // false-paths the pair (TimeQuest would otherwise time the 3:2 ~5.2 ns transfer).
 //
 // Reset: the SDRAM controller is released as soon as the PLL locks and runs its
-// ~200 us init; the CPU is then held in reset (DCLO low) until init_done, after
-// which DCLO and ACLO are released in sequence (the bk10_tb power-up ordering).
-// The video readout + pixel domain are likewise held until init_done; RGB stays
-// black until the first complete BK frame has been decoded (fb_front_valid).
+// ~200 us init; the EPCS boot loader then copies the BK-0010.01 ROM blob from
+// the config flash into the SDRAM ROM region (~22 ms); the CPU is held in reset
+// (DCLO low) until init_done AND boot_done, after which DCLO and ACLO are
+// released in sequence (the bk10_tb power-up ordering). The video readout +
+// pixel domain are held until init_done; RGB stays black until the first
+// complete BK frame has been decoded (fb_front_valid).
+//
+// ROM source: SDRAM (the loaded MONITOR+BASIC set) when the blob validated OK;
+// the on-chip test ROM (Phase-4 picture / RAM test) when the blob failed or
+// DIP 2 is ON (the hardware-regression path - parks 100004/100012 live there).
 //
 // screen_mode (mono-512 vs colour-256) is the physical monitor-cable switch of a
 // real BK-0010 -> DIP switch 1 here: OFF = colour-256 (default), ON = mono-512.
 //
 // LEDs (liveness):
-//   pLedPwr (red)  : solid once the CPU reaches the SUCCESS self-loop at 100004
-//                    (RAM-test passed: every word/byte write verified from SDRAM).
+//   pLedPwr (red)  : normal boot = ROM blob loaded + selected; fallback mode =
+//                    the RAM-test SUCCESS self-loop latch (100004).
 //   pLed[7]        : system heartbeat off the PLL (FPGA configured + PLL locked).
-//   pLed[6]        : SDRAM init_done (lit once the controller finished init).
+//   pLed[6]        : SDRAM init_done; BLINKS if the boot blob failed validation.
 //   pLed[5:0]      : top bits of a transaction counter - move while the CPU runs.
 module ocbk_top (
     input  logic        pClk21m,   // 21.47727 MHz crystal (PIN_28)
@@ -168,22 +174,70 @@ module ocbk_top (
     always_ff @(posedge sys_clk) smode_sr <= {smode_sr[0], ~pDip[0]};
     wire screen_mode = smode_sr[1];
 
-    // --- init_done synchronised into the CPU-clock domain ---------------
+    // --- DIP 2: force the on-chip test ROM (Phase-4 regression image) --------
+    logic [1:0] dip2_sr;
+    always_ff @(posedge sys_clk) dip2_sr <= {dip2_sr[0], ~pDip[1]};
+    wire dip2_test = dip2_sr[1];
+
+    // --- EPCS boot loader (flash blob -> SDRAM ROM region, before CPU release)
+    logic        boot_active, boot_done, boot_ok;
+    logic        bw_req, bw_gnt;
+    logic [23:0] bw_addr;
+    logic [15:0] bw_wdata;
+    logic        spi_dclk, spi_ncs, spi_mosi, spi_miso;
+
+    epcs_boot u_boot (
+        .clk        (sys_clk),
+        .rst_n      (srst_n),
+        .start      (init_done),
+        .spi_dclk   (spi_dclk),
+        .spi_ncs    (spi_ncs),
+        .spi_mosi   (spi_mosi),
+        .spi_miso   (spi_miso),
+        .bw_req     (bw_req),
+        .bw_addr    (bw_addr),
+        .bw_wdata   (bw_wdata),
+        .bw_gnt     (bw_gnt),
+        .boot_active(boot_active),
+        .boot_done  (boot_done),
+        .boot_ok    (boot_ok)
+    );
+
+    // Dedicated serial-flash access block (DCLK/nCSO/ASDO/DATA0 config pins are
+    // reachable only through this primitive; qsf already reserves ASDO).
+    cyclone_asmiblock u_asmi (
+        .dclkin   (spi_dclk),
+        .scein    (spi_ncs),
+        .sdoin    (spi_mosi),
+        .oe       (1'b0),
+        .data0out (spi_miso)
+    );
+
+    // ROM source: the loaded SDRAM image unless the blob failed or DIP2 forces
+    // the on-chip test ROM. Quasi-static: settles before the CPU leaves reset.
+    wire rom_ext_en = boot_ok && !dip2_test;
+
+    // --- init_done + boot_done synchronised into the CPU-clock domain -------
     logic id_meta, id_sync;
     always_ff @(posedge cpu_clk or negedge locked) begin
         if (!locked) {id_meta, id_sync} <= 2'b00;
         else         {id_meta, id_sync} <= {init_done, id_meta};
     end
+    logic bd_meta, bd_sync;
+    always_ff @(posedge cpu_clk or negedge locked) begin
+        if (!locked) {bd_meta, bd_sync} <= 2'b00;
+        else         {bd_meta, bd_sync} <= {boot_done, bd_meta};
+    end
 
-    // --- reset sequencer (on cpu_clk; held until SDRAM init completes) ---
+    // --- reset sequencer (on cpu_clk; held until SDRAM init + ROM load done) ---
     logic [3:0] rstc;
     always_ff @(posedge cpu_clk or negedge locked) begin
         if (!locked) begin
             rstc   <= 4'd0;
             dclo_n <= 1'b0;
             aclo_n <= 1'b0;
-        end else if (!id_sync) begin
-            rstc   <= 4'd0;          // hold CPU in reset until SDRAM is ready
+        end else if (!id_sync || !bd_sync) begin
+            rstc   <= 4'd0;          // hold CPU in reset until SDRAM + ROM ready
             dclo_n <= 1'b0;
             aclo_n <= 1'b0;
         end else begin
@@ -283,7 +337,12 @@ module ocbk_top (
     qbus_mem_sdram #(.MEMFILE("mem/ram_test.hex")) u_mem (
         .cpu_clk  (cpu_clk_n),      // ROM/IO wait FSM advances on the inverted CPU clock
         .reset    (~dclo_n),
-        .rom_ext_en(1'b0),          // Phase 5: becomes boot_ok & ~DIP2 with the EPCS loader
+        .rom_ext_en(rom_ext_en),
+        .boot_active(boot_active),
+        .bw_req   (bw_req),
+        .bw_addr  (bw_addr),
+        .bw_wdata (bw_wdata),
+        .bw_gnt   (bw_gnt),
         .sclk     (sys_clk),
         .srst_n   (srst_n),
         .init_done(init_done),
@@ -437,7 +496,11 @@ module ocbk_top (
         else         hb <= hb + 1'b1;
     end
 
-    assign pLedPwr = reached_loop;
-    assign pLed    = {hb[24], init_done, fetch_cnt[23:18]};
+    // pLedPwr: normal boot = solid once the real ROM is loaded and selected;
+    // fallback (DIP2 / blob failure) = the Phase-4 RAM-test success latch.
+    // pLed[6]: init_done, but BLINKS if the boot blob failed validation.
+    wire boot_fail = boot_done && !boot_ok;
+    assign pLedPwr = rom_ext_en | reached_loop;
+    assign pLed    = {hb[24], boot_fail ? hb[22] : init_done, fetch_cnt[23:18]};
 
 endmodule

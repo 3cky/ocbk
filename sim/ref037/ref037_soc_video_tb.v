@@ -201,6 +201,11 @@ module ref037_soc_video_tb;
         .cpu_clk  (~clk),            // as ocbk_top: FSM on the inverted CPU clock
         .reset    (~dclo),
         .rom_ext_en(romprog),
+        .boot_active(1'b0),          // loader path gated in ref037_soc_tb
+        .bw_req   (1'b0),
+        .bw_addr  ({AB{1'b0}}),
+        .bw_wdata ({DW{1'b0}}),
+        .bw_gnt   (),
         .sclk     (sys_clk),
         .srst_n   (srst_n),
         .init_done(init_done),
