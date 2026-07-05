@@ -89,7 +89,9 @@ Power-up shows the **BASIC Vilnius startup screen** full-screen and borderless
 prompt). The **reset button** warm-restarts the machine (hold = held in reset,
 release = reboot in <1 s): the authentic 1801ВМ1 DCLO→ACLO power-up sequence is
 re-run while SDRAM init, the flash ROM load and memory contents stay untouched —
-BK hardware-reset semantics. DIP 1 flips colour-256 (OFF) / mono-512 (ON) decode
+BK hardware-reset semantics. The display is **not** affected (as on a real BK,
+whose video controller ignores CPU DCLO/ACLO): the screen keeps showing video
+RAM while the button is held, until MONITOR's screen clear. DIP 1 flips colour-256 (OFF) / mono-512 (ON) decode
 live (it is the monitor-cable switch of a real BK). DIP 2 ON boots the on-chip
 test image instead: four vertical colour bars, an all-ones border (red in colour
 mode, white in mono), the main diagonal in inverted colour, and the SDRAM RAM

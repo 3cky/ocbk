@@ -38,12 +38,16 @@
 // Soft reset (warm restart): the board's reset button (pSltRst_n, the slot
 // RESET net, external pull-up) re-enters the same sequencer hold - pressed =
 // DCLO/ACLO asserted, release + a ~22 ms debounce tail = the identical
-// DCLO->ACLO release. Only the DCLO-keyed state (CPU, 037, memory front-end,
-// fb_video, LED latches) re-initialises: SDRAM init, the EPCS load and memory
-// contents are untouched, so MONITOR/BASIC warm-reboots through the authentic
-// 177716 start vector - BK hardware-reset semantics (memory survives). The
-// warm-reset replay oracles in sim/ref037 pin this to be cycle-identical to a
-// cold boot.
+// DCLO->ACLO release. Only the CPU-side DCLO-keyed state (CPU, memory
+// front-end, LED latches) re-initialises: SDRAM init, the EPCS load and
+// memory contents are untouched, so MONITOR/BASIC warm-reboots through the
+// authentic 177716 start vector - BK hardware-reset semantics (memory
+// survives). The 037 and the video pipeline are power-on-reset ONLY
+// (vid_rst_n): as on a real BK, the display is unaffected by a CPU reset and
+// keeps showing video RAM while the button is held. The warm-reset replay
+// oracles in sim/ref037 pin the post-reset timing (release aligned to vblank
+// there; on hardware the release lands at an arbitrary raster phase, exactly
+// like a real machine).
 //
 // ROM source: SDRAM (the loaded MONITOR+BASIC set) when the blob validated OK;
 // the on-chip test ROM (Phase-4 picture / RAM test) when the blob failed or
@@ -288,6 +292,21 @@ module ocbk_top (
         end
     end
 
+    // --- video reset: POWER-ON ONLY (real-BK fidelity) ------------------------
+    // On a real BK the display controller is not affected by a DCLO/ACLO CPU
+    // reset - the screen keeps showing video RAM until MONITOR clears it. So
+    // the 037 and fb_video are held in reset only until the FIRST DCLO release
+    // (bit-identical cold boot) and then free-run across warm resets: the
+    // picture stays up while the reset button is held. The bus-side 037 FSMs
+    // are strobe-driven and settle to idle while the CPU tri-states the bus
+    // (the warm-reset replay oracles in sim/ref037 pin this).
+    logic vid_alive;
+    always_ff @(posedge cpu_clk or negedge locked) begin
+        if (!locked)     vid_alive <= 1'b0;
+        else if (dclo_n) vid_alive <= 1'b1;    // first release; never cleared
+    end
+    wire vid_rst_n = dclo_n | vid_alive;
+
     // ---- shared Q-bus (inverted, active low; pull-up = released) --------
     tri1 [15:0] ad_n;
     tri1        sync_n, din_n, dout_n, wtbt_n, rply_n;
@@ -311,7 +330,7 @@ module ocbk_top (
         .en_pos    (en_pos),
         .en_neg    (en_neg),
         .mem_ready (mem_ready),
-        .PIN_R     (~dclo_n),          // 037 held in reset with the CPU (until init)
+        .PIN_R     (~vid_rst_n),       // power-on reset only: free-runs across warm resets
         .PIN_C     (1'b0),
         .PIN_nAD   (ad_n),
         .PIN_nSYNC (sync_n),
@@ -434,7 +453,7 @@ module ocbk_top (
 
     fb_video u_fbv (
         .clk        (sys_clk),
-        .rst_n      (dclo_n),          // released with the CPU/037
+        .rst_n      (vid_rst_n),       // power-on only: keeps decoding across warm resets
         .screen_mode(screen_mode),
         .vid_fetch  (vid_fetch),
         .vid_line_en(vid_line_en),

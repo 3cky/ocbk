@@ -26,9 +26,12 @@
 // Both modes also watch FETCH-ROMGATE / FETCH-P0LAT (see ref037_soc_tb.v).
 // +warmreset (Phase-5.5 soft reset): after the 64 display lines, DCLO/ACLO are
 // re-asserted MID-DISPLAY-LINE (ports 1/2/3 live, a dp access likely in
-// flight), then released with the cold 8-then-4 pattern; SDRAM contents and
-// the sys/pix domains stay up. The whole sequence - golden window plus 64
-// checked display lines - must then repeat exactly (run.sh diffs both passes
+// flight); SDRAM contents and the sys/pix domains stay up, and the 037 +
+// fb_video are NOT reset (power-on only, real-BK display fidelity) - the whole
+// video pipeline keeps fetching/writing/displaying across the hold. The
+// release is aligned to the next vblank start (matching the cold boot's
+// steal-free window position), then the whole sequence - golden window plus
+// 64 checked display lines - must repeat exactly (run.sh diffs both passes
 // against the same golden).
 //
 `timescale 1ns / 1ps
@@ -68,6 +71,9 @@ module ref037_soc_video_tb;
     assign rply = (rply037_n === 1'b0) ? 1'b0 : 1'bZ;
 
     reg         dclo, aclo;
+    reg         dclo_cold;   // power-on reset for the VIDEO side (037 + fb_video):
+                             // released with the first dclo release, never re-
+                             // asserted - a real BK's display ignores CPU resets
     // SDRAM-domain reset: released early (a few sys_clk), independent of the CPU
     // reset dclo which waits on init_done (mirrors ocbk_top's srst_n vs dclo).
     reg  [1:0]  srst_sr;
@@ -107,7 +113,7 @@ module ref037_soc_video_tb;
     wire        va_vfetch, va_line_en, va_hgate, va_vgate;
     va_037_sync pr037 (
         .clk(sys_clk), .en_pos(en_pos), .en_neg(en_neg), .mem_ready(mem_ready),
-        .PIN_R(~dclo), .PIN_C(1'b0),
+        .PIN_R(~dclo_cold), .PIN_C(1'b0),
         .PIN_nAD(ad), .PIN_nSYNC(sync), .PIN_nDIN(din), .PIN_nDOUT(dout),
         .PIN_nWTBT(wtbt), .PIN_nRPLY(rply037_n),
         .PIN_A(va_a), .PIN_nCAS(va_cas), .PIN_nRAS(va_ras), .PIN_nWE(va_we),
@@ -126,9 +132,9 @@ module ref037_soc_video_tb;
     integer    disp_lines   = 0;      // completed display lines (run-length control)
     always @(posedge sys_clk) begin
         va_hgate_d <= va_hgate;
-        if (!dclo) begin                           // warm reset: 037 is held in
-            vf_line_open = 1'b0;                   // PIN_R - a truncated line is
-            vf_cnt       = 0;                      // not a fetch-count error
+        if (!dclo_cold) begin                      // 037 in power-on reset only:
+            vf_line_open = 1'b0;                   // it free-runs (and stays
+            vf_cnt       = 0;                      // checked) across warm resets
         end else begin
             if (va_vfetch) vf_cnt = vf_cnt + 1;
             if (va_hgate & ~va_hgate_d) begin          // line-end edge
@@ -154,7 +160,7 @@ module ref037_soc_video_tb;
     wire        fb_front, fb_front_valid, err_fetch_ovr, err_fifo_ovf;
 
     fb_video #(.ADDR_BITS(AB), .DQ_BITS(DW)) u_fbv (
-        .clk(sys_clk), .rst_n(dclo), .screen_mode(1'b1),
+        .clk(sys_clk), .rst_n(dclo_cold), .screen_mode(1'b1),
         .vid_fetch(va_vfetch), .vid_line_en(va_line_en),
         .hgate(va_hgate), .vgate(va_vgate), .video_va(video_va),
         .f_req(f_req), .f_addr(f_addr), .f_gnt(f_gnt), .f_rvalid(f_rvalid),
@@ -391,10 +397,10 @@ module ref037_soc_video_tb;
         romprog   = $test$plusargs("romprog");
         warmreset = $test$plusargs("warmreset");
         pa=2'b11; sp=1'b1; dmgi=1'b1; irq=3'b111; virq=1'b1;
-        dclo=1'b0; aclo=1'b0;
+        dclo=1'b0; aclo=1'b0; dclo_cold=1'b0;
 
         wait (init_done); @(negedge clk);
-        repeat (8) @(negedge clk); dclo = 1'b1;
+        repeat (8) @(negedge clk); dclo = 1'b1; dclo_cold = 1'b1;
         repeat (4) @(negedge clk); aclo = 1'b1;
 
         // run through the golden window (all vblank) and then 64 real display
@@ -404,13 +410,17 @@ module ref037_soc_video_tb;
 
         if (warmreset) begin
             // Phase-5.5 soft reset: press the button MID-DISPLAY-LINE (ports
-            // 1/2/3 live, a dp access likely in flight), hold, release with
-            // the cold 8-then-4 pattern. SDRAM contents, srst_n and the pix
-            // domain stay up; the whole checked sequence must repeat exactly.
+            // 1/2/3 live, a dp access likely in flight). The video pipeline is
+            // NOT reset and keeps fetching/writing/displaying through the
+            // hold; release at the next vblank start (cold 8-then-4 pattern).
+            // SDRAM contents, srst_n and the pix domain stay up; the whole
+            // checked sequence must repeat exactly.
             meas_en = 1'b0;
             repeat (3) @(posedge sys_clk);
             dclo = 1'b0; aclo = 1'b0;            // reset button pressed
-            repeat (7) @(negedge clk);           // held
+            repeat (7) @(negedge clk);           // held...
+            @(posedge va_vgate);                 // ...until the next vblank start
+            @(negedge clk);
             repeat (8) @(negedge clk); dclo = 1'b1;
             repeat (4) @(negedge clk); aclo = 1'b1;
             loop_n = 0; have_baseline = 1'b0; prev_addr = 16'hFFFF;
@@ -426,7 +436,8 @@ module ref037_soc_video_tb;
     end
 
     initial begin
-        #(($test$plusargs("warmreset")) ? 25_000_000 : 12_000_000);  // backstop
+        // +warmreset: pass 1 (~8 ms) + hold-to-vblank (up to ~12 ms) + pass 2
+        #(($test$plusargs("warmreset")) ? 45_000_000 : 12_000_000);  // backstop
         if (!run_done) begin
             $display("FETCH-TIMEOUT-ERROR: display lines never reached");
             $finish;

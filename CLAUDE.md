@@ -96,10 +96,16 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
 - **Soft reset (Phase 5.5):** the board's reset button (`pSltRst_n`, PIN_153 =
   the slot RESET net, external pull-up) re-enters the `ocbk_top` reset
   sequencer via `warm_rst_req` (pressed = hold, release + ~22 ms tail = the
-  8/12 DCLO→ACLO release). Everything DCLO-keyed re-inits; `srst_n`, SDRAM
+  8/12 DCLO→ACLO release). CPU-side DCLO-keyed state re-inits; `srst_n`, SDRAM
   init, `epcs_boot` and memory contents are untouched — BK hardware-reset
-  semantics (memory survives). The Phase-6 keyboard reset chord ORs into
-  `warm_rst_req`. "DIP n" = physical switch n = `pDip[n-1]`; DIP 1
+  semantics (memory survives). **The video side (037 `PIN_R` + `fb_video`) is
+  power-on-reset ONLY (`vid_rst_n`)** — a real BK's display ignores CPU
+  DCLO/ACLO, so the picture stays up across a warm reset; never re-key those
+  resets to `dclo_n`. In the warm-reset oracle tbs the release is aligned to
+  the next vblank start (the free-running 037 makes post-reset timing raster-
+  phase-dependent — authentic; the vblank alignment is what keeps the replayed
+  golden window steal-free and diffable). The Phase-6 keyboard reset chord ORs
+  into `warm_rst_req`. "DIP n" = physical switch n = `pDip[n-1]`; DIP 1
   (screen_mode) is live like the real monitor-cable switch, **DIP 2 is latched
   while DCLO is low** — a mid-run flip must never switch the ROM source.
 - Cartridge-slot Q-bus is a **forward seam**: `src/qbus_slot.sv`, default

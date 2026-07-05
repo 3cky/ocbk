@@ -17,10 +17,13 @@
 //      (diagnostic aid, not a gate).
 //
 // +warmreset (Phase-5.5 soft reset): once the cold screen clear is underway,
-// DCLO/ACLO are re-pulsed mid-run (the reset button; SDRAM contents stay) and
-// the run must then see (a) the no-X checks stay clean, (b) a second 177716
-// start-vector read, and (c) a second full screen-clear burst - the real
-// MONITOR warm-reboots. Roughly doubles the runtime.
+// DCLO/ACLO are re-pulsed mid-run (the reset button; SDRAM contents stay, and
+// the 037 + fb_video are NOT reset - power-on only, the display free-runs
+// across the reset as on a real BK; the release is deliberately raster-
+// unsynced here, the authentic arbitrary phase). The run must then see (a) the
+// no-X checks stay clean, (b) a second 177716 start-vector read, and (c) a
+// second full screen-clear burst - the real MONITOR warm-reboots. Roughly
+// doubles the runtime.
 //
 // Prints BOOTCHK-* lines; run_boot_check.sh greps for the final verdict.
 //
@@ -56,6 +59,8 @@ module boot_check_tb;
     assign rply = (rply037_n === 1'b0) ? 1'b0 : 1'bZ;
 
     reg         dclo, aclo;
+    reg         dclo_cold;   // power-on reset for the VIDEO side (037 + fb_video):
+                             // never re-asserted - real-BK display fidelity
     reg  [1:0]  srst_sr;
     wire        srst_n = srst_sr[1];
     initial srst_sr = 2'b00;
@@ -86,7 +91,7 @@ module boot_check_tb;
     wire        va_vfetch, va_line_en, va_hgate, va_vgate;
     va_037_sync pr037 (
         .clk(sys_clk), .en_pos(en_pos), .en_neg(en_neg), .mem_ready(mem_ready),
-        .PIN_R(~dclo), .PIN_C(1'b0),
+        .PIN_R(~dclo_cold), .PIN_C(1'b0),
         .PIN_nAD(ad), .PIN_nSYNC(sync), .PIN_nDIN(din), .PIN_nDOUT(dout),
         .PIN_nWTBT(wtbt), .PIN_nRPLY(rply037_n),
         .PIN_A(va_a), .PIN_nCAS(va_cas), .PIN_nRAS(va_ras), .PIN_nWE(va_we),
@@ -104,7 +109,7 @@ module boot_check_tb;
     wire        fb_front, fb_front_valid;
 
     fb_video #(.ADDR_BITS(AB), .DQ_BITS(DW)) u_fbv (
-        .clk(sys_clk), .rst_n(dclo), .screen_mode(1'b1),
+        .clk(sys_clk), .rst_n(dclo_cold), .screen_mode(1'b1),
         .vid_fetch(va_vfetch), .vid_line_en(va_line_en),
         .hgate(va_hgate), .vgate(va_vgate), .video_va(video_va),
         .f_req(f_req), .f_addr(f_addr), .f_gnt(f_gnt), .f_rvalid(f_rvalid),
@@ -287,10 +292,10 @@ module boot_check_tb;
 
         warmreset = $test$plusargs("warmreset");
         pa=2'b11; sp=1'b1; dmgi=1'b1; irq=3'b111; virq=1'b1;
-        dclo=1'b0; aclo=1'b0;
+        dclo=1'b0; aclo=1'b0; dclo_cold=1'b0;
 
         wait (init_done); @(negedge clk);
-        repeat (8) @(negedge clk); dclo = 1'b1;
+        repeat (8) @(negedge clk); dclo = 1'b1; dclo_cold = 1'b1;
         repeat (4) @(negedge clk); aclo = 1'b1;
         $display("BOOTCHK: CPU released, MONITOR cold boot from SDRAM ROM...");
     end

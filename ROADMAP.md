@@ -255,6 +255,10 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   authentic DCLO→ACLO release. SDRAM init, the EPCS ROM load and memory
   contents are untouched (BK hardware-reset semantics — memory survives), so
   MONITOR/BASIC warm-reboots through the 177716 start vector in <1 s.
+- **Display continuity (real-BK fidelity):** the 037 and `fb_video` are
+  power-on-reset only (`vid_rst_n`) — a real BK's display controller ignores
+  CPU DCLO/ACLO, so the screen keeps showing video RAM across the reset
+  (no blanking while the button is held).
 - **DIP 2 is now latched at reset** (sampled only while DCLO is low): flipping
   it mid-run no longer switches the ROM source under the running CPU — "flip
   DIP 2, press reset" is a clean ROM swap.

@@ -30,6 +30,9 @@
 // loop, DCLO/ACLO are re-asserted MID-BUS-CYCLE (the reset button), held, then
 // released with the same 8-then-4 pattern - SDRAM state and boot state stay
 // untouched, the program re-executes, and the measurement window re-arms. The
+// 037 is NOT reset (power-on only, real-BK display fidelity) and free-runs
+// through the hold, so the release is aligned to the next vblank start to put
+// the replayed window in the same steal-free region as the cold boot. The
 // run.sh diff compares BOTH passes against the same golden: a warm reset must
 // reproduce cold-boot timing bit-for-bit (the program is re-entrant - its RMW
 // scratch is CLR-initialised before use).
@@ -67,6 +70,9 @@ module ref037_soc_tb;
     assign rply = (rply037_n === 1'b0) ? 1'b0 : 1'bZ;
 
     reg         dclo, aclo;
+    reg         dclo_cold;   // power-on reset for the VIDEO side (037): released
+                             // with the first dclo release, never re-asserted -
+                             // a real BK's display is unaffected by CPU DCLO/ACLO
     // SDRAM-domain reset: released early (a few sys_clk), independent of the CPU
     // reset dclo which waits on init_done (mirrors ocbk_top's srst_n vs dclo).
     reg  [1:0]  srst_sr;
@@ -106,7 +112,7 @@ module ref037_soc_tb;
     wire        va_vfetch, va_line_en, va_hgate, va_vgate;
     va_037_sync pr037 (
         .clk(sys_clk), .en_pos(en_pos), .en_neg(en_neg), .mem_ready(mem_ready),
-        .PIN_R(~dclo), .PIN_C(1'b0),
+        .PIN_R(~dclo_cold), .PIN_C(1'b0),
         .PIN_nAD(ad), .PIN_nSYNC(sync), .PIN_nDIN(din), .PIN_nDOUT(dout),
         .PIN_nWTBT(wtbt), .PIN_nRPLY(rply037_n),
         .PIN_A(va_a), .PIN_nCAS(va_cas), .PIN_nRAS(va_ras), .PIN_nWE(va_we),
@@ -124,9 +130,9 @@ module ref037_soc_tb;
     integer    vf_cnt       = 0;
     always @(posedge sys_clk) begin
         va_hgate_d <= va_hgate;
-        if (!dclo) begin                           // warm reset: 037 is held in
-            vf_line_open = 1'b0;                   // PIN_R - a truncated line is
-            vf_cnt       = 0;                      // not a fetch-count error
+        if (!dclo_cold) begin                      // 037 in power-on reset only:
+            vf_line_open = 1'b0;                   // it free-runs (and stays
+            vf_cnt       = 0;                      // checked) across warm resets
         end else begin
             if (va_vfetch) vf_cnt = vf_cnt + 1;
             if (va_hgate & ~va_hgate_d) begin          // line-end edge
@@ -283,13 +289,18 @@ module ref037_soc_tb;
     // ---- +warmreset driver: the reset button, mid-bus-cycle -------------------
     // Triggered from a DIN strobe of the park loop, so DCLO lands INSIDE an
     // active bus cycle (the hardest case: dp read in flight, arbiter granted).
-    // Hold, then release with the exact cold-boot 8-then-4 pattern; SDRAM and
-    // boot state are untouched. Pass 2 must reproduce the same golden window.
+    // The 037 is NOT reset (power-on only, as real hardware) and free-runs
+    // through the hold, so the release is aligned to the next vblank start
+    // (vgate rise): the golden window then re-runs steal-free exactly as the
+    // cold boot did, and pass 2 must reproduce the same golden. (On hardware
+    // the release lands at an arbitrary raster phase - authentically so.)
     initial begin
         @(do_warm);
         repeat (3) @(posedge sys_clk);
         dclo = 1'b0; aclo = 1'b0;            // reset button pressed
-        repeat (7) @(negedge clk);           // held
+        repeat (7) @(negedge clk);           // held...
+        @(posedge va_vgate);                 // ...until the next vblank start
+        @(negedge clk);
         repeat (8) @(negedge clk); dclo = 1'b1;
         repeat (4) @(negedge clk); aclo = 1'b1;
         loop_n = 0; have_baseline = 1'b0; prev_addr = 16'hFFFF;
@@ -381,7 +392,7 @@ module ref037_soc_tb;
         bootload  = $test$plusargs("bootload");
         warmreset = $test$plusargs("warmreset");
         pa=2'b11; sp=1'b1; dmgi=1'b1; irq=3'b111; virq=1'b1;
-        dclo=1'b0; aclo=1'b0;
+        dclo=1'b0; aclo=1'b0; dclo_cold=1'b0;
 
         wait (init_done);
         if (bootload) begin                 // as ocbk_top: CPU held until loaded
@@ -389,10 +400,12 @@ module ref037_soc_tb;
             if (!boot_ok) $display("FETCH-BOOT-ERROR: loader ended boot_ok=0");
         end
         @(negedge clk);
-        repeat (8) @(negedge clk); dclo = 1'b1;
+        repeat (8) @(negedge clk); dclo = 1'b1; dclo_cold = 1'b1;
         repeat (4) @(negedge clk); aclo = 1'b1;
 
-        #(warmreset ? 5_000_000 : 2_500_000);   // watchdog (normal exit = loop_n)
+        // watchdog (normal exit = loop_n); the +warmreset release waits for the
+        // next vblank start, up to a full ~20.5 ms frame away
+        #(warmreset ? 30_000_000 : 2_500_000);
         $finish;
     end
 
