@@ -24,6 +24,12 @@
 // FLAT - every display-phase iteration must be exactly 13 cycles (ROM is not
 // 037-cycle-stolen; a single done-gate RPLY extension breaks it).
 // Both modes also watch FETCH-ROMGATE / FETCH-P0LAT (see ref037_soc_tb.v).
+// +warmreset (Phase-5.5 soft reset): after the 64 display lines, DCLO/ACLO are
+// re-asserted MID-DISPLAY-LINE (ports 1/2/3 live, a dp access likely in
+// flight), then released with the cold 8-then-4 pattern; SDRAM contents and
+// the sys/pix domains stay up. The whole sequence - golden window plus 64
+// checked display lines - must then repeat exactly (run.sh diffs both passes
+// against the same golden).
 //
 `timescale 1ns / 1ps
 
@@ -120,18 +126,23 @@ module ref037_soc_video_tb;
     integer    disp_lines   = 0;      // completed display lines (run-length control)
     always @(posedge sys_clk) begin
         va_hgate_d <= va_hgate;
-        if (va_vfetch) vf_cnt = vf_cnt + 1;
-        if (va_hgate & ~va_hgate_d) begin          // line-end edge
-            if (vf_line_open) begin
-                disp_lines = disp_lines + 1;
-                if (vf_cnt != 32)
-                    $display("FETCH-VIDTAP-ERROR: %0d fetches in display line", vf_cnt);
+        if (!dclo) begin                           // warm reset: 037 is held in
+            vf_line_open = 1'b0;                   // PIN_R - a truncated line is
+            vf_cnt       = 0;                      // not a fetch-count error
+        end else begin
+            if (va_vfetch) vf_cnt = vf_cnt + 1;
+            if (va_hgate & ~va_hgate_d) begin          // line-end edge
+                if (vf_line_open) begin
+                    disp_lines = disp_lines + 1;
+                    if (vf_cnt != 32)
+                        $display("FETCH-VIDTAP-ERROR: %0d fetches in display line", vf_cnt);
+                end
+                vf_line_open = 1'b0;
             end
-            vf_line_open = 1'b0;
-        end
-        if (~va_hgate & va_hgate_d & ~va_vgate) begin  // line-start edge
-            vf_line_open = 1'b1;
-            vf_cnt       = 0;
+            if (~va_hgate & va_hgate_d & ~va_vgate) begin  // line-start edge
+                vf_line_open = 1'b1;
+                vf_cnt       = 0;
+            end
         end
     end
 
@@ -245,7 +256,9 @@ module ref037_soc_video_tb;
     reg     p0_pend = 1'b0, romgate_flag = 1'b0;
     always @(posedge sys_clk) begin
         scyc = scyc + 1;
-        if (!p0_pend) begin
+        if (!dclo) begin
+            p0_pend <= 1'b0;        // warm reset aborts any in-flight dp read
+        end else if (!p0_pend) begin
             if (u_ms.dp_req && !u_ms.dp_we) begin p0_pend <= 1'b1; p0_t0 = scyc; end
         end else if (u_ms.dp_rvalid) begin
             p0_pend <= 1'b0;
@@ -273,8 +286,10 @@ module ref037_soc_video_tb;
     integer    prev_nclk;   reg [15:0] prev_addr;   reg have_baseline;
     integer    loop_n = 0;
     integer    cyc, hist0, hist1, hist2, hist3, hist_n = 0, loop_bad = 0;
+    reg        warmreset;            // +warmreset: replay after a mid-run reset
+    reg        meas_en = 1'b1;       // window armed (off during the warm pulse)
     always @(negedge din) begin
-        if (~sync && sel_win && addr >= win_lo && addr < win_hi) begin
+        if (meas_en && ~sync && sel_win && addr >= win_lo && addr < win_hi) begin
             if (have_baseline && loop_n < 6)
                 $display("FETCH %06o cycles=%0d", prev_addr, nclk - prev_nclk);
             if (prev_addr == loop_addr) begin
@@ -361,9 +376,20 @@ module ref037_soc_video_tb;
 
     // ---- reset (wait SDRAM init) + sim limit ---------------------------------
     reg run_done = 1'b0;
+
+    task check_flags;
+        begin
+            if (err_fetch_ovr) $display("FETCH-FLAG-ERROR: fb_video fetch overrun");
+            if (err_fifo_ovf)  $display("FETCH-FLAG-ERROR: fb_video fifo overflow");
+            if (err_line_ovr)  $display("FETCH-FLAG-ERROR: fb_readout line overrun");
+            if (hist_n < 1000) $display("FETCH-FLAG-ERROR: only %0d loop samples", hist_n);
+        end
+    endtask
+
     initial begin
         nclk=0; prev_nclk=0; have_baseline=1'b0;
-        romprog = $test$plusargs("romprog");
+        romprog   = $test$plusargs("romprog");
+        warmreset = $test$plusargs("warmreset");
         pa=2'b11; sp=1'b1; dmgi=1'b1; irq=3'b111; virq=1'b1;
         dclo=1'b0; aclo=1'b0;
 
@@ -374,17 +400,33 @@ module ref037_soc_video_tb;
         // run through the golden window (all vblank) and then 64 real display
         // lines of full 4-port contention (~8 ms total)
         wait (disp_lines >= 64);
-        if (err_fetch_ovr) $display("FETCH-FLAG-ERROR: fb_video fetch overrun");
-        if (err_fifo_ovf)  $display("FETCH-FLAG-ERROR: fb_video fifo overflow");
-        if (err_line_ovr)  $display("FETCH-FLAG-ERROR: fb_readout line overrun");
-        if (hist_n < 1000) $display("FETCH-FLAG-ERROR: only %0d loop samples", hist_n);
+        check_flags;
+
+        if (warmreset) begin
+            // Phase-5.5 soft reset: press the button MID-DISPLAY-LINE (ports
+            // 1/2/3 live, a dp access likely in flight), hold, release with
+            // the cold 8-then-4 pattern. SDRAM contents, srst_n and the pix
+            // domain stay up; the whole checked sequence must repeat exactly.
+            meas_en = 1'b0;
+            repeat (3) @(posedge sys_clk);
+            dclo = 1'b0; aclo = 1'b0;            // reset button pressed
+            repeat (7) @(negedge clk);           // held
+            repeat (8) @(negedge clk); dclo = 1'b1;
+            repeat (4) @(negedge clk); aclo = 1'b1;
+            loop_n = 0; have_baseline = 1'b0; prev_addr = 16'hFFFF;
+            hist_n = 0; loop_bad = 0; disp_lines = 0;
+            meas_en = 1'b1;
+            wait (disp_lines >= 64);
+            check_flags;
+        end
+
         $display("P0LAT max=%0d sys_clk (budget 48)", p0_max);
         run_done = 1'b1;
         $finish;
     end
 
     initial begin
-        #12_000_000;                       // 12 ms backstop
+        #(($test$plusargs("warmreset")) ? 25_000_000 : 12_000_000);  // backstop
         if (!run_done) begin
             $display("FETCH-TIMEOUT-ERROR: display lines never reached");
             $finish;

@@ -16,6 +16,12 @@
 //      boot_trace.txt for one-off manual diffing vs a BkEmu-side trace
 //      (diagnostic aid, not a gate).
 //
+// +warmreset (Phase-5.5 soft reset): once the cold screen clear is underway,
+// DCLO/ACLO are re-pulsed mid-run (the reset button; SDRAM contents stay) and
+// the run must then see (a) the no-X checks stay clean, (b) a second 177716
+// start-vector read, and (c) a second full screen-clear burst - the real
+// MONITOR warm-reboots. Roughly doubles the runtime.
+//
 // Prints BOOTCHK-* lines; run_boot_check.sh greps for the final verdict.
 //
 `timescale 1ns / 1ps
@@ -224,13 +230,46 @@ module boot_check_tb;
     end
     always @(posedge dout) wr_seen = 0;
 
-    // finish as soon as the screen clear is well underway
+    // ---- +warmreset: reboot mid-screen-clear, MONITOR must come back ----------
+    // warm_phase: 0 = cold run, 1 = warm pulse in progress, 2 = warm reboot run
+    reg     warmreset;
+    integer warm_phase = 0;
+    reg     saw_sel1_warm = 0;      // 177716 start-vector read after the reset
+    event   do_warm;
+
+    always @(negedge rply)
+        if (aclo === 1'b1 && warm_phase == 2 && !din && addr == 16'o177716)
+            saw_sel1_warm = 1;
+
+    initial begin
+        @(do_warm);
+        $display("BOOTCHK: warm reset (reset button) mid-screen-clear...");
+        repeat (3) @(posedge sys_clk);
+        dclo = 1'b0; aclo = 1'b0;            // pressed, mid-bus-cycle
+        repeat (7) @(negedge clk);           // held
+        repeat (8) @(negedge clk); dclo = 1'b1;
+        repeat (4) @(negedge clk); aclo = 1'b1;
+        vid_writes = 0;
+        warm_phase = 2;
+        $display("BOOTCHK: CPU re-released, MONITOR warm reboot...");
+    end
+
+    // finish as soon as the screen clear is well underway (twice in +warmreset)
     always @(vid_writes) begin
-        if (vid_writes >= VID_TARGET) begin
-            if (xerrs == 0) $display("BOOTCHK: PASS");
-            else            $display("BOOTCHK: FAIL (%0d X errors)", xerrs);
-            $fclose(tracef);
-            $finish;
+        if (vid_writes >= VID_TARGET && warm_phase != 1) begin
+            if (warmreset && warm_phase == 0) begin
+                warm_phase = 1;
+                -> do_warm;
+            end else begin
+                if (warmreset && !saw_sel1_warm) begin
+                    $display("BOOTCHK-WARM-ERROR: no 177716 read after warm reset");
+                    xerrs = xerrs + 1;
+                end
+                if (xerrs == 0) $display("BOOTCHK: PASS");
+                else            $display("BOOTCHK: FAIL (%0d X errors)", xerrs);
+                $fclose(tracef);
+                $finish;
+            end
         end
     end
 
@@ -246,6 +285,7 @@ module boot_check_tb;
             u_mem.mem[16'h4000 + ii] =
                 {blob['h40008 + 2*ii + 1], blob['h40008 + 2*ii]};
 
+        warmreset = $test$plusargs("warmreset");
         pa=2'b11; sp=1'b1; dmgi=1'b1; irq=3'b111; virq=1'b1;
         dclo=1'b0; aclo=1'b0;
 

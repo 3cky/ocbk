@@ -4,7 +4,7 @@ Running the Soviet **Elektronika BK-0010/0011M** (PDP-11-class) as alternative
 firmware on the OneChipBook board (Altera Cyclone I **EP1C12Q240C8**, Quartus II
 11.0). See [ROADMAP.md](ROADMAP.md) for the full plan.
 
-## Status: Phase 5 — SoC boot ✅ (BASIC Vilnius banner on screen)
+## Status: Phase 5 — SoC boot ✅ (BASIC Vilnius banner on screen) + soft reset
 
 **The board cold-boots the real BK-0010.01 firmware**: at power-up the EPCS
 loader copies the **MONITOR + BASIC Vilnius ROM set** (32 KB, `mem/roms/`, from
@@ -29,8 +29,9 @@ fallback if the flash blob fails validation).
 - Cycle accuracy holds under full 4-port SDRAM contention for RAM *and* ROM
   execution: the SoC cosims reproduce both goldens (`golden_037.txt`,
   `golden_037_rom.txt` — the ROM self-loop is *flat*, no cycle-stealing) exactly,
-  including a run where the SDRAM is populated by the real EPCS loader
-  (`sim/ref037/`, nine diffs).
+  including a run where the SDRAM is populated by the real EPCS loader and
+  warm-reset replays where a mid-run reset must reproduce cold-boot timing
+  bit-for-bit (`sim/ref037/`, twelve diffs).
 - The full-chain video cosim is pixel-exact at the DAC pins against a
   Python-rendered frame (`sim/video/video_pipe_tb.sv`); the real MONITOR
   cold-boot is smoke-checked in sim (`sim/run_boot_check.sh`).
@@ -85,10 +86,15 @@ Requires Icarus Verilog for `sim`, and Quartus II 11.0
 
 Power-up shows the **BASIC Vilnius startup screen** full-screen and borderless
 (keyboard input arrives with Phase 6; СТОП will then drop to the MONITOR
-prompt). DIP 1 flips colour-256 (OFF) / mono-512 (ON) decode. DIP 2 ON boots
-the on-chip test image instead: four vertical colour bars, an all-ones border
-(red in colour mode, white in mono), the main diagonal in inverted colour, and
-the SDRAM RAM test.
+prompt). The **reset button** warm-restarts the machine (hold = held in reset,
+release = reboot in <1 s): the authentic 1801ВМ1 DCLO→ACLO power-up sequence is
+re-run while SDRAM init, the flash ROM load and memory contents stay untouched —
+BK hardware-reset semantics. DIP 1 flips colour-256 (OFF) / mono-512 (ON) decode
+live (it is the monitor-cable switch of a real BK). DIP 2 ON boots the on-chip
+test image instead: four vertical colour bars, an all-ones border (red in colour
+mode, white in mono), the main diagonal in inverted colour, and the SDRAM RAM
+test; DIP 2 is sampled **at reset only** — flip it, then press the reset button
+(or power-cycle).
 
 ### LEDs
 

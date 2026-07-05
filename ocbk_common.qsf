@@ -81,6 +81,9 @@ set_location_assignment PIN_57 -to pDip[4]
 set_location_assignment PIN_58 -to pDip[5]
 set_location_assignment PIN_59 -to pDip[6]
 set_location_assignment PIN_60 -to pDip[7]
+# Reset button = the slot RESET net (external pull-up; esemsx3 uses it the same
+# way). Doubles as the slot RESET pin if the cartridge-slot seam is ever enabled.
+set_location_assignment PIN_153 -to pSltRst_n
 # VGA sync (copied from ocb-test / esemsx3: pVideoVS_n=PIN_74, pVideoHS_n=PIN_75)
 set_location_assignment PIN_74 -to pVideoVS_n
 set_location_assignment PIN_75 -to pVideoHS_n
@@ -155,6 +158,10 @@ set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pDip[6]
 set_instance_assignment -name PCI_IO ON -to pDip[6]
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pDip[7]
 set_instance_assignment -name PCI_IO ON -to pDip[7]
+
+# Reset button (slot RESET, PIN_153): external pull-up on the board, so PCI_IO
+# only (mirrors esemsx3 emsx_top_common.qsf).
+set_instance_assignment -name PCI_IO ON -to pSltRst_n
 
 # VGA sync outputs (24 mA, fast slew; mirrors ocb-test / esemsx3)
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pVideoVS_n

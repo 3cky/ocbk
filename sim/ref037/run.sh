@@ -24,8 +24,12 @@ iverilog -g2012 -o "$SP/ref037.vvp" -s ref037_tb \
 
 # Reduce: unique instruction prefix, then the first 4 self-loop samples.
 # $1 = self-loop address (001136 for the RAM program, 101136 for +romprog).
+# The sample counter re-arms on any non-loop line: in a +warmreset run the
+# program re-executes after the mid-run reset, so each pass keeps its own
+# first 4 loop samples (single-pass output is unchanged - the loop address
+# only ever appears at the end of a pass).
 reduce() { awk -v loop="${1:-001136}" \
-   '/^FETCH/ { if ($2==loop) { c++; if (c<=4) print } else print }'; }
+   '/^FETCH/ { if ($2==loop) { c++; if (c<=4) print } else { c=0; print } }'; }
 
 vvp -n "$SP/ref037.vvp" 2>/dev/null | reduce > "$SP/out.txt"
 
@@ -105,6 +109,29 @@ else
    exit 1
 fi
 
+# --- Phase 5.5 soft reset: mid-run DCLO/ACLO re-pulse (the reset button) with
+#     SDRAM and boot state untouched; the program re-executes and BOTH passes
+#     must match the same golden - a warm reset is cycle-identical to a cold
+#     boot. Run in RAM mode and ROM-in-SDRAM mode. ---
+vvp -n "$SP/ref037soc.vvp" +warmreset 2>/dev/null | reduce > "$SP/out_soc_warm.txt"
+
+if cat golden_037.txt golden_037.txt | diff -u - "$SP/out_soc_warm.txt"; then
+   echo "ref037 (SoC integration, warm-reset replay) equivalence: PASS"
+else
+   echo "ref037 (SoC, warm-reset replay) equivalence: FAIL (see diff above)" >&2
+   exit 1
+fi
+
+vvp -n "$SP/ref037soc.vvp" +romprog +warmreset 2>/dev/null | reduce 101136 \
+   > "$SP/out_soc_rom_warm.txt"
+
+if cat golden_037_rom.txt golden_037_rom.txt | diff -u - "$SP/out_soc_rom_warm.txt"; then
+   echo "ref037 (SoC integration, ROM warm-reset replay) equivalence: PASS"
+else
+   echo "ref037 (SoC, ROM warm-reset replay) equivalence: FAIL (see diff above)" >&2
+   exit 1
+fi
+
 # --- Phase 5 boot path: the SDRAM ROM region is populated by the REAL EPCS
 #     loader (flash model -> epcs_boot -> boot-writer mux on port 0) during
 #     reset-hold, exactly as ocbk_top boots. Golden must still match. ---
@@ -151,5 +178,19 @@ if diff -u golden_037_rom.txt "$SP/out_socv_rom.txt"; then
    echo "ref037 (SoC + video, ROM-in-SDRAM under 4-port contention) equivalence: PASS"
 else
    echo "ref037 (SoC + video, ROM-in-SDRAM) equivalence: FAIL (see diff above)" >&2
+   exit 1
+fi
+
+# --- Phase 5.5 soft reset under full video contention: the button pressed
+#     MID-DISPLAY-LINE (ports 1/2/3 live), then the whole checked sequence -
+#     golden window + 64 display lines with the flat-13 ROM loop invariant -
+#     must repeat exactly. ---
+vvp -n "$SP/ref037socv.vvp" +romprog +warmreset 2>/dev/null | reduce 101136 \
+   > "$SP/out_socv_rom_warm.txt"
+
+if cat golden_037_rom.txt golden_037_rom.txt | diff -u - "$SP/out_socv_rom_warm.txt"; then
+   echo "ref037 (SoC + video, ROM warm-reset replay mid-display) equivalence: PASS"
+else
+   echo "ref037 (SoC + video, ROM warm-reset replay) equivalence: FAIL (see diff above)" >&2
    exit 1
 fi

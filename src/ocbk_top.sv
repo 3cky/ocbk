@@ -35,9 +35,22 @@
 // pixel domain are held until init_done; RGB stays black until the first
 // complete BK frame has been decoded (fb_front_valid).
 //
+// Soft reset (warm restart): the board's reset button (pSltRst_n, the slot
+// RESET net, external pull-up) re-enters the same sequencer hold - pressed =
+// DCLO/ACLO asserted, release + a ~22 ms debounce tail = the identical
+// DCLO->ACLO release. Only the DCLO-keyed state (CPU, 037, memory front-end,
+// fb_video, LED latches) re-initialises: SDRAM init, the EPCS load and memory
+// contents are untouched, so MONITOR/BASIC warm-reboots through the authentic
+// 177716 start vector - BK hardware-reset semantics (memory survives). The
+// warm-reset replay oracles in sim/ref037 pin this to be cycle-identical to a
+// cold boot.
+//
 // ROM source: SDRAM (the loaded MONITOR+BASIC set) when the blob validated OK;
 // the on-chip test ROM (Phase-4 picture / RAM test) when the blob failed or
 // DIP 2 is ON (the hardware-regression path - parks 100004/100012 live there).
+// DIP 2 is sampled only while the CPU is in reset (a mid-run flip would switch
+// the ROM source under the running CPU): flip DIP 2, then press reset.
+// Naming: "DIP n" = physical switch n = pDip[n-1]; ON pulls the pin low.
 //
 // screen_mode (mono-512 vs colour-256) is the physical monitor-cable switch of a
 // real BK-0010 -> DIP switch 1 here: OFF = colour-256 (default), ON = mono-512.
@@ -53,6 +66,7 @@ module ocbk_top (
     output logic [7:0]  pLed,      // green LEDs   (1 = on)
     output logic        pLedPwr,   // red power LED (1 = on)
     input  logic [7:0]  pDip,      // DIP switches (ON = low); [0] = screen_mode
+    input  logic        pSltRst_n, // reset button (slot RESET net; low = pressed)
 
     // ---- VGA (6-bit R-2R DAC per channel, negative syncs) ----------------
     output logic        pVideoHS_n,
@@ -175,9 +189,14 @@ module ocbk_top (
     wire screen_mode = smode_sr[1];
 
     // --- DIP 2: force the on-chip test ROM (Phase-4 regression image) --------
+    // Sampled ONLY while the CPU is in reset (initial hold or the reset button):
+    // flipping DIP 2 mid-run would switch the ROM source under the running CPU.
     logic [1:0] dip2_sr;
-    always_ff @(posedge sys_clk) dip2_sr <= {dip2_sr[0], ~pDip[1]};
-    wire dip2_test = dip2_sr[1];
+    logic       dip2_test;
+    always_ff @(posedge cpu_clk) begin
+        dip2_sr <= {dip2_sr[0], ~pDip[1]};
+        if (!dclo_n) dip2_test <= dip2_sr[1];
+    end
 
     // --- EPCS boot loader (flash blob -> SDRAM ROM region, before CPU release)
     logic        boot_active, boot_done, boot_ok;
@@ -229,14 +248,36 @@ module ocbk_top (
         else         {bd_meta, bd_sync} <= {boot_done, bd_meta};
     end
 
-    // --- reset sequencer (on cpu_clk; held until SDRAM init + ROM load done) ---
+    // --- soft reset: the reset button (slot RESET net, external pull-up) -----
+    // Pressed (low) = warm_rst_req held; released = a 2^16-cpu_clk (~21.7 ms)
+    // debounce tail, then the sequencer below re-runs the normal DCLO->ACLO
+    // release. Everything DCLO-keyed re-initialises; SDRAM init, the EPCS load
+    // and memory contents are untouched (BK hardware-reset semantics). Bounce
+    // just reloads the tail - idempotent. The Phase-6 keyboard reset chord ORs
+    // into warm_rst_req when it exists.
+    logic [1:0]  btn_sr;
+    logic [15:0] warm_cnt;
+    always_ff @(posedge cpu_clk or negedge locked) begin
+        if (!locked) begin
+            btn_sr   <= 2'b11;       // released
+            warm_cnt <= '0;
+        end else begin
+            btn_sr <= {btn_sr[0], pSltRst_n};
+            if (!btn_sr[1])         warm_cnt <= 16'hFFFF;
+            else if (warm_cnt != 0) warm_cnt <= warm_cnt - 1'b1;
+        end
+    end
+    wire warm_rst_req = (warm_cnt != 16'd0);
+
+    // --- reset sequencer (on cpu_clk; held until SDRAM init + ROM load done,
+    //     re-entered by the reset button for a warm restart) -------------------
     logic [3:0] rstc;
     always_ff @(posedge cpu_clk or negedge locked) begin
         if (!locked) begin
             rstc   <= 4'd0;
             dclo_n <= 1'b0;
             aclo_n <= 1'b0;
-        end else if (!id_sync || !bd_sync) begin
+        end else if (!id_sync || !bd_sync || warm_rst_req) begin
             rstc   <= 4'd0;          // hold CPU in reset until SDRAM + ROM ready
             dclo_n <= 1'b0;
             aclo_n <= 1'b0;

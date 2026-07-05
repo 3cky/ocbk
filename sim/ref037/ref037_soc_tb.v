@@ -26,6 +26,13 @@
 // model instead and the real epcs_boot loader copies it through the boot-writer
 // mux on port 0 during reset-hold, exactly as ocbk_top boots. The golden must
 // still match: flash -> SDRAM -> fetch, end to end at cycle accuracy.
+// +warmreset (Phase-5.5 soft reset): after the first pass parks in the self-
+// loop, DCLO/ACLO are re-asserted MID-BUS-CYCLE (the reset button), held, then
+// released with the same 8-then-4 pattern - SDRAM state and boot state stay
+// untouched, the program re-executes, and the measurement window re-arms. The
+// run.sh diff compares BOTH passes against the same golden: a warm reset must
+// reproduce cold-boot timing bit-for-bit (the program is re-entrant - its RMW
+// scratch is CLR-initialised before use).
 //
 `timescale 1ns / 1ps
 
@@ -117,15 +124,20 @@ module ref037_soc_tb;
     integer    vf_cnt       = 0;
     always @(posedge sys_clk) begin
         va_hgate_d <= va_hgate;
-        if (va_vfetch) vf_cnt = vf_cnt + 1;
-        if (va_hgate & ~va_hgate_d) begin          // line-end edge
-            if (vf_line_open && vf_cnt != 32)
-                $display("FETCH-VIDTAP-ERROR: %0d fetches in display line", vf_cnt);
-            vf_line_open = 1'b0;
-        end
-        if (~va_hgate & va_hgate_d & ~va_vgate) begin  // line-start edge
-            vf_line_open = 1'b1;
-            vf_cnt       = 0;
+        if (!dclo) begin                           // warm reset: 037 is held in
+            vf_line_open = 1'b0;                   // PIN_R - a truncated line is
+            vf_cnt       = 0;                      // not a fetch-count error
+        end else begin
+            if (va_vfetch) vf_cnt = vf_cnt + 1;
+            if (va_hgate & ~va_hgate_d) begin          // line-end edge
+                if (vf_line_open && vf_cnt != 32)
+                    $display("FETCH-VIDTAP-ERROR: %0d fetches in display line", vf_cnt);
+                vf_line_open = 1'b0;
+            end
+            if (~va_hgate & va_hgate_d & ~va_vgate) begin  // line-start edge
+                vf_line_open = 1'b1;
+                vf_cnt       = 0;
+            end
         end
     end
 
@@ -220,7 +232,9 @@ module ref037_soc_tb;
     reg     p0_pend = 1'b0, romgate_flag = 1'b0;
     always @(posedge sys_clk) begin
         scyc = scyc + 1;
-        if (!p0_pend) begin
+        if (!dclo) begin
+            p0_pend <= 1'b0;        // warm reset aborts any in-flight dp read
+        end else if (!p0_pend) begin
             if (u_ms.dp_req && !u_ms.dp_we) begin p0_pend <= 1'b1; p0_t0 = scyc; end
         end else if (u_ms.dp_rvalid) begin
             p0_pend <= 1'b0;
@@ -243,17 +257,43 @@ module ref037_soc_tb;
 
     integer    prev_nclk;   reg [15:0] prev_addr;   reg have_baseline;
     integer    loop_n = 0;
+    reg        warmreset;            // +warmreset: replay after a mid-run reset
+    integer    pass = 0;             // 0 = cold boot, 1 = after the warm reset
+    reg        meas_en = 1'b1;       // window armed (off during the warm pulse)
+    event      do_warm;
     always @(negedge din) begin
-        if (~sync && sel_win && addr >= win_lo && addr < win_hi) begin
+        if (meas_en && ~sync && sel_win && addr >= win_lo && addr < win_hi) begin
             if (have_baseline)
                 $display("FETCH %06o cycles=%0d", prev_addr, nclk - prev_nclk);
             if (prev_addr == loop_addr) loop_n = loop_n + 1;
             if (loop_n == 6) begin
-                $display("P0LAT max=%0d sys_clk (budget 48)", p0_max);
-                $finish;       // enough self-loop samples captured
+                if (warmreset && pass == 0) begin
+                    pass    = 1;
+                    meas_en = 1'b0;      // re-armed by the warm-reset driver
+                    -> do_warm;
+                end else begin
+                    $display("P0LAT max=%0d sys_clk (budget 48)", p0_max);
+                    $finish;   // enough self-loop samples captured
+                end
             end
             prev_nclk = nclk; prev_addr = addr; have_baseline = 1'b1;
         end
+    end
+
+    // ---- +warmreset driver: the reset button, mid-bus-cycle -------------------
+    // Triggered from a DIN strobe of the park loop, so DCLO lands INSIDE an
+    // active bus cycle (the hardest case: dp read in flight, arbiter granted).
+    // Hold, then release with the exact cold-boot 8-then-4 pattern; SDRAM and
+    // boot state are untouched. Pass 2 must reproduce the same golden window.
+    initial begin
+        @(do_warm);
+        repeat (3) @(posedge sys_clk);
+        dclo = 1'b0; aclo = 1'b0;            // reset button pressed
+        repeat (7) @(negedge clk);           // held
+        repeat (8) @(negedge clk); dclo = 1'b1;
+        repeat (4) @(negedge clk); aclo = 1'b1;
+        loop_n = 0; have_baseline = 1'b0; prev_addr = 16'hFFFF;
+        meas_en = 1'b1;
     end
 
     // ---- program preload -------------------------------------------------------
@@ -337,8 +377,9 @@ module ref037_soc_tb;
     // ---- reset (wait SDRAM init) + sim limit ---------------------------------
     initial begin
         nclk=0; prev_nclk=0; have_baseline=1'b0;
-        romprog  = $test$plusargs("romprog");
-        bootload = $test$plusargs("bootload");
+        romprog   = $test$plusargs("romprog");
+        bootload  = $test$plusargs("bootload");
+        warmreset = $test$plusargs("warmreset");
         pa=2'b11; sp=1'b1; dmgi=1'b1; irq=3'b111; virq=1'b1;
         dclo=1'b0; aclo=1'b0;
 
@@ -351,7 +392,7 @@ module ref037_soc_tb;
         repeat (8) @(negedge clk); dclo = 1'b1;
         repeat (4) @(negedge clk); aclo = 1'b1;
 
-        #2_500_000;
+        #(warmreset ? 5_000_000 : 2_500_000);   // watchdog (normal exit = loop_n)
         $finish;
     end
 

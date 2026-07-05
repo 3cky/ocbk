@@ -248,6 +248,25 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   panel; DIP2 regression path (Phase-4 test picture) intact. The MONITOR prompt
   via СТОП comes with the Phase-6 keyboard.
 
+### Phase 5.5 — Soft reset (warm restart) ✅ DONE
+- The board's **reset button** (`pSltRst_n`, the slot RESET net at PIN_153,
+  external pull-up — esemsx3 uses it the same way) re-enters the reset
+  sequencer: pressed = DCLO/ACLO held, release + ~22 ms debounce tail = the
+  authentic DCLO→ACLO release. SDRAM init, the EPCS ROM load and memory
+  contents are untouched (BK hardware-reset semantics — memory survives), so
+  MONITOR/BASIC warm-reboots through the 177716 start vector in <1 s.
+- **DIP 2 is now latched at reset** (sampled only while DCLO is low): flipping
+  it mid-run no longer switches the ROM source under the running CPU — "flip
+  DIP 2, press reset" is a clean ROM swap.
+- Oracle-gated: three warm-reset replay diffs in `sim/ref037/run.sh` (12 total)
+  re-pulse DCLO/ACLO mid-run — mid-display-line in the video tb, all four
+  arbiter ports live — and both passes must match the **same unchanged golden**:
+  a warm reset is cycle-identical to a cold boot (guaranteed by construction:
+  `cpu_clk = divc[4]`, so the 037-enable phase is invariant). The MONITOR smoke
+  cosim gained `+warmreset` (second 177716 read + second screen clear, no X).
+- **Milestone: press reset → banner reboots; the Phase-6 keyboard reset chord
+  can OR into the same warm_rst_req line.**
+
 ### Phase 6 — Peripherals
 - PS/2 keyboard → BK keyboard matrix at `177660–177663` (037 decodes `nBS`).
 - Tape/audio: 1-bit speaker + covox via the board audio PWM/DAC; tape in/out.
@@ -303,7 +322,9 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
 firmware to the BASIC Vilnius banner** (confirmed on hardware 2026-07-03): the
 EPCS loader copies MONITOR+BASIC into SDRAM at power-up, ROM executes behind the
 done-gated fixed-N_ROM path, oracle-gated for cycle accuracy under full 4-port
-contention (`golden_037.txt` + `golden_037_rom.txt`, nine ref037 diffs). Fits
+contention (`golden_037.txt` + `golden_037_rom.txt`, twelve ref037 diffs incl.
+the Phase-5.5 warm-reset replays; the reset button warm-restarts without
+re-running SDRAM init or the EPCS load). Fits
 30% / 1 M4K / 1 ASMI / 1 PLL / timing closes. Next: Phase 6 peripherals — PS/2
 keyboard (1801ВП1-014 at 177660–177663, netlist available in ~/projects/other/
 fpga/k1801/014) first, so СТОП gives the MONITOR prompt and BASIC becomes

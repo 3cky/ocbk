@@ -35,18 +35,24 @@ stages directly when iterating, e.g. `quartus_map ocbk.qpf`, `quartus_sta ocbk.q
 Cycle accuracy is the whole point. All `make sim` oracles must stay green:
 - `sim/bk10/run.sh` — the upstream timing testbench vs `sim/bk10/golden.txt`
   (the CPU core's per-instruction cycle counts). Independent of the SDRAM work.
-- `sim/ref037/run.sh` — **nine diffs**, vs `golden_037.txt` (with-display timing,
+- `sim/ref037/run.sh` — **twelve diffs**, vs `golden_037.txt` (with-display timing,
   program in RAM) and `golden_037_rom.txt` (Phase-5: same program words executed
   *from the ROM region* — ROM is never 037-cycle-stolen, so its self-loop is
   **flat at 13 cycles**; the RAM loop beats 17,15,16,16): the reference netlist,
   the retimed `va_037_sync`, the SoC integration (now instantiating the *real*
   `qbus_mem_sdram`) with a synthetic port-2 saturator, the `+bootload` run (the
   EPCS loader populates SDRAM through the boot-writer mux, then golden must
-  still match), and **`ref037_soc_video_tb`** — real video pipeline on all 4
+  still match), **`ref037_soc_video_tb`** — real video pipeline on all 4
   arbiter ports, golden window exact, then 64 display lines with the loop
   invariant intact (RAM beat pattern / ROM flat-13), plus `FETCH-ROMGATE` /
-  `FETCH-P0LAT` watchdogs. Error prints carry a `FETCH-` prefix so run.sh's
-  `/^FETCH/`-only reduce filter lets them break the diff — keep that convention.
+  `FETCH-P0LAT` watchdogs — and three **`+warmreset` replays** (Phase-5.5 soft
+  reset: DCLO/ACLO re-pulsed mid-run, mid-display-line in the video tb) where
+  BOTH passes are diffed against the *same unchanged golden*: a warm reset must
+  be cycle-identical to a cold boot — **never regenerate a golden for a
+  warm-reset change**. Error prints carry a `FETCH-` prefix so run.sh's
+  `/^FETCH/`-only reduce filter lets them break the diff — keep that convention
+  (the reduce's loop-sample counter re-arms on any non-loop line; that is what
+  gives each warm-reset pass its own 4 self-loop samples).
 - `sim/run_epcs_boot.sh` — the Phase-5 EPCS loader unit cosim (flash model →
   `epcs_boot` → arbiter port 0 → SDRAM): word-exact load + a corrupted-blob run
   that must end `boot_ok=0`.
@@ -62,7 +68,10 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
 - `sim/run_boot_check.sh` — **slow (~7 min), not in `make sim`**: cold-boots the
   real MONITOR ROM on the full SoC; checks no bus-contention X and that the
   screen clear starts; dumps `sim/boot_trace.txt` (bus R/W trace) for manual
-  diffing against a BkEmu-side trace when debugging boot problems.
+  diffing against a BkEmu-side trace when debugging boot problems. With
+  `+warmreset` (~14 min) it also re-pulses DCLO/ACLO mid-screen-clear and
+  requires a second 177716 start-vector read + a second screen-clear burst —
+  run it when touching reset/DCLO plumbing.
 
 Any change touching the core, the Q-bus, memory, video, or clocking must keep all
 of it passing. When tuning bus/RPLY timing, trace the **reference** waveform first
@@ -84,6 +93,15 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   chip clock (`pMemClk`) is the PLL's `extclk0` at the same 96.65 MHz as the
   internal `clk0`/`sys_clk` (phase-matched, like esemsx3's c1/e0). The clock tree
   lives in `src/ocbk_top.sv` (no separate `cpu_clk.sv`).
+- **Soft reset (Phase 5.5):** the board's reset button (`pSltRst_n`, PIN_153 =
+  the slot RESET net, external pull-up) re-enters the `ocbk_top` reset
+  sequencer via `warm_rst_req` (pressed = hold, release + ~22 ms tail = the
+  8/12 DCLO→ACLO release). Everything DCLO-keyed re-inits; `srst_n`, SDRAM
+  init, `epcs_boot` and memory contents are untouched — BK hardware-reset
+  semantics (memory survives). The Phase-6 keyboard reset chord ORs into
+  `warm_rst_req`. "DIP n" = physical switch n = `pDip[n-1]`; DIP 1
+  (screen_mode) is live like the real monitor-cable switch, **DIP 2 is latched
+  while DCLO is low** — a mid-run flip must never switch the ROM source.
 - Cartridge-slot Q-bus is a **forward seam**: `src/qbus_slot.sv`, default
   `SLOT_ENABLE=0` (drives nothing, slot pins stay reserved-tristated). The full
   slot pin map lives commented in `ocbk_common.qsf`. Real BK hardware needs an
