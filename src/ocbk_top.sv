@@ -49,6 +49,11 @@
 // there; on hardware the release lands at an arbitrary raster phase, exactly
 // like a real machine).
 //
+// Real-BK reset wiring: DCLO/ACLO go to the CPU ONLY. All BK peripherals are
+// reset by the CPU's nINIT Q-bus line (driven open-collector by the vm1:
+// asserted during its own reset AND pulsed by the RESET instruction) - every
+// Phase-6+ peripheral keys its reset to init_n, never to dclo_n.
+//
 // ROM source: SDRAM (the loaded MONITOR+BASIC set) when the blob validated OK;
 // the on-chip test ROM (Phase-4 picture / RAM test) when the blob failed or
 // DIP 2 is ON (the hardware-regression path - parks 100004/100012 live there).

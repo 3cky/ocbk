@@ -101,7 +101,13 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   semantics (memory survives). **The video side (037 `PIN_R` + `fb_video`) is
   power-on-reset ONLY (`vid_rst_n`)** — a real BK's display ignores CPU
   DCLO/ACLO, so the picture stays up across a warm reset; never re-key those
-  resets to `dclo_n`. In the warm-reset oracle tbs the release is aligned to
+  resets to `dclo_n`. **Reset wiring rule (real BK): DCLO/ACLO go to the CPU
+  ONLY; all BK peripherals are reset by the CPU's nINIT Q-bus line** (`vm1`
+  drives `pin_init_n` open-collector: asserted during its own reset AND pulsed
+  by the RESET instruction). Every Phase-6+ peripheral must key its reset to
+  `init_n`, not `dclo_n` — the RESET instruction must reset it too. (The
+  current 177716 write-flag / 177660 stubs in `qbus_mem_sdram` reset on
+  `~dclo_n`; move them to INIT semantics when the real keyboard lands.) In the warm-reset oracle tbs the release is aligned to
   the next vblank start (the free-running 037 makes post-reset timing raster-
   phase-dependent — authentic; the vblank alignment is what keeps the replayed
   golden window steal-free and diffable). The Phase-6 keyboard reset chord ORs

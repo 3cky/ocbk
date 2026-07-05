@@ -272,6 +272,10 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   can OR into the same warm_rst_req line.**
 
 ### Phase 6 — Peripherals
+- **Reset wiring (real BK): DCLO/ACLO reset the CPU only — all peripherals
+  reset via the CPU's nINIT Q-bus line** (asserted during CPU reset and pulsed
+  by the RESET instruction). Key every peripheral's reset to `init_n`, never
+  to `dclo_n`; migrate the 177716/177660 stub state to INIT at the same time.
 - PS/2 keyboard → BK keyboard matrix at `177660–177663` (037 decodes `nBS`).
 - Tape/audio: 1-bit speaker + covox via the board audio PWM/DAC; tape in/out.
 - System timer + interrupt wiring (vector/IRQ on the Q-bus).
