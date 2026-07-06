@@ -13,9 +13,10 @@ behaviour.
 plan: the source building blocks, the validated platform constraints, the settled
 clock tree, and the phase-by-phase milestones. Every change should map to a phase
 there; update ROADMAP.md when scope or status changes. **Phases 1 (CPU bring-up),
-2 (BK RAM in SDRAM), 3 (037 arbiter), 4 (video pipeline) and 5 (SoC boot: full
-BK-0010.01 ROM in SDRAM + EPCS loader) are done**; see README.md for the current
-result.
+2 (BK RAM in SDRAM), 3 (037 arbiter), 4 (video pipeline), 5 (SoC boot: full
+BK-0010.01 ROM in SDRAM + EPCS loader) and the Phase-6 keyboard (PS/2 →
+1801ВП1-014 equivalent, VIRQ/IAK + СТОП) are done**; see README.md for the
+current result.
 
 ## Build & test
 
@@ -53,6 +54,25 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   `/^FETCH/`-only reduce filter lets them break the diff — keep that convention
   (the reduce's loop-sample counter re-arms on any non-loop line; that is what
   gives each warm-reset pass its own 4 self-loop samples).
+- `sim/ref014/run.sh` — the Phase-6 keyboard oracles, **four legs**. Contract:
+  the vendored `vp_014.v` **gate netlist** (+ `lib_1801.v`) runs the shared
+  transaction-granular scenario (`ref014_scenario.v`) → `golden_014.txt`, and
+  the behavioral `src/bk_kbd014.sv` must reproduce it line-for-line (netlist
+  wins all disputes; the pinned contract — press-while-ready queuing with
+  key-held re-delivery, retro-fire on unmask, no АР2 flag in 662 bit 7, 662
+  writes bus-timeout, INIT keeps the code register — is in
+  `sim/ref014/README.md`). Interrupt latency: the `mem/gen_kbd_test.py`
+  program (VIRQ 060/0274 ISRs, masked press, nIRQ1 pulse → **trap 4**, the
+  authentic СТОП path) runs on the netlist reference stack →
+  `golden_kbd.txt`, and the SoC stack (va_037_sync + qbus_mem_sdram + SDRAM
+  model + bk_kbd014) must match the same golden — this diff calibrated
+  `N_KBD`/`N_IAK` (=1) and the write fast path. **Goldens regenerate only
+  from netlist runs.**
+- `sim/run_ps2.sh` — the PS/2 front end (`ps2_rx` + `kbd_ps2bk`) against a
+  hand-written expected event list: BkEmu case algebra over ЛАТ/РУС ×
+  ЗАГЛ/СТР × НР, СУ masking, АР2 + the silicon auto-274 code group,
+  typematic suppression, multi-key `key_down`, СТОП strobes, parity-error
+  and stale-prefix recovery.
 - `sim/run_epcs_boot.sh` — the Phase-5 EPCS loader unit cosim (flash model →
   `epcs_boot` → arbiter port 0 → SDRAM): word-exact load + a corrupted-blob run
   that must end `boot_ok=0`.
@@ -105,15 +125,39 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   ONLY; all BK peripherals are reset by the CPU's nINIT Q-bus line** (`vm1`
   drives `pin_init_n` open-collector: asserted during its own reset AND pulsed
   by the RESET instruction). Every Phase-6+ peripheral must key its reset to
-  `init_n`, not `dclo_n` — the RESET instruction must reset it too. (The
-  current 177716 write-flag / 177660 stubs in `qbus_mem_sdram` reset on
-  `~dclo_n`; move them to INIT semantics when the real keyboard lands.) In the warm-reset oracle tbs the release is aligned to
+  `init_n`, not `dclo_n` — the RESET instruction must reset it too (done for
+  the 177716 write-flag and the `bk_kbd014` registers; the translator-side
+  caps trigger and РУС/ЛАТ shadow are power-on ONLY, like the real external
+  trigger). In the warm-reset oracle tbs the release is aligned to
   the next vblank start (the free-running 037 makes post-reset timing raster-
   phase-dependent — authentic; the vblank alignment is what keeps the replayed
   golden window steal-free and diffable). The Phase-6 keyboard reset chord ORs
   into `warm_rst_req`. "DIP n" = physical switch n = `pDip[n-1]`; DIP 1
   (screen_mode) is live like the real monitor-cable switch, **DIP 2 is latched
   while DCLO is low** — a mid-run flip must never switch the ROM source.
+- **Keyboard (Phase 6):** `ps2_rx` → `kbd_ps2bk` (translator, all on
+  `cpu_clk`) → `bk_kbd014` (the 1801ВП1-014 bus equivalent at 177660–177663,
+  decode = the 037's `PIN_nBS`, netlist-contract-validated — see
+  `sim/ref014/README.md` for the full pinned contract). Key facts:
+  - **the 014 readme's "nEC1 = РУС/ЛАТ" label is imprecise for the BK**: the
+    schematic wires nEC1 to the trigger flipped by the ЗАГЛ/СТР keys (caps),
+    while РУС/ЛАТ are ordinary matrix keys emitting 016/017 — mapped here as
+    CapsLock = the ЗАГЛ/СТР trigger, LCtrl = РУС, Home = ЛАТ, Insert = СУ
+    (held), either Shift = НР, either Alt = АР2, **Delete = СТОП**;
+  - case algebra per BkEmu (`latin ^ (caps | shift)` on letters, СУ = `&037`
+    on 01xx codes); the **silicon auto-274 code group**
+    {0,1,2,4,5,6,7,011,013,021} vectors to 0274 without АР2 (measured over
+    the netlist matrix scan — MiSTer's arrow flags were wrong);
+  - **СТОП is trap-to-4 on a BK-0010 with BASIC** (per the schematic/user):
+    nothing decodes 177674/177676, the HALT entry's PC/PSW stores bus-timeout
+    (`qbto`, 56..63 clocks) and the CPU traps through RAM vector 4 — the
+    160002 word is never used as a vector. `qbus_mem_sdram` excludes
+    177674–177677 from `sel_io` to reproduce this; never "helpfully" reply
+    there. СТОП itself is a fixed 64-cpu_clk one-shot on nIRQ1;
+  - `N_KBD`/`N_IAK` = 1 (the async chip replies within the strobe cycle) and
+    the 177660 **write** reply is combinational (`wr_fast`) — both pinned by
+    `golden_kbd.txt`; vm1 slaves must hold read data past DIN release (the
+    IAK vector capture relies on it — bus-charge physics on the real board).
 - Cartridge-slot Q-bus is a **forward seam**: `src/qbus_slot.sv`, default
   `SLOT_ENABLE=0` (drives nothing, slot pins stay reserved-tristated). The full
   slot pin map lives commented in `ocbk_common.qsf`. Real BK hardware needs an
@@ -167,6 +211,28 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   loop where the CPU's internal-register reply and the slave wire-AND onto RPLY.
   Cosim-validated; clean fix (explicit wired-AND via `vm1_qbus`'s split
   `rply_in`/`rply_out`) deferred to peripheral work (Phase 6).
+- **Pin-sync edges (1801ВМ1 doc): nIRQ1–3/nVIRQ must be asserted synchronous
+  to the CPU clock rising edge, nRPLY to the falling edge.** The core samples
+  all of them at `posedge pin_clk_p` with **no synchronizer flops**
+  (`vm1_qbus.v` `rply_ack[1]`, `rq[]`, `irq2`/`irq3` edge detectors). RPLY
+  already complies: `qbus_mem_sdram`'s wait FSM runs on `cpu_clk_n`
+  (falling-edge launch); `va_037_sync` transitions land 1–2 sys_clk after a
+  CPU edge (~300 ns setup, deterministic — same divider chain). Any Phase-6+
+  interrupt source must put its final flop on `posedge cpu_clk` (2-FF resync
+  first if it originates in `sys_clk`/`pix_clk`, e.g. EVNT from vsync) — an
+  async assertion is a metastability *and* cycle-determinism hazard. Note the
+  SDC false-paths all `sys_clk`↔`cpu_clk` paths, so these margins are safe by
+  construction, not STA-checked — re-check at Phase-7 turbo rates.
+  **Hardware confirmation** (`doc/bk0011m-sch.pdf`, sheet 1): the real board
+  implements both rules as external chips on the CLC (CPU clock) net — D8:B
+  (К531ТВ9 negedge JK, J=K̄ via D33:E = a pure D-FF) reclocks the wired-OR bus
+  nRPLY onto the CPU's RPLY pin (Q̄→R28→pin 39; the CPU never sees raw bus
+  RPLY, only its own internal self-reply bypasses it), and D11 (К555ТМ9 hex
+  posedge D) re-times IRQ1–3/VIRQ *plus ACLO and DMR*. Modelling D8:B in our
+  RPLY path is a deferred fidelity item: it quantizes assert AND release to
+  falling edges, shifting cycle counts (ROM/IO by a full cycle — N_ROM would
+  need recalibration), so it must go reference-tb-first with golden
+  regeneration from the reference run, per the verification discipline.
 - **177700–177713 is CPU-internal** (with `pin_pa=00`): `vm1_qbus` decodes the
   block itself (`sel177x`), self-replies for all of 177700–177717 AND drives read
   data for 177700–177712 (CSR/error/`vm1_tve` timer). Nothing external may reply

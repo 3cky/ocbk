@@ -275,11 +275,41 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
 - **Reset wiring (real BK): DCLO/ACLO reset the CPU only — all peripherals
   reset via the CPU's nINIT Q-bus line** (asserted during CPU reset and pulsed
   by the RESET instruction). Key every peripheral's reset to `init_n`, never
-  to `dclo_n`; migrate the 177716/177660 stub state to INIT at the same time.
-- PS/2 keyboard → BK keyboard matrix at `177660–177663` (037 decodes `nBS`).
+  to `dclo_n`. **DONE for the keyboard step:** the 177716 write-flag and the
+  `bk_kbd014` registers reset on INIT; the translator-side ЗАГЛ/СТР trigger
+  and РУС/ЛАТ shadow are power-on only (external-trigger fidelity).
+- **Interrupt-pin sync rule (1801ВМ1 doc, confirmed by the real board —
+  `doc/bk0011m-sch.pdf` D11, a К555ТМ9 hex D register on the CPU clock):
+  nIRQ1–3/nVIRQ assertions must be synchronized to the CPU clock rising edge**
+  (nRPLY to the falling edge — the real board's D8:B К531ТВ9 does that; the
+  existing RPLY paths already comply edge-wise, full ТВ9 modelling is a
+  deferred fidelity item, see CLAUDE.md gotchas). The core samples these pins
+  at `posedge pin_clk_p` with **no synchronizer stages**, so every interrupt
+  source (vp_014 VIRQ, 50 Hz EVNT/IRQ2) must put its final output flop on
+  `posedge cpu_clk`; sources born in `sys_clk`/`pix_clk` (EVNT = vsync) need a
+  2-FF resync into `cpu_clk` first. An async assertion is a metastability AND
+  a cycle-determinism hazard (interrupt latency would vary run-to-run,
+  breaking any interrupt-covering golden oracle).
+- **PS/2 keyboard — DONE in sim + built (2026-07-06, hardware smoke pending):**
+  `ps2_rx` → `kbd_ps2bk` → `bk_kbd014` (behavioral 1801ВП1-014 at
+  `177660–177663` behind the 037's `nBS`, VIRQ 060/0274 + IAK vector
+  responder; СТОП = Delete → a fixed 64-clock nIRQ1 one-shot). Netlist-
+  contract-validated: `sim/ref014` holds the vendored `vp_014.v` gate netlist,
+  a transaction-granular contract golden AND an interrupt-latency golden
+  (netlist reference run vs the full SoC stack, line-exact — it calibrated
+  `N_KBD`/`N_IAK`=1 and the combinational write reply). Key findings baked
+  into the goldens: the press-while-ready delivery queue (re-delivers on the
+  662 read while the key is held), retro-fire on unmask, no АР2 flag in 662
+  bit 7, 662 writes bus-timeout, the silicon auto-274 code group, and
+  **СТОП = trap-to-4** (nothing decodes 177674/177676, the HALT entry's
+  stores time out — authentic BK-0010+BASIC behaviour). PS/2 mapping:
+  CapsLock = ЗАГЛ/СТР trigger, LCtrl = РУС, Home = ЛАТ, Insert = СУ,
+  Alt = АР2, Delete = СТОП. Keyboard reset chord: still open (deferred).
 - Tape/audio: 1-bit speaker + covox via the board audio PWM/DAC; tape in/out.
-- System timer + interrupt wiring (vector/IRQ on the Q-bus).
-- **Milestone:** interactive — type, run BASIC, hear sound.
+- System timer + interrupt wiring (50 Hz EVNT/IRQ2 from vsync).
+- **Milestone:** interactive — type, run BASIC, hear sound. *(Keyboard part
+  of the milestone: pending the hardware smoke — type in MONITOR/BASIC, СТОП
+  drops BASIC to the monitor, warm reset keeps РУС/ЛАТ, DIP2 fallback.)*
 
 ### Phase 7 — BK-0011M mode
 - 128 KB banked RAM, two video pages, 4 MHz CPU, page/control registers, MMU windows.
@@ -333,10 +363,11 @@ done-gated fixed-N_ROM path, oracle-gated for cycle accuracy under full 4-port
 contention (`golden_037.txt` + `golden_037_rom.txt`, twelve ref037 diffs incl.
 the Phase-5.5 warm-reset replays; the reset button warm-restarts without
 re-running SDRAM init or the EPCS load). Fits
-30% / 1 M4K / 1 ASMI / 1 PLL / timing closes. Next: Phase 6 peripherals — PS/2
-keyboard (1801ВП1-014 at 177660–177663, netlist available in ~/projects/other/
-fpga/k1801/014) first, so СТОП gives the MONITOR prompt and BASIC becomes
-interactive; then tape/audio and the interrupt wiring.*
+30% / 1 M4K / 1 ASMI / 1 PLL / timing closes. The Phase-6 keyboard is in
+(PS/2 → 1801ВП1-014 equivalent, netlist-golden-validated incl. interrupt
+latency and the СТОП trap-4 path; fits 34%, timing closes) — awaiting the
+hardware smoke. Next: hardware smoke, then tape/audio and the 50 Hz
+EVNT/IRQ2 wiring.*
 *See also the project memory notes `bk-on-1chipmsx-feasibility` (bring-up history),
 `bk-video-pipeline-decision` (Phase 3/4 design) and `bkemu-reference-and-roms`
 (BkEmu is the canonical BK reference; ROMs committed in-tree).*
