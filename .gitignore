@@ -42,3 +42,5 @@ sim/video/video_ram.hex
 sim/video/fb_exp.hex
 sim/video/img_exp.hex
 sim/boot_trace.txt
+sim/ref014/kbd_ram.hex
+sim/ref014/kbd_rom.hex

@@ -43,3 +43,51 @@ else
    echo "ref014 (behavioral bk_kbd014) equivalence: FAIL (see diff above)" >&2
    exit 1
 fi
+
+# --- Phase-6 interrupt-latency oracle (reference-first, per the repo
+#     discipline): the gen_kbd_test.py program (VIRQ 060/0274 ISRs, masked
+#     press, nIRQ1 fixed pulse -> HALT entry via the 160002 vector) runs on
+#     (a) the REFERENCE stack - vm1 + real va_037 + behavioural memory + the
+#     vp_014 GATE NETLIST with its matrix/RC debounce (this run is what
+#     generated golden_kbd.txt - never regenerate it from the SoC run), and
+#     (b) the SoC stack - vm1 + va_037_sync + qbus_mem_sdram + SDRAM model +
+#     behavioral bk_kbd014. Both reduced FETCH traces must match the same
+#     golden; this diff is what calibrated N_KBD/N_IAK (=1: the async chip
+#     replies inside the same CPU cycle) and bk_kbd014's write fast path. ---
+( cd ../../mem && python3 gen_kbd_test.py ../sim/ref014 ) > /dev/null
+
+CPU=../../src/cpu
+iverilog -g2012 -o "$SP/irqref.vvp" -s ref014_irq_ref_tb \
+   "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
+   "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" \
+   ../ref037/va_037.v lib_1801.v vp_014.v \
+   ref014_irq_ref_tb.v 2>&1 | grep -v 'sorry:' || true
+
+# reduce: keep everything, collapse the trailing 001004 park loop to 4 samples
+reduce() { awk '/^FETCH/ { if ($2=="001004") { c++; if (c<=4) print } else { c=0; print } }'; }
+
+vvp -n "$SP/irqref.vvp" 2>/dev/null | reduce > "$SP/out_irqref.txt"
+
+if diff -u golden_kbd.txt "$SP/out_irqref.txt"; then
+   echo "ref014 (interrupt latency, vp_014 netlist reference): PASS"
+else
+   echo "ref014 (interrupt latency, netlist reference): FAIL (see diff above)" >&2
+   exit 1
+fi
+
+iverilog -g2012 -o "$SP/irqsoc.vvp" -s ref014_irq_soc_tb \
+   "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
+   "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" \
+   ../../src/qbus_pkg.sv ../../src/va_037_sync.sv ../../src/cpu_sdram_dp.sv \
+   ../../src/sdram_arbiter.sv ../../src/sdram_ctrl.sv ../../src/qbus_mem_sdram.sv \
+   ../../src/bk_kbd014.sv ../sdram_model.sv \
+   ref014_irq_soc_tb.v 2>&1 | grep -v 'sorry:' || true
+
+vvp -n "$SP/irqsoc.vvp" 2>/dev/null | reduce > "$SP/out_irqsoc.txt"
+
+if diff -u golden_kbd.txt "$SP/out_irqsoc.txt"; then
+   echo "ref014 (interrupt latency, SoC integration) equivalence: PASS"
+else
+   echo "ref014 (interrupt latency, SoC integration) equivalence: FAIL (see diff above)" >&2
+   exit 1
+fi

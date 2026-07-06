@@ -123,12 +123,20 @@ module qbus_mem_sdram #(
     wire sel_rom = !sync_n && (addr >= RAM_TOP) && (addr < IO_BASE);
     // I/O here excludes the 037's own scroll register (177664, owned by
     // va_037_sync), the keyboard block 177660-177663 (owned by bk_kbd014
-    // behind the 037's nBS window - same [15:2] compare) and the CPU-internal
+    // behind the 037's nBS window - same [15:2] compare), the CPU-internal
     // block 177700-177713 (the 1801ВМ1 replies and drives data for those
     // itself - an external reply/drive there is a bus fight; MONITOR touches
-    // the internal timer constantly).
+    // the internal timer constantly) AND 177674-177677: no BK device lives
+    // there, and the vm1's IRQ1/HALT entry writes its PC/PSW to 177674/676 -
+    // on a real BK nothing replies, the write times out (qbto, 56..63 CPU
+    // clocks) and the CPU takes trap 4 instead of completing the HALT entry.
+    // That trap-4 path IS the authentic СТОП behaviour with the BASIC ROM
+    // (BkEmu decodes nothing there either); replying would send the CPU
+    // through the never-used 160002 "vector" into garbage. Pinned by the
+    // Phase-6 interrupt-latency golden.
     wire sel_io  = !sync_n && (addr >= IO_BASE) && (addr != 16'o177664)
                            && (addr[15:2] != (16'o177660 >> 2))
+                           && (addr[15:2] != (16'o177674 >> 2))
                            && !((addr >= CPUREG_LO) && (addr <= CPUREG_HI));
 
     // ROM source select: external (SDRAM via cpu_sdram_dp) vs on-chip image.
@@ -258,7 +266,17 @@ module qbus_mem_sdram #(
                     end
                 end
                 S_WAIT: begin
-                    if (wcnt == 0) begin
+                    if (!is_read && !is_write) begin
+                        // The strobes released before our reply point: the
+                        // CPU's internal self-reply completed the cycle (a
+                        // write into the 177700-177717 block, e.g. the HALT
+                        // entry's 177716 update - the vm1 self-replies there
+                        // faster than N_ROM). Stand down instead of firing
+                        // RPLY into the idle bus, which would perturb the
+                        // next cycle (caught by the Phase-6 interrupt-latency
+                        // golden; no oracle wrote 177716 before it).
+                        state <= S_IDLE;
+                    end else if (wcnt == 0) begin
                         if (sel_romx && is_read && !mem_ready) begin
                             // done-gate: the SDRAM ROM word is late - hold RPLY
                             // (extends the cycle) instead of replying over stale

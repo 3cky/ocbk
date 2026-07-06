@@ -60,10 +60,15 @@ def render_image():
 
 
 class Asm:
-    """Tiny PDP-11 word assembler: labels + BR/Bcc/SOB/address fixups."""
+    """Tiny PDP-11 word assembler: labels + BR/Bcc/SOB/address fixups.
 
-    def __init__(self):
+    base = the byte address of word 0 (label fixups resolve against it);
+    defaults to the ROM base, gen_kbd_test.py assembles RAM-resident code.
+    """
+
+    def __init__(self, base=ROM_BASE):
         self.words, self.labels, self.fix = [], {}, []
+        self.base = base
 
     def label(self, name):
         self.labels[name] = len(self.words)
@@ -95,7 +100,7 @@ class Asm:
                 assert 0 <= off <= 63, f"SOB to {t} out of range"
                 self.words[idx] = 0o077000 | (a << 6) | off
             else:
-                self.words[idx] = ROM_BASE + 2 * tgt
+                self.words[idx] = self.base + 2 * tgt
         return self.words
 
 

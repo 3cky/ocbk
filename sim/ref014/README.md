@@ -20,7 +20,45 @@ Ground-truth bus contract for the BK keyboard controller (1801ВП1-014 at
   same scenario over the 16-bit shared Q-bus; must diff-match the same golden.
 - `golden_014.txt` — committed netlist output. **Regenerate only from the
   netlist run**, never from the behavioral module. Netlist wins all disputes.
+- `ref014_irq_ref_tb.v` / `ref014_irq_soc_tb.v` — the **interrupt-latency
+  oracle** (reference-first): the `mem/gen_kbd_test.py` program (VIRQ 060 /
+  0274 ISRs with code self-checks, a masked press with a fixed-count delay
+  loop, a tb-driven nIRQ1 fixed pulse → HALT entry through the 160002
+  vector; parks 001004 = success/stop, 001012 = fail) runs on the reference
+  stack (vm1 + real va_037 + behavioural memory + the **netlist** with its
+  matrix/RC debounce) and on the SoC stack (va_037_sync + qbus_mem_sdram +
+  SDRAM model + behavioral bk_kbd014). Both reduced FETCH traces must match
+  `golden_kbd.txt` (generated ONLY by the reference run). Key injections are
+  anchored to the ARM-mailbox (000776) SYNC fall — a vm1-launched edge that
+  lands on the identical CPU cycle in both runs; the SoC `P_DLY` recreates
+  the reference press→VIRQ latency in whole clocks.
+- `golden_kbd.txt` — committed reduced reference trace (park loop collapsed
+  to 4 samples).
 - `run.sh` — the regression (part of `make sim`).
+
+## What the interrupt oracle pinned (2026-07-06)
+
+- **N_KBD = N_IAK = 1** (qbus_pkg): the async 014 replies within the same
+  CPU cycle as the strobe; bk_kbd014 fires at the detection FSM edge, and
+  the 177660 **write** reply must be combinational (`wr_fast`) — the vm1
+  launches DOUT from its falling-edge stage, half a cycle past anything the
+  negedge FSM can register.
+- The vm1's IAK data capture relies on read data **held past DIN release**
+  (the upstream de0_tb1.v slave convention; bk_kbd014's S_REPLY does it).
+  The netlist releases AD combinationally, so `ref014_irq_ref_tb.v` models
+  the board reality with a bus-charge keeper on AD[7:0] (open-collector
+  lines decay through pull-ups far slower than a CPU cycle).
+- The netlist's async nIRQ is retimed onto the CPU rising edge by an
+  external flop, as on the real board (bk0011m-sch: D11, К555ТМ9) — the
+  same grid as bk_kbd014's posedge virq flop.
+- The 1801ВМ1 IRQ1/HALT vector is **160002** (BkEmu TRAP_VECTOR_HALT; vm1
+  vmux) and the vector PSW must carry **bit 8** (HALT mode) to mask a still-
+  asserted nIRQ1 — the real BASIC ROM loads 0o100412 there; without it a
+  held СТОП re-enters the handler forever.
+- `qbus_mem_sdram`'s ROM/IO FSM must **stand down when the strobes release
+  before its reply point**: the vm1 self-replies to 177700-177717 writes
+  (the HALT entry's 177716 update) faster than N_ROM, and an unguarded late
+  RPLY into the idle bus shifts the next cycle.
 
 ## The netlist-pinned contract (probe evidence, 2026-07-06)
 

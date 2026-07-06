@@ -29,12 +29,13 @@ package qbus_pkg;
 
    // Keyboard controller (bk_kbd014, Phase 6): fixed RPLY latency for the
    // 177660/177662 register accesses and for the IAK vector cycle, in
-   // cpu_clk FSM edges (same convention as N_ROM). Start at 2 - the 014 is
-   // an asynchronous chip, faster than mask ROM; the values get calibrated
-   // against the vp_014 netlist reference run by the Phase-6
-   // interrupt-latency golden (sim/ref014).
-   localparam int unsigned N_KBD = 2;
-   localparam int unsigned N_IAK = 2;
+   // cpu_clk FSM edges (N_ROM convention; N==1 = reply at the detection
+   // edge itself). Calibrated against the vp_014 netlist reference run by
+   // the interrupt-latency golden (sim/ref014/golden_kbd.txt): the real 014
+   // is an asynchronous chip - its RPLY follows the strobe within ~150 ns,
+   // which only the single-edge reply reproduces.
+   localparam int unsigned N_KBD = 1;
+   localparam int unsigned N_IAK = 1;
 
    // System start-up register: reading 177716 returns 100000 (boot from ROM),
    // which steers the 1801ВМ1 reset micro-sequence to the 100000 ROM vector.

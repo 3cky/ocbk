@@ -162,7 +162,10 @@ begin
    #250 ad_out = {8'h00, data};
    #250 dout_n = 0;
    wait_rply_fall(ok);
-   #125 dout_n = 1;
+   // bk_kbd014's write RPLY is combinational (wr_fast) but the register
+   // load is clocked: hold DOUT across a CPU clock edge, as the vm1 does
+   @(negedge clk);
+   #50 dout_n = 1;
    if (ok)
       wait_rply_rise;
    #125 sync_n = 1;
@@ -259,7 +262,8 @@ begin
    ad_out = {8'h00, wdata};
    #250 dout_n = 0;
    wait_rply_fall(ok2);
-   #125 dout_n = 1;
+   @(negedge clk);          // hold DOUT across a clock edge (see bus_write)
+   #50 dout_n = 1;
    if (ok2)
       wait_rply_rise;
    #125 sync_n = 1;
