@@ -32,6 +32,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE src/sdram_arbiter.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/va_037_sync.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/cpu_sdram_dp.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/qbus_mem_sdram.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/ps2_rx.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/kbd_ps2bk.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/bk_kbd014.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/epcs_boot.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/qbus_slot.sv
@@ -85,6 +87,9 @@ set_location_assignment PIN_60 -to pDip[7]
 # Reset button = the slot RESET net (external pull-up; esemsx3 uses it the same
 # way). Doubles as the slot RESET pin if the cartridge-slot seam is ever enabled.
 set_location_assignment PIN_153 -to pSltRst_n
+# PS/2 keyboard (esemsx3 emsx_top_common.qsf: pPs2Dat=PIN_67, pPs2Clk=PIN_68)
+set_location_assignment PIN_67 -to pPs2Dat
+set_location_assignment PIN_68 -to pPs2Clk
 # VGA sync (copied from ocb-test / esemsx3: pVideoVS_n=PIN_74, pVideoHS_n=PIN_75)
 set_location_assignment PIN_74 -to pVideoVS_n
 set_location_assignment PIN_75 -to pVideoHS_n
@@ -163,6 +168,13 @@ set_instance_assignment -name PCI_IO ON -to pDip[7]
 # Reset button (slot RESET, PIN_153): external pull-up on the board, so PCI_IO
 # only (mirrors esemsx3 emsx_top_common.qsf).
 set_instance_assignment -name PCI_IO ON -to pSltRst_n
+
+# PS/2 keyboard pins: weak pull-ups + 4 mA, as esemsx3 (receive-only, the
+# design drives them Z; the pull-ups keep the idle-high PS/2 levels)
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pPs2Clk
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pPs2Clk
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pPs2Dat
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pPs2Dat
 
 # VGA sync outputs (24 mA, fast slew; mirrors ocb-test / esemsx3)
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pVideoVS_n

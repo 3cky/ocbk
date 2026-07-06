@@ -77,6 +77,10 @@ module ocbk_top (
     input  logic [7:0]  pDip,      // DIP switches (ON = low); [0] = screen_mode
     input  logic        pSltRst_n, // reset button (slot RESET net; low = pressed)
 
+    // ---- PS/2 keyboard (receive-only; pins pulled up, driven Z) ----------
+    inout  wire         pPs2Clk,
+    inout  wire         pPs2Dat,
+
     // ---- VGA (6-bit R-2R DAC per channel, negative syncs) ----------------
     output logic        pVideoHS_n,
     output logic        pVideoVS_n,
@@ -362,6 +366,71 @@ module ocbk_top (
         .vgate     (vgate)
     );
 
+    // ---- keyboard (Phase 6): PS/2 -> translator -> 1801ВП1-014 equivalent
+    // All on cpu_clk: the PS/2 clock is ~100x oversampled through the 2-FF
+    // syncs inside ps2_rx - no new clock domain. The pins stay tri-stated
+    // (receive-only). bk_kbd014 serves 177660/177662 + the VIRQ/IAK vector,
+    // netlist-contract-validated by sim/ref014; its registers reset on the
+    // nINIT line (RESET instruction included), the translator state (caps
+    // trigger, РУС/ЛАТ shadow) is power-on only - as the real BK's external
+    // trigger, it survives INIT and warm reset.
+    assign pPs2Clk = 1'bZ;
+    assign pPs2Dat = 1'bZ;
+
+    logic [7:0] ps2_byte;
+    logic       ps2_stb;
+    logic       key_stb, key_ar2, key_down, key_stop;
+    logic [6:0] key_code;
+
+    ps2_rx u_ps2 (
+        .clk       (cpu_clk),
+        .ps2_clk_i (pPs2Clk),
+        .ps2_dat_i (pPs2Dat),
+        .byte_o    (ps2_byte),
+        .stb_o     (ps2_stb)
+    );
+
+    kbd_ps2bk u_tr (
+        .clk      (cpu_clk),
+        .ps2_byte (ps2_byte),
+        .ps2_stb  (ps2_stb),
+        .key_stb  (key_stb),
+        .key_code (key_code),
+        .key_ar2  (key_ar2),
+        .key_down (key_down),
+        .key_stop (key_stop)
+    );
+
+    bk_kbd014 u_kbd (
+        .clk_fsm  (cpu_clk_n),
+        .clk_p    (cpu_clk),
+        .init_n   (init_n),
+        .ad_n     (ad_n),
+        .sync_n   (sync_n),
+        .din_n    (din_n),
+        .dout_n   (dout_n),
+        .cs_n     (nbs_n),
+        .iako_n   (iako_n),
+        .rply_n   (rply_n),
+        .virq_n   (virq_n),
+        .key_stb  (key_stb),
+        .key_code (key_code),
+        .key_ar2  (key_ar2),
+        .key_down (key_down)
+    );
+
+    // СТОП -> nIRQ1 fixed-length one-shot (STOP_PULSE cpu_clk wide, launched
+    // on the rising edge - the pin-sync rule; the same width and shape the
+    // sim/ref014 interrupt oracle pinned). On a real BK-0010 with BASIC the
+    // net effect is trap 4: the HALT entry's 177674/676 stores time out.
+    localparam int unsigned STOP_PULSE = 64;
+    logic [6:0] stop_cnt = '0;
+    always_ff @(posedge cpu_clk) begin
+        if (key_stop)           stop_cnt <= 7'(STOP_PULSE);
+        else if (stop_cnt != 0) stop_cnt <= stop_cnt - 1'b1;
+    end
+    wire stop_pulse = (stop_cnt != 0);
+
     // ---- vm1 core (1801ВМ1) ---------------------------------------------
     vm1 u_cpu (
         .pin_clk_p (cpu_clk),
@@ -372,7 +441,7 @@ module ocbk_top (
         .pin_init_n(init_n),
         .pin_dclo_n(dclo_n),
         .pin_aclo_n(aclo_n),
-        .pin_irq_n (3'b111),        // radial interrupts (СТОП -> nIRQ1 in Phase-6 step 5)
+        .pin_irq_n ({2'b11, ~stop_pulse}),  // nIRQ1 = СТОП one-shot
         .pin_virq_n(virq_n),        // vectored interrupt: keyboard (bk_kbd014)
         .pin_ad_n  (ad_n),
         .pin_dout_n(dout_n),
@@ -405,7 +474,7 @@ module ocbk_top (
         .cpu_clk  (cpu_clk_n),      // ROM/IO wait FSM advances on the inverted CPU clock
         .reset    (~dclo_n),
         .init_n   (init_n),
-        .kbd_down (1'b0),           // PS/2 translator key_down lands here (step 5)
+        .kbd_down (key_down),       // 177716 bit 6 (active low at the register)
         .rom_ext_en(rom_ext_en),
         .boot_active(boot_active),
         .bw_req   (bw_req),
@@ -446,29 +515,6 @@ module ocbk_top (
         .s_dq     (pMemDat),
         .bus_addr (bus_addr),
         .fetch_stb(fetch_stb)
-    );
-
-    // ---- keyboard controller (Phase 6): 177660/177662 + VIRQ/IAK ---------
-    // Behavioral 1801ВП1-014 equivalent, netlist-contract-validated by
-    // sim/ref014. Decode = the 037's nBS (as on a real BK); registers reset
-    // on the nINIT line (RESET instruction included). The PS/2 translator
-    // key-event inputs are tied idle until step 5 wires ps2_rx + kbd_ps2bk.
-    bk_kbd014 u_kbd (
-        .clk_fsm  (cpu_clk_n),
-        .clk_p    (cpu_clk),
-        .init_n   (init_n),
-        .ad_n     (ad_n),
-        .sync_n   (sync_n),
-        .din_n    (din_n),
-        .dout_n   (dout_n),
-        .cs_n     (nbs_n),
-        .iako_n   (iako_n),
-        .rply_n   (rply_n),
-        .virq_n   (virq_n),
-        .key_stb  (1'b0),
-        .key_code (7'b0),
-        .key_ar2  (1'b0),
-        .key_down (1'b0)
     );
 
     // ---- Phase-4 video pipeline ------------------------------------------

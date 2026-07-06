@@ -22,6 +22,7 @@ sim:
 	./sim/bk10/run.sh
 	./sim/ref037/run.sh
 	./sim/ref014/run.sh
+	./sim/run_ps2.sh
 	./sim/run_sdram_arbiter.sh
 	./sim/run_sdram_cosim.sh
 	./sim/run_video.sh

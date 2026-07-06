@@ -76,6 +76,10 @@ if {[get_collection_size $sdram_clk] > 0 && [get_collection_size $pix_clk] > 0} 
 # ----------------------------------------------------------------------------
 set_false_path -from [get_ports {pDip[*]}]
 
+# PS/2 keyboard inputs: 2-FF synchronized inside ps2_rx (the ~15 kHz PS/2
+# clock is oversampled ~100x by cpu_clk); no timing relationship to any clock.
+set_false_path -from [get_ports {pPs2Clk pPs2Dat}]
+
 # VGA outputs: all registered on the pixel clock inside vga_out; the R-2R DAC
 # and monitor sync inputs have no meaningful setup/hold at 64.43 MHz, so they
 # are left unconstrained (as the hardware-validated ocb-test build).
