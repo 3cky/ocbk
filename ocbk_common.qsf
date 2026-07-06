@@ -32,6 +32,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE src/sdram_arbiter.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/va_037_sync.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/cpu_sdram_dp.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/qbus_mem_sdram.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/bk_kbd014.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/epcs_boot.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/qbus_slot.sv
 # Phase-4 video pipeline

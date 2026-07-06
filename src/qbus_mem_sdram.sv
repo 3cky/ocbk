@@ -18,12 +18,15 @@
 //       cycle-stolen); ROM writes are replied to and ignored in both modes (a
 //       real BK would bus-timeout -> trap 4; fidelity deferred to Phase 9).
 //
-// The 037's own registers (177664 scroll) are owned by va_037_sync, and the
-// CPU-internal block 177700-177713 (CSR/error/timer) is decoded, replied and
-// data-driven by the 1801ВМ1 itself - both are excluded from the I/O decode
-// here to avoid a double reply / bus contention. I/O stubs served here:
-//   177716 = SYS_START | bit-2 write-flag (set on write, cleared after read);
-//   177660 = keyboard status stub (bit 6 VIRQ-mask writable, cold 1; bit 7 = 0);
+// The 037's own registers (177664 scroll) are owned by va_037_sync, the
+// keyboard block 177660-177663 by bk_kbd014 (Phase 6, behind the 037's nBS
+// decode), and the CPU-internal block 177700-177713 (CSR/error/timer) is
+// decoded, replied and data-driven by the 1801ВМ1 itself - all are excluded
+// from the I/O decode here to avoid a double reply / bus contention. I/O
+// stubs served here:
+//   177716 = SYS_START | bit-2 write-flag (set on write, cleared after read;
+//            INIT-keyed, as every BK peripheral register) | bit-6 = any-key-
+//            down from the keyboard translator, ACTIVE LOW (1 = no key held);
 //   all other decoded I/O reads return 0 (BkEmu register semantics).
 //
 // Domains: the ROM/IO wait-state FSM runs on cpu_clk (fixed N_ROM, as the validated
@@ -45,6 +48,8 @@ module qbus_mem_sdram #(
     // ---- slow domain (CPU clock) ----------------------------------------
     input  logic        cpu_clk,    // ROM/IO wait FSM clock (= pin_clk_n)
     input  logic        reset,      // active high (= ~dclo_n)
+    input  logic        init_n,     // Q-bus nINIT: peripheral-register reset
+    input  logic        kbd_down,   // any-key-held level -> 177716 bit 6 (inverted)
     input  logic        rom_ext_en, // 1 = serve ROM reads from SDRAM (quasi-static)
 
     // ---- SDRAM domain ---------------------------------------------------
@@ -117,10 +122,13 @@ module qbus_mem_sdram #(
     wire sel_ram = !sync_n && (addr <  RAM_TOP);
     wire sel_rom = !sync_n && (addr >= RAM_TOP) && (addr < IO_BASE);
     // I/O here excludes the 037's own scroll register (177664, owned by
-    // va_037_sync) and the CPU-internal block 177700-177713 (the 1801ВМ1
-    // replies and drives data for those itself - an external reply/drive
-    // there is a bus fight; MONITOR touches the internal timer constantly).
+    // va_037_sync), the keyboard block 177660-177663 (owned by bk_kbd014
+    // behind the 037's nBS window - same [15:2] compare) and the CPU-internal
+    // block 177700-177713 (the 1801ВМ1 replies and drives data for those
+    // itself - an external reply/drive there is a bus fight; MONITOR touches
+    // the internal timer constantly).
     wire sel_io  = !sync_n && (addr >= IO_BASE) && (addr != 16'o177664)
+                           && (addr[15:2] != (16'o177660 >> 2))
                            && !((addr >= CPUREG_LO) && (addr <= CPUREG_HI));
 
     // ROM source select: external (SDRAM via cpu_sdram_dp) vs on-chip image.
@@ -128,15 +136,14 @@ module qbus_mem_sdram #(
 
     // ---- ROM / I/O read data --------------------------------------------
     logic sel1_wflag;   // 177716 bit 2: set on write, cleared after read
-    logic kbd_mask;     // 177660 bit 6: VIRQ mask, cold 1 (interrupts off)
 
     wire [15:0]        rom_off = addr - RAM_TOP;
     wire [ROM_AW-1:0]  rom_idx = rom_off[ROM_AW:1];
     wire               rom_hit = (rom_off[15:1] < ROM_WORDS);
     wire [15:0] rom_word = rom_hit ? rom[rom_idx] : 16'o000000;
     wire [15:0] io_word  =
-        (addr == REG_SYS)    ? (SYS_START | (sel1_wflag ? 16'o000004 : 16'o0)) :
-        (addr == REG_KBD_ST) ? (kbd_mask ? 16'o000100 : 16'o000000)            :
+        (addr == REG_SYS) ? (SYS_START | (sel1_wflag ? 16'o000004 : 16'o0)
+                                       | (kbd_down   ? 16'o0 : 16'o000100)) :
         16'o000000;
     wire [15:0] rd_romio = sel_rom ? rom_word : io_word;
 
@@ -239,7 +246,7 @@ module qbus_mem_sdram #(
         fetch_stb <= 1'b0;
         if (reset) begin
             state <= S_IDLE; drive_data <= 1'b0; reply <= 1'b0; wcnt <= '0;
-            sel1_wflag <= 1'b0; kbd_mask <= 1'b1; dbg_romgate <= 1'b0;
+            dbg_romgate <= 1'b0;
         end else begin
             unique case (state)
                 S_IDLE: begin
@@ -269,8 +276,6 @@ module qbus_mem_sdram #(
                             // semantics; rdata latched above still sees the old flag)
                             if (sel_io && addr == REG_SYS)
                                 sel1_wflag <= is_write;    // set on write, clear on read
-                            if (sel_io && addr == REG_KBD_ST && is_write)
-                                kbd_mask <= ~ad_n[6];      // write data (inverted bus)
                             state <= S_REPLY;
                         end
                     end else
@@ -283,6 +288,11 @@ module qbus_mem_sdram #(
                 end
             endcase
         end
+        // Peripheral-register INIT semantics (real-BK reset wiring rule): the
+        // 177716 write-flag resets on the nINIT line - asserted through the
+        // CPU's own reset AND pulsed by the RESET instruction - never on DCLO.
+        // Placed after the FSM case so INIT wins over the reply-point update.
+        if (!init_n) sel1_wflag <= 1'b0;
     end
 
     // ---- Q-bus drivers (inverted; open-collector rply) -------------------

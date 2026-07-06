@@ -27,6 +27,7 @@ iverilog -g2012 -o "$SP/boot.vvp" -s boot_check_tb \
    "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" \
    ../src/qbus_pkg.sv ../src/va_037_sync.sv ../src/cpu_sdram_dp.sv \
    ../src/sdram_arbiter.sv ../src/sdram_ctrl.sv ../src/qbus_mem_sdram.sv \
+   ../src/bk_kbd014.sv \
    ../src/fb_video.sv ../src/palette_apply.sv ../src/fb_readout.sv \
    ../src/fb_linebuf.sv ../src/vga_out.sv ../src/vga_timing.sv \
    sdram_model.sv boot_check_tb.v 2>&1 | grep -v 'sorry:' || true

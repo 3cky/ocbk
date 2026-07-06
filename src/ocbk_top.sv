@@ -316,8 +316,10 @@ module ocbk_top (
     tri1 [15:0] ad_n;
     tri1        sync_n, din_n, dout_n, wtbt_n, rply_n;
     tri1        init_n, dmr_n, sack_n, iako_n;
+    tri1        virq_n;             // open-collector: bk_kbd014 requests, vm1 samples
     wire        dmgo_n, bsy_n;
     wire [2:1]  sel_n;
+    wire        nbs_n;              // 037 keyboard-block select (177660-177663)
 
     // RAM RPLY + its cycle-stealing timing come from the retimed 037; ROM/IO reply
     // from qbus_mem_sdram. The 037's RPLY (hard-driven) is converted to open-collector
@@ -348,7 +350,7 @@ module ocbk_top (
         .PIN_nRAS  (),
         .PIN_nWE   (),
         .PIN_nE    (),
-        .PIN_nBS   (),
+        .PIN_nBS   (nbs_n),         // keyboard-controller select -> bk_kbd014
         .PIN_WTI   (),
         .PIN_WTD   (),
         .PIN_nVSYNC(),
@@ -370,8 +372,8 @@ module ocbk_top (
         .pin_init_n(init_n),
         .pin_dclo_n(dclo_n),
         .pin_aclo_n(aclo_n),
-        .pin_irq_n (3'b111),        // no radial interrupts
-        .pin_virq_n(1'b1),          // no vectored interrupt
+        .pin_irq_n (3'b111),        // radial interrupts (СТОП -> nIRQ1 in Phase-6 step 5)
+        .pin_virq_n(virq_n),        // vectored interrupt: keyboard (bk_kbd014)
         .pin_ad_n  (ad_n),
         .pin_dout_n(dout_n),
         .pin_din_n (din_n),
@@ -402,6 +404,8 @@ module ocbk_top (
     qbus_mem_sdram #(.MEMFILE("mem/ram_test.hex")) u_mem (
         .cpu_clk  (cpu_clk_n),      // ROM/IO wait FSM advances on the inverted CPU clock
         .reset    (~dclo_n),
+        .init_n   (init_n),
+        .kbd_down (1'b0),           // PS/2 translator key_down lands here (step 5)
         .rom_ext_en(rom_ext_en),
         .boot_active(boot_active),
         .bw_req   (bw_req),
@@ -442,6 +446,29 @@ module ocbk_top (
         .s_dq     (pMemDat),
         .bus_addr (bus_addr),
         .fetch_stb(fetch_stb)
+    );
+
+    // ---- keyboard controller (Phase 6): 177660/177662 + VIRQ/IAK ---------
+    // Behavioral 1801ВП1-014 equivalent, netlist-contract-validated by
+    // sim/ref014. Decode = the 037's nBS (as on a real BK); registers reset
+    // on the nINIT line (RESET instruction included). The PS/2 translator
+    // key-event inputs are tied idle until step 5 wires ps2_rx + kbd_ps2bk.
+    bk_kbd014 u_kbd (
+        .clk_fsm  (cpu_clk_n),
+        .clk_p    (cpu_clk),
+        .init_n   (init_n),
+        .ad_n     (ad_n),
+        .sync_n   (sync_n),
+        .din_n    (din_n),
+        .dout_n   (dout_n),
+        .cs_n     (nbs_n),
+        .iako_n   (iako_n),
+        .rply_n   (rply_n),
+        .virq_n   (virq_n),
+        .key_stb  (1'b0),
+        .key_code (7'b0),
+        .key_ar2  (1'b0),
+        .key_down (1'b0)
     );
 
     // ---- Phase-4 video pipeline ------------------------------------------

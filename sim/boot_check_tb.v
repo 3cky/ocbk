@@ -65,7 +65,8 @@ module boot_check_tb;
     wire        srst_n = srst_sr[1];
     initial srst_sr = 2'b00;
     always @(posedge sys_clk) srst_sr <= {srst_sr[0], 1'b1};
-    reg  [3:1]  irq;   reg virq, dmgi, sp;   reg [1:0] pa;
+    reg  [3:1]  irq;   reg dmgi, sp;   reg [1:0] pa;
+    tri1        virq;  // open-collector: bk_kbd014 requests, vm1 samples
     wire        dmgo;  tri1 init, dmr, sack, iako;   wire [2:1] sel;   wire bsy;
 
     reg [15:0] addr;
@@ -99,6 +100,15 @@ module boot_check_tb;
         .PIN_nVSYNC(va_vsync), .cpu_grant(va_grant), .video_va(video_va),
         .vid_fetch(va_vfetch), .vid_line_en(va_line_en),
         .hgate(va_hgate), .vgate(va_vgate)
+    );
+
+    // ---- keyboard controller (Phase 6; MONITOR polls 177660/177662) ------------
+    // Key events idle: the boot smoke checks the register/no-X behaviour only.
+    bk_kbd014 u_kbd (
+        .clk_fsm(~clk), .clk_p(clk), .init_n(init),
+        .ad_n(ad), .sync_n(sync), .din_n(din), .dout_n(dout),
+        .cs_n(va_nbs), .iako_n(iako), .rply_n(rply), .virq_n(virq),
+        .key_stb(1'b0), .key_code(7'b0), .key_ar2(1'b0), .key_down(1'b0)
     );
 
     // ---- real video pipeline (ports 1/2/3) ----------------------------------------
@@ -162,6 +172,8 @@ module boot_check_tb;
     qbus_mem_sdram #(.MEMFILE("ref037/boot_stub.hex")) u_ms (
         .cpu_clk  (~clk),
         .reset    (~dclo),
+        .init_n   (init),            // peripheral-register reset (Phase 6)
+        .kbd_down (1'b0),            // keyboard idle in the boot smoke
         .rom_ext_en(1'b1),           // the real ROM lives in SDRAM
         .boot_active(1'b0),
         .bw_req   (1'b0),
@@ -291,7 +303,7 @@ module boot_check_tb;
                 {blob['h40008 + 2*ii + 1], blob['h40008 + 2*ii]};
 
         warmreset = $test$plusargs("warmreset");
-        pa=2'b11; sp=1'b1; dmgi=1'b1; irq=3'b111; virq=1'b1;
+        pa=2'b11; sp=1'b1; dmgi=1'b1; irq=3'b111;
         dclo=1'b0; aclo=1'b0; dclo_cold=1'b0;
 
         wait (init_done); @(negedge clk);

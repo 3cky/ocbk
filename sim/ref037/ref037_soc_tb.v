@@ -190,6 +190,8 @@ module ref037_soc_tb;
     qbus_mem_sdram #(.MEMFILE("boot_stub.hex")) u_ms (
         .cpu_clk  (~clk),            // as ocbk_top: FSM on the inverted CPU clock
         .reset    (~dclo),
+        .init_n   (init),            // peripheral-register reset (Phase 6)
+        .kbd_down (1'b0),            // no keyboard in this oracle
         .rom_ext_en(romprog),
         .boot_active(boot_active),
         .bw_req   (bw_req),
