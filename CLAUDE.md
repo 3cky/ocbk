@@ -138,9 +138,13 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   the next vblank start (the free-running 037 makes post-reset timing raster-
   phase-dependent — authentic; the vblank alignment is what keeps the replayed
   golden window steal-free and diffable). The Phase-6 keyboard reset chord ORs
-  into `warm_rst_req`. "DIP n" = physical switch n = `pDip[n-1]`; DIP 1
-  (screen_mode) is live like the real monitor-cable switch, **DIP 2 is latched
-  while DCLO is low** — a mid-run flip must never switch the ROM source.
+  into `warm_rst_req`. "DIP n" = physical switch n = `pDip[n-1]`; **DIP 1 is
+  now unused** — screen_mode moved off it onto the PS/2 **Print Screen** key
+  (each press toggles colour-256 ↔ mono-512; the `kbd_ps2bk` `key_scrmode`
+  radial output → the `smode_sr` 2-FF sync; power-on-only, so it survives a
+  warm reset like the real monitor-cable switch and the video pipeline). **DIP
+  2 is latched while DCLO is low** — a mid-run flip must never switch the ROM
+  source.
 - **Keyboard (Phase 6):** `ps2_rx` → `kbd_ps2bk` (translator, all on
   `cpu_clk`) → `bk_kbd014` (the 1801ВП1-014 bus equivalent at 177660–177663,
   decode = the 037's `PIN_nBS`, netlist-contract-validated — see
@@ -149,7 +153,9 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
     schematic wires nEC1 to the trigger flipped by the ЗАГЛ/СТР keys (caps),
     while РУС/ЛАТ are ordinary matrix keys emitting 016/017 — mapped here as
     CapsLock = the ЗАГЛ/СТР trigger, LCtrl = РУС, Home = ЛАТ, Insert = СУ
-    (held), either Shift = НР, either Alt = АР2, **Delete = СТОП**;
+    (held), either Shift = НР, either Alt = АР2, **Delete = СТОП**,
+    **Print Screen = screen_mode toggle** (a `key_scrmode` radial control
+    output, never a matrix code, power-on-only — see the screen_mode note above);
   - case algebra per BkEmu (`latin ^ (caps | shift)` on letters, СУ = `&037`
     on 01xx codes); the **silicon auto-274 code group**
     {0,1,2,4,5,6,7,011,013,021} vectors to 0274 without АР2 (measured over
@@ -195,7 +201,8 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   `video_va` (else scroll breaks). Scroll: row r fetches vram line
   `(RA − 0o330 + r) & 0xFF` (netlist-proven). CLUT (in `vga_out`): 0=black 1=blue
   2=green 3=red 15=white — also the CRT colour-tweak hook. `screen_mode`
-  (mono-512 / colour-256) = DIP1 (OFF=colour), touches only `palette_apply`.
+  (mono-512 / colour-256) is toggled by the PS/2 Print Screen key (power-on
+  default = colour-256), touches only `palette_apply`.
 - **SDRAM arbiter ports** (fixed priority, 0 highest): 0=CPU, 1=panel readout,
   2=037 video fetch, 3=FB write. There is **no fairness** — the readout MUST stay
   paced (`fb_readout` PACE ≥24 sys_clk/word); an unpaced port-1 burst starves

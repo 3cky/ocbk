@@ -22,7 +22,7 @@ module ps2_tb;
 
     logic [7:0] rx_byte;
     logic       rx_stb;
-    logic       key_stb, key_ar2, key_down, key_stop;
+    logic       key_stb, key_ar2, key_down, key_stop, key_scrmode;
     logic [6:0] key_code;
 
     ps2_rx u_rx (
@@ -33,7 +33,7 @@ module ps2_tb;
     kbd_ps2bk u_tr (
         .clk(clk), .aclo_n(1'b1), .ps2_byte(rx_byte), .ps2_stb(rx_stb),
         .key_stb(key_stb), .key_code(key_code), .key_ar2(key_ar2),
-        .key_down(key_down), .key_stop(key_stop)
+        .key_down(key_down), .key_stop(key_stop), .key_scrmode(key_scrmode)
     );
 
     // ---- device-side frame sender (~16 kHz clock, data before fall) --------
@@ -67,6 +67,18 @@ module ps2_tb;
     task mke (input [7:0] b);  send_byte(8'hE0); send_byte(b);              endtask
     task brk (input [7:0] b);  send_byte(8'hF0); send_byte(b);              endtask
     task brke(input [7:0] b);  send_byte(8'hE0); send_byte(8'hF0); send_byte(b); endtask
+    // Print Screen: make = E0 12 E0 7C, break = E0 F0 7C E0 F0 12
+    task prtsc_mk;
+    begin
+        send_byte(8'hE0); send_byte(8'h12); send_byte(8'hE0); send_byte(8'h7C);
+    end
+    endtask
+    task prtsc_brk;
+    begin
+        send_byte(8'hE0); send_byte(8'hF0); send_byte(8'h7C);
+        send_byte(8'hE0); send_byte(8'hF0); send_byte(8'h12);
+    end
+    endtask
 
     // ---- scoreboard ----------------------------------------------------------
     integer errors = 0;
@@ -108,6 +120,15 @@ module ps2_tb;
         if (key_down !== v) begin
             errors = errors + 1;
             $display("PS2-ERROR: key_down=%b, want %b (%s)", key_down, v, what);
+        end
+    end
+    endtask
+
+    task check_scrmode (input v, input string what);
+    begin
+        if (key_scrmode !== v) begin
+            errors = errors + 1;
+            $display("PS2-ERROR: key_scrmode=%b, want %b (%s)", key_scrmode, v, what);
         end
     end
     endtask
@@ -196,6 +217,19 @@ module ps2_tb;
             errors = errors + 1;
             $display("PS2-ERROR: key_stop count=%0d, want 1", nstop);
         end
+
+        // 12b: Print Screen toggles the display mode (once per press, and the
+        //      intermediate E0 12 must emit no matrix event - the scoreboard
+        //      flags any unexpected key_stb).
+        check_scrmode(1'b0, "scrmode power-on = colour-256");
+        prtsc_mk;   check_scrmode(1'b1, "PrtSc press 1 -> mono-512");
+        prtsc_brk;  check_scrmode(1'b1, "release holds the mode");
+        prtsc_mk;   check_scrmode(1'b0, "PrtSc press 2 -> colour-256");
+        prtsc_brk;
+        // typematic: two makes without an intervening break flip only once
+        prtsc_mk;   prtsc_mk;  check_scrmode(1'b1, "PrtSc typematic = one toggle");
+        prtsc_brk;  check_scrmode(1'b1, "typematic release holds");
+        prtsc_mk;   prtsc_brk; check_scrmode(1'b0, "PrtSc back to colour-256");
 
         // 13: parity-corrupted frame is dropped (no event)
         send_frame(8'h1C, 1'b0);          // bad 'a' make

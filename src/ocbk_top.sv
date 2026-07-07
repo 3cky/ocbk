@@ -61,8 +61,10 @@
 // the ROM source under the running CPU): flip DIP 2, then press reset.
 // Naming: "DIP n" = physical switch n = pDip[n-1]; ON pulls the pin low.
 //
-// screen_mode (mono-512 vs colour-256) is the physical monitor-cable switch of a
-// real BK-0010 -> DIP switch 1 here: OFF = colour-256 (default), ON = mono-512.
+// screen_mode (mono-512 vs colour-256) models the physical monitor-cable switch
+// of a real BK-0010 -> now toggled by the PS/2 Print Screen key (each press
+// cycles the mode; power-on default = colour-256; survives warm reset). DIP 1 is
+// no longer used for it.
 //
 // LEDs (liveness):
 //   pLedPwr (red)  : normal boot = ROM blob loaded + selected; fallback mode =
@@ -74,7 +76,9 @@ module ocbk_top (
     input  logic        pClk21m,   // 21.47727 MHz crystal (PIN_28)
     output logic [7:0]  pLed,      // green LEDs   (1 = on)
     output logic        pLedPwr,   // red power LED (1 = on)
-    input  logic [7:0]  pDip,      // DIP switches (ON = low); [0] = screen_mode
+    input  logic [7:0]  pDip,      // DIP switches (ON = low); [0] = free (was
+                                    // screen_mode, now the Print Screen key),
+                                    // [1] = force on-chip test ROM
     input  logic        pSltRst_n, // reset button (slot RESET net; low = pressed)
 
     // ---- PS/2 keyboard (receive-only; pins pulled up, driven Z) ----------
@@ -196,9 +200,13 @@ module ocbk_top (
     end
     wire pix_rst_n = prst_sr[1];
 
-    // --- screen_mode from DIP 1 (quasi-static; ON = pulled low = mono-512) ---
+    // --- screen_mode: toggled by the PS/2 Print Screen key (power-on default =
+    //     colour-256). key_scrmode is a quasi-static cpu_clk toggle (u_tr,
+    //     below) 2-FF resynced into sys_clk here. Survives warm reset (real-BK
+    //     monitor-switch fidelity), like the video pipeline. DIP 1 is now free.
+    logic       key_scrmode;
     logic [1:0] smode_sr;
-    always_ff @(posedge sys_clk) smode_sr <= {smode_sr[0], ~pDip[0]};
+    always_ff @(posedge sys_clk) smode_sr <= {smode_sr[0], key_scrmode};
     wire screen_mode = smode_sr[1];
 
     // --- DIP 2: force the on-chip test ROM (Phase-4 regression image) --------
@@ -401,7 +409,8 @@ module ocbk_top (
         .key_code (key_code),
         .key_ar2  (key_ar2),
         .key_down (key_down),
-        .key_stop (key_stop)
+        .key_stop (key_stop),
+        .key_scrmode (key_scrmode)   // Print Screen -> screen_mode toggle
     );
 
     bk_kbd014 u_kbd (

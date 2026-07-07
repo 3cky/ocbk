@@ -18,6 +18,11 @@
 //   СУ    = Insert (E0 70), held          ЗАГЛ/СТР trigger = CapsLock
 //   РУС   = LCtrl (14)  -> code 016       ЛАТ  = Home (E0 6C) -> code 017
 //   СТОП  = Delete (E0 71) -> key_stop strobe (radial, never a matrix code)
+//   Print Screen (E0 7C)  -> key_scrmode toggle: cycles the display mode
+//                            (colour-256 / mono-512). A radial control output
+//                            like СТОП - never a matrix code; power-on init
+//                            only (survives ACLO/warm reset), matching a real
+//                            BK's physical monitor-cable switch.
 //
 // Case algebra per BkEmu KeyboardManager (the canonical BK behaviour):
 // letters take low register = latin ^ (caps_upper | shift); СУ masks codes
@@ -45,7 +50,8 @@ module kbd_ps2bk (
     output logic [6:0] key_code,
     output logic       key_ar2,
     output logic       key_down,   // any-key-held level (177716 bit 6)
-    output logic       key_stop    // 1-clk: СТОП make -> nIRQ1 one-shot
+    output logic       key_stop,   // 1-clk: СТОП make -> nIRQ1 one-shot
+    output logic       key_scrmode // level: display-mode toggle (Print Screen)
 );
 
     // ---- prefix tracking --------------------------------------------------
@@ -64,7 +70,10 @@ module kbd_ps2bk (
     logic caps_upper  = 1'b1;      // ЗАГЛ/СТР trigger; ACLO/power-on = ЗАГЛ
     logic latin       = 1'b1;      // РУС/ЛАТ shadow;   ACLO/power-on = ЛАТ
     logic stop_down   = 1'b0;      // СТОП key level (repeat suppression)
+    logic scrmode     = 1'b0;      // display-mode toggle; power-on = colour-256
+    logic prtsc_down  = 1'b0;      // Print Screen level (repeat suppression)
     wire  mod_shift   = mod_shift_l | mod_shift_r;
+    assign key_scrmode = scrmode;
 
     // ---- held-key list (code-producing keys only) ---------------------------
     // 4 slots of {valid, e0, scan}; a make already present = typematic repeat.
@@ -244,6 +253,13 @@ module kbd_ps2bk (
                 else if (got_e0 && ps2_byte == 8'h71) begin
                     if (!got_f0 && !stop_down) key_stop <= 1'b1;
                     stop_down <= !got_f0;
+                end
+                // -- Print Screen (E0 7C): toggle the display mode on make;
+                //    the _down level suppresses typematic re-toggles. Radial
+                //    control - never a matrix code, power-on init only.
+                else if (got_e0 && ps2_byte == 8'h7C) begin
+                    if (!got_f0 && !prtsc_down) scrmode <= ~scrmode;
+                    prtsc_down <= !got_f0;
                 end
                 // -- code-producing keys --------------------------------------
                 else if (got_f0) begin
