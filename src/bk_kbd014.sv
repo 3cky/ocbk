@@ -51,8 +51,8 @@ module bk_kbd014 (
     input  logic        dout_n,
     input  logic        cs_n,      // 037 PIN_nBS (transparent until SYNC fall)
     input  logic        iako_n,
-    output wire         rply_n,    // open-collector
-    output wire         virq_n,    // open-collector
+    output wire         rply_n,    // open-collector (wired-AND with CPU/memory)
+    output wire         virq_n,    // push-pull active-low (sole VIRQ source; see footer)
 
     // ---- key events (clk_p domain, from the PS/2 translator) -------------
     input  logic        key_stb,   // 1-clk strobe: accepted key make
@@ -214,9 +214,19 @@ module bk_kbd014 (
     logic virq_ff = 1'b0;
     always_ff @(posedge clk_p) virq_ff <= virq_req & ~ien;
 
-    // ---- Q-bus drivers (inverted; open-collector rply/virq) ---------------
+    // ---- Q-bus drivers (inverted) -----------------------------------------
+    // ad_n/rply_n are genuine wired-AND nets (the CPU + memory + this chip all
+    // drive them), so they stay open-collector: Quartus infers the wired-AND
+    // from the multiple Z-idle drivers. virq_n, by contrast, has a SINGLE
+    // driver in Phase 6 (this is the only VIRQ source) - a lone Z-idle
+    // tri-state degenerates on Cyclone I (no internal tri-state/pull-up:
+    // Quartus "converts the tri-state buffer feeding internal logic into a
+    // wire" and ties the idle state to 0 = permanently asserted, so virq_ff
+    // loses all fanout and the CPU sees a stuck VIRQ). Drive it push-pull.
+    // If a second VIRQ source is ever added (e.g. the cartridge slot), do NOT
+    // go back to tri-state Z - OR the active-high asserts and invert at the top.
     assign ad_n   = drive_data        ? ~rdata : 16'hZZZZ;
     assign rply_n = (reply | wr_fast) ? 1'b0   : 1'bZ;
-    assign virq_n = virq_ff           ? 1'b0   : 1'bZ;
+    assign virq_n = ~virq_ff;   // push-pull active-low (sole driver; see above)
 
 endmodule

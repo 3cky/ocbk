@@ -211,6 +211,22 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   loop where the CPU's internal-register reply and the slave wire-AND onto RPLY.
   Cosim-validated; clean fix (explicit wired-AND via `vm1_qbus`'s split
   `rply_in`/`rply_out`) deferred to peripheral work (Phase 6).
+- **A SINGLE-driver open-collector `tri1` net degenerates to stuck-ASSERTED in
+  Quartus** (Cyclone I has no internal tri-state/pull-up). This bit the Phase-6
+  keyboard on hardware: `bk_kbd014` was the *only* nVIRQ source, driving
+  `virq_ff ? 1'b0 : 1'bZ` onto a `tri1` net. Quartus "Converted tri-state buffer
+  ... `virq_n` feeding internal logic into a wire" and tied the idle Z to **0**
+  (permanently asserted — `virq_ff` then "lost all its fanouts"), so the CPU saw
+  a stuck VIRQ and hung the instant MONITOR unmasked (deterministic, no keypress;
+  `pin_virq_n=1'b1` or masking cured it). **Every sim passes** — sim honours the
+  `tri1` pull-up. Fix: a lone OC source must be **push-pull** (`assign virq_n =
+  ~virq_ff;`, net a plain `wire`). The multi-driver bus nets (`ad_n`, `rply_n`)
+  are fine — Quartus infers the wired-AND from the several Z-idle drivers (an
+  OR-gate in the reports). **Rule: never leave a single Z-idle tri-state driving
+  internal logic; if a second nVIRQ source is added (cartridge slot), OR the
+  active-high asserts and invert at the top — do NOT go back to tri-state Z.**
+  Guard: `grep 'Converted tri-state buffer' ocbk.map.rpt` should list only the
+  genuinely multi-driven bus nets, never a peripheral's lone request line.
 - **Pin-sync edges (1801ВМ1 doc): nIRQ1–3/nVIRQ must be asserted synchronous
   to the CPU clock rising edge, nRPLY to the falling edge.** The core samples
   all of them at `posedge pin_clk_p` with **no synchronizer flops**

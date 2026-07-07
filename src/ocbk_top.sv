@@ -69,7 +69,7 @@
 //                    the RAM-test SUCCESS self-loop latch (100004).
 //   pLed[7]        : system heartbeat off the PLL (FPGA configured + PLL locked).
 //   pLed[6]        : SDRAM init_done; BLINKS if the boot blob failed validation.
-//   pLed[5:0]      : top bits of a transaction counter - move while the CPU runs.
+//   pLed[5:0]      : unused (0).
 module ocbk_top (
     input  logic        pClk21m,   // 21.47727 MHz crystal (PIN_28)
     output logic [7:0]  pLed,      // green LEDs   (1 = on)
@@ -320,7 +320,9 @@ module ocbk_top (
     tri1 [15:0] ad_n;
     tri1        sync_n, din_n, dout_n, wtbt_n, rply_n;
     tri1        init_n, dmr_n, sack_n, iako_n;
-    tri1        virq_n;             // open-collector: bk_kbd014 requests, vm1 samples
+    wire        virq_n;             // push-pull: bk_kbd014 (sole VIRQ source) -> vm1
+                                     // (NOT tri1 - a lone Z-idle OC net degenerates to
+                                     // stuck-asserted on Cyclone I; see bk_kbd014 footer)
     wire        dmgo_n, bsy_n;
     wire [2:1]  sel_n;
     wire        nbs_n;              // 037 keyboard-block select (177660-177663)
@@ -620,13 +622,6 @@ module ocbk_top (
         else if (fetch_stb && bus_addr == 16'o100004)  reached_loop <= 1'b1;
     end
 
-    // Transaction counter (moves while the CPU executes).
-    logic [23:0] fetch_cnt;
-    always_ff @(posedge cpu_clk_n or negedge dclo_n) begin
-        if (!dclo_n)        fetch_cnt <= '0;
-        else if (fetch_stb) fetch_cnt <= fetch_cnt + 1'b1;
-    end
-
     // System heartbeat off the PLL (CPU-independent liveness).
     logic [24:0] hb;
     always_ff @(posedge sys_clk or negedge locked) begin
@@ -639,6 +634,8 @@ module ocbk_top (
     // pLed[6]: init_done, but BLINKS if the boot blob failed validation.
     wire boot_fail = boot_done && !boot_ok;
     assign pLedPwr = rom_ext_en | reached_loop;
-    assign pLed    = {hb[24], boot_fail ? hb[22] : init_done, fetch_cnt[23:18]};
+    // pLed[7]: PLL heartbeat.  pLed[6]: init_done (BLINKS on boot-blob failure).
+    // pLed[5:0]: unused (the transaction counter was removed).
+    assign pLed    = {hb[24], boot_fail ? hb[22] : init_done, 6'b0};
 
 endmodule
