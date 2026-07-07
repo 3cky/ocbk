@@ -71,7 +71,8 @@
 //                    the RAM-test SUCCESS self-loop latch (100004).
 //   pLed[7]        : system heartbeat off the PLL (FPGA configured + PLL locked).
 //   pLed[6]        : SDRAM init_done; BLINKS if the boot blob failed validation.
-//   pLed[5:0]      : unused (0).
+//   pLed[0]        : BK speaker activity (solid while a tone plays; audio tap).
+//   pLed[5:1]      : unused (0).
 module ocbk_top (
     input  logic        pClk21m,   // 21.47727 MHz crystal (PIN_28)
     output logic [7:0]  pLed,      // green LEDs   (1 = on)
@@ -91,6 +92,10 @@ module ocbk_top (
     output logic [5:0]  pDac_VR,
     output logic [5:0]  pDac_VG,
     output logic [5:0]  pDac_VB,
+
+    // ---- Sound (6-bit R-2R DAC per channel; BK 1-bit speaker) -----------
+    output logic [5:0]  pDac_SL,
+    output logic [5:0]  pDac_SR,
 
     // ---- SDRAM (16-bit SDR, 13 row / 9 col / 2 bank, CL2) ---------------
     output logic        pMemClk,   // SDRAM chip clock (PLL extclk0)
@@ -482,6 +487,7 @@ module ocbk_top (
 
     wire [15:0] bus_addr;
     wire        fetch_stb;
+    wire        spk_bit;       // BK speaker level (bit 6 of last 177716 write)
     qbus_mem_sdram #(.MEMFILE("mem/ram_test.hex")) u_mem (
         .cpu_clk  (cpu_clk_n),      // ROM/IO wait FSM advances on the inverted CPU clock
         .reset    (~dclo_n),
@@ -526,7 +532,23 @@ module ocbk_top (
         .s_dqm    ({pMemUdq, pMemLdq}),
         .s_dq     (pMemDat),
         .bus_addr (bus_addr),
-        .fetch_stb(fetch_stb)
+        .fetch_stb(fetch_stb),
+        .spk_bit  (spk_bit)          // BK speaker: bit 6 of last 177716 write
+    );
+
+    // ---- Sound: BK 1-bit speaker -> board R-2R sound DAC -----------------
+    // spk_bit is captured in u_mem (cpu_clk domain, software-owned latch);
+    // bk_audio resyncs it to sys_clk and drives the balanced R-2R pattern.
+    // Power-on reset only (vid_rst_n) - like the display, sound survives a warm
+    // reset; spk_bit itself is never cleared by nINIT (software owns it).
+    wire spk_active;
+    bk_audio u_audio (
+        .sys_clk (sys_clk),
+        .rst_n   (vid_rst_n),
+        .spk_bit (spk_bit),
+        .dac_l   (pDac_SL),
+        .dac_r   (pDac_SR),
+        .active  (spk_active)
     );
 
     // ---- Phase-4 video pipeline ------------------------------------------
@@ -645,7 +667,8 @@ module ocbk_top (
     wire boot_fail = boot_done && !boot_ok;
     assign pLedPwr = rom_ext_en | reached_loop;
     // pLed[7]: PLL heartbeat.  pLed[6]: init_done (BLINKS on boot-blob failure).
-    // pLed[5:0]: unused (the transaction counter was removed).
-    assign pLed    = {hb[24], boot_fail ? hb[22] : init_done, 6'b0};
+    // pLed[0]: BK speaker activity (solid while a tone plays; audio bring-up tap).
+    // pLed[5:1]: unused (the transaction counter was removed).
+    assign pLed    = {hb[24], boot_fail ? hb[22] : init_done, 4'b0, 1'b0, spk_active};
 
 endmodule

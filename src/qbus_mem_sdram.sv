@@ -104,7 +104,10 @@ module qbus_mem_sdram #(
 
     // ---- bus-activity taps ----------------------------------------------
     output wire  [15:0] bus_addr,
-    output logic        fetch_stb
+    output logic        fetch_stb,
+
+    // ---- BK speaker: bit 6 of the last 177716 write (software-owned) ------
+    output logic        spk_bit
 );
 
     import qbus_pkg::*;
@@ -144,6 +147,12 @@ module qbus_mem_sdram #(
 
     // ---- ROM / I/O read data --------------------------------------------
     logic sel1_wflag;   // 177716 bit 2: set on write, cleared after read
+    // BK speaker output = bit 6 of the value last written to 177716. A plain
+    // software-owned latch: NOT cleared by nINIT / the RESET instruction
+    // (matches BkEmu, which never re-inits the speaker level). Power-on value
+    // only; software owns it thereafter. Captured directly in the DOUT window
+    // on sys_clk below - the ROM/IO wait FSM can't see the write (see there).
+    initial spk_bit = 1'b0;
 
     wire [15:0]        rom_off = addr - RAM_TOP;
     wire [ROM_AW-1:0]  rom_idx = rom_off[ROM_AW:1];
@@ -311,6 +320,20 @@ module qbus_mem_sdram #(
         // CPU's own reset AND pulsed by the RESET instruction - never on DCLO.
         // Placed after the FSM case so INIT wins over the reply-point update.
         if (!init_n) sel1_wflag <= 1'b0;
+    end
+
+    // ---- BK speaker capture (177716 bit 6) ------------------------------
+    // The vm1 self-replies for the whole 177700-177717 block (sel177x, its own
+    // pin_rply_out), so a 177716 write completes on the CPU's fast internal
+    // reply and the ROM/IO wait FSM above stands down before its reply point -
+    // it never observes the write. Capture the write data straight off the bus
+    // during the DOUT window on the fast sys_clk instead, independent of any
+    // reply. addr==REG_SYS (177716, even) => word or low-byte write, so the
+    // true bit 6 (~ad_n[6]) is always the intended data bit. Never runtime-
+    // reset (software-owned latch; survives nINIT and warm reset).
+    always_ff @(posedge sclk) begin
+        if (!sync_n && !dout_n && addr == REG_SYS)
+            spk_bit <= ~ad_n[6];
     end
 
     // ---- Q-bus drivers (inverted; open-collector rply) -------------------

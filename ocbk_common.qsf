@@ -44,6 +44,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE src/fb_readout.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/fb_linebuf.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/vga_timing.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/vga_out.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/bk_audio.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/ocbk_top.sv
 
 # --- Timing constraints ---------------------------------------------------
@@ -112,6 +113,19 @@ set_location_assignment PIN_79 -to pDac_VB[2]
 set_location_assignment PIN_82 -to pDac_VB[3]
 set_location_assignment PIN_83 -to pDac_VB[4]
 set_location_assignment PIN_84 -to pDac_VB[5]
+# Sound - 6-bit R-2R DAC per channel (esemsx3 pin order, bit0..bit5)
+set_location_assignment PIN_105 -to pDac_SL[0]
+set_location_assignment PIN_106 -to pDac_SL[1]
+set_location_assignment PIN_107 -to pDac_SL[2]
+set_location_assignment PIN_108 -to pDac_SL[3]
+set_location_assignment PIN_113 -to pDac_SL[4]
+set_location_assignment PIN_114 -to pDac_SL[5]
+set_location_assignment PIN_115 -to pDac_SR[0]
+set_location_assignment PIN_116 -to pDac_SR[1]
+set_location_assignment PIN_117 -to pDac_SR[2]
+set_location_assignment PIN_118 -to pDac_SR[3]
+set_location_assignment PIN_119 -to pDac_SR[4]
+set_location_assignment PIN_120 -to pDac_SR[5]
 
 # ==========================================================================
 #  I/O properties
@@ -191,6 +205,12 @@ set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pDac_VG
 set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pDac_VG
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pDac_VB
 set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pDac_VB
+
+# Sound DAC outputs (4 mA, weak pull-up; mirrors the video DAC / esemsx3)
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pDac_SL
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pDac_SL
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pDac_SR
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pDac_SR
 
 # ==========================================================================
 #  SDRAM (16-bit SDR; pins copied verbatim from ocb-test / esemsx3, board-proven)

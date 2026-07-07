@@ -305,7 +305,16 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   stores time out — authentic BK-0010+BASIC behaviour). PS/2 mapping:
   CapsLock = ЗАГЛ/СТР trigger, LCtrl = РУС, Home = ЛАТ, Insert = СУ,
   Alt = АР2, Delete = СТОП. Keyboard reset chord: still open (deferred).
-- Tape/audio: 1-bit speaker + covox via the board audio PWM/DAC; tape in/out.
+- Audio: **1-bit speaker CONFIRMED ON HARDWARE** (MONITOR keyclick audible) —
+  bit 6 of the 177716 write (`spk_bit`, a plain software-owned latch, NOT
+  nINIT-reset). The
+  vm1 self-replies for 177700-177717, so the write is captured **directly in the
+  DOUT window on sys_clk** in `qbus_mem_sdram` (reply-independent — the wait-FSM
+  never sees it), then `bk_audio` (2-FF resync + **push-pull mono R-2R drive**,
+  ocb-test-proven; idle = mid-scale) → board sound DAC `pDac_SL`/`pDac_SR`
+  (PIN_105-114/115-120). `pLed[0]` = speaker-activity tap. Oracles: `sim/run_audio.sh`
+  (DAC unit + directed 177716-capture). **Still open:** Covox / tape bit 5 (MiSTer
+  models bit 5 too), tape in/out.
 - System timer + interrupt wiring (50 Hz EVNT/IRQ2 from vsync).
 - **Milestone:** interactive — type, run BASIC, hear sound. *(Keyboard part
   of the milestone: pending the hardware smoke — type in MONITOR/BASIC, СТОП
