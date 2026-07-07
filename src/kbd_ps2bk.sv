@@ -3,7 +3,8 @@
 // Consumes scan-code bytes from ps2_rx and produces the event interface of
 // bk_kbd014 (make strobe + final KOI-7 code + АР2 flag + any-key-down
 // level), plus the СТОП strobe for the nIRQ1 one-shot in ocbk_top. All on
-// cpu_clk, power-on init only.
+// cpu_clk; power-on init, except the ЗАГЛ/СТР + РУС/ЛАТ state, which resets
+// on ACLO (power-on AND the reset button - see the case-algebra note below).
 //
 // This module is the software-visible half of the real BK keyboard: the
 // hardware 1801ВП1-014 forms its code from the matrix position and the
@@ -22,9 +23,12 @@
 // letters take low register = latin ^ (caps_upper | shift); СУ masks codes
 // with bit 0100 down to &037; non-letters take shift through the scan-code
 // table (PC-layout symbol pairs). The latin shadow follows the emitted
-// 016/017 codes - it mirrors the monitor's software РУС/ЛАТ state and, like
-// the caps trigger (external RS trigger on a real BK), survives INIT and
-// warm reset: power-on init only.
+// 016/017 codes - it mirrors the monitor's software РУС/ЛАТ state. Both it
+// and the caps trigger are BK hardware cells clocked off ACLO (74LS74:
+// D=GND, C=ACLO), so they reset to the power-on default (ЛАТ / ЗАГЛ) on
+// power-on AND the reset button - matching the MONITOR's own re-init, which
+// keeps them in sync across a warm reset. They are NOT reset by the RESET
+// instruction (nINIT only), unlike the bk_kbd014 registers.
 //
 // Typematic repeats and multi-key: a 4-slot held-key list suppresses the
 // repeated makes of held keys (the real 014 delivers one event per press -
@@ -33,6 +37,7 @@
 // they are not matrix keys on the real BK.
 module kbd_ps2bk (
     input  logic       clk,        // cpu_clk
+    input  logic       aclo_n,     // ACLO: resets the ЗАГЛ/СТР + РУС/ЛАТ state
     input  logic [7:0] ps2_byte,
     input  logic       ps2_stb,
 
@@ -56,8 +61,8 @@ module kbd_ps2bk (
     logic mod_shift_l = 1'b0, mod_shift_r = 1'b0;
     logic mod_alt     = 1'b0;      // АР2
     logic mod_su      = 1'b0;      // СУ = Insert held
-    logic caps_upper  = 1'b1;      // ЗАГЛ/СТР trigger; power-on = ЗАГЛ
-    logic latin       = 1'b1;      // РУС/ЛАТ shadow;   power-on = ЛАТ
+    logic caps_upper  = 1'b1;      // ЗАГЛ/СТР trigger; ACLO/power-on = ЗАГЛ
+    logic latin       = 1'b1;      // РУС/ЛАТ shadow;   ACLO/power-on = ЛАТ
     logic stop_down   = 1'b0;      // СТОП key level (repeat suppression)
     wire  mod_shift   = mod_shift_l | mod_shift_r;
 
@@ -262,6 +267,17 @@ module kbd_ps2bk (
                     end
                 end
             end
+        end
+
+        // ЗАГЛ/СТР caps trigger and the РУС/ЛАТ shadow are hardware cells the
+        // BK schematic clocks off ACLO (74LS74: D=GND, C=ACLO) - reset to the
+        // power-on default (ЗАГЛ / ЛАТ) on power-on AND the reset button (both
+        // pulse ACLO), matching the MONITOR re-init. NOT reset by the RESET
+        // instruction (that pulses nINIT only, never ACLO). Placed last so the
+        // reset wins over any same-cycle CapsLock toggle / 016-017 emit.
+        if (!aclo_n) begin
+            caps_upper <= 1'b1;    // ЗАГЛ
+            latin      <= 1'b1;    // ЛАТ
         end
     end
 

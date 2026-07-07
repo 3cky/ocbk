@@ -394,6 +394,7 @@ module ocbk_top (
 
     kbd_ps2bk u_tr (
         .clk      (cpu_clk),
+        .aclo_n   (aclo_n),        // caps/РУС-ЛАТ reset on ACLO (power-on + reset button)
         .ps2_byte (ps2_byte),
         .ps2_stb  (ps2_stb),
         .key_stb  (key_stb),

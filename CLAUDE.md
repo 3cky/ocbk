@@ -126,9 +126,15 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   drives `pin_init_n` open-collector: asserted during its own reset AND pulsed
   by the RESET instruction). Every Phase-6+ peripheral must key its reset to
   `init_n`, not `dclo_n` — the RESET instruction must reset it too (done for
-  the 177716 write-flag and the `bk_kbd014` registers; the translator-side
-  caps trigger and РУС/ЛАТ shadow are power-on ONLY, like the real external
-  trigger). In the warm-reset oracle tbs the release is aligned to
+  the 177716 write-flag and the `bk_kbd014` registers). **Exception: the
+  translator-side ЗАГЛ/СТР caps trigger and РУС/ЛАТ shadow are clocked off
+  ACLO** (BK schematic: a 74LS74 with D=GND, C=ACLO), so `kbd_ps2bk` resets
+  them to the power-on default (ЗАГЛ / ЛАТ) on **`aclo_n`** — power-on AND the
+  reset button, both of which pulse ACLO, matching the MONITOR's own re-init
+  (this keeps them in sync across a warm reset — no post-reset case desync).
+  They are NOT reset by the RESET instruction (that pulses nINIT only, never
+  ACLO), so `aclo_n` is exactly right: in `ocbk_top` it is driven only by
+  power-on and `warm_rst_req`. In the warm-reset oracle tbs the release is aligned to
   the next vblank start (the free-running 037 makes post-reset timing raster-
   phase-dependent — authentic; the vblank alignment is what keeps the replayed
   golden window steal-free and diffable). The Phase-6 keyboard reset chord ORs

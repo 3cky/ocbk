@@ -31,7 +31,7 @@ module ps2_tb;
     );
 
     kbd_ps2bk u_tr (
-        .clk(clk), .ps2_byte(rx_byte), .ps2_stb(rx_stb),
+        .clk(clk), .aclo_n(1'b1), .ps2_byte(rx_byte), .ps2_stb(rx_stb),
         .key_stb(key_stb), .key_code(key_code), .key_ar2(key_ar2),
         .key_down(key_down), .key_stop(key_stop)
     );
