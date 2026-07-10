@@ -54,11 +54,9 @@
 // asserted during its own reset AND pulsed by the RESET instruction) - every
 // Phase-6+ peripheral keys its reset to init_n, never to dclo_n.
 //
-// ROM source: SDRAM (the loaded MONITOR+BASIC set) when the blob validated OK;
-// the on-chip test ROM (Phase-4 picture / RAM test) when the blob failed or
-// DIP 2 is ON (the hardware-regression path - parks 100004/100012 live there).
-// DIP 2 is sampled only while the CPU is in reset (a mid-run flip would switch
-// the ROM source under the running CPU): flip DIP 2, then press reset.
+// ROM source: always the SDRAM image (the loaded MONITOR+BASIC set). There is
+// no on-chip ROM fallback - a failed EPCS boot (boot_ok=0) holds the CPU in
+// reset. DIP 1 and DIP 2 are unused.
 // Naming: "DIP n" = physical switch n = pDip[n-1]; ON pulls the pin low.
 //
 // screen_mode (mono-512 vs colour-256) models the physical monitor-cable switch
@@ -67,12 +65,11 @@
 // no longer used for it.
 //
 // LEDs (liveness):
-//   pLedPwr (red)  : normal boot = ROM blob loaded + selected; fallback mode =
-//                    the RAM-test SUCCESS self-loop latch (100004).
+//   pLedPwr (red)  : solid once SDRAM init_done; BLINKS if the boot blob failed
+//                    validation (the CPU is then held in reset).
 //   pLed[7]        : system heartbeat off the PLL (FPGA configured + PLL locked).
-//   pLed[6]        : SDRAM init_done; BLINKS if the boot blob failed validation.
 //   pLed[0]        : BK speaker activity (solid while a tone plays; audio tap).
-//   pLed[5:1]      : unused (0).
+//   pLed[6:1]      : unused (0).
 module ocbk_top (
     input  logic        pClk21m,   // 21.47727 MHz crystal (PIN_28)
     output logic [7:0]  pLed,      // green LEDs   (1 = on)
