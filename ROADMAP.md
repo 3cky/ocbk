@@ -345,6 +345,15 @@ register/behaviour reference for the exact bit fields):
   page-register-indexed base + in-window offset. BK-0010 mode is the same path
   with banking disabled, so both models can stay resident in SDRAM and the
   runtime model select becomes a base-address swap rather than a reload.
+- **Factor this out as a memory-mapper sub-module of `qbus_mem`, not a rewrite.**
+  The mapper is the *generalization* of three things `qbus_mem` already does
+  inline — the region decode (`sel_ram`/`sel_rom`/`sel_io`), the physical-address
+  map, and the (currently static) RPLY-owner split — into one config-driven unit:
+  *(CPU address, mapping registers) → (physical SDRAM word, region kind, RPLY
+  owner, writable?)*. `qbus_mem` stays the bus-slave + SDRAM-datapath + arbiter
+  host and consumes the mapper's outputs; the mapper owns the mapping registers
+  (snooping their bus writes) and is independently cosim-able. BK-0010 mode is a
+  pass-through, so the existing `golden_037*` oracles stay the regression anchor.
 - **Design the `100000–177777` window with an explicit "who owns it" hook**
   (not just the 0011M banker): Phase 8's SMK512 controller re-maps that same
   window on a finer 4 KB granularity from its own register. Making window
