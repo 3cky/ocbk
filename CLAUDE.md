@@ -143,8 +143,8 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   (each press toggles colour-256 ↔ mono-512; the `kbd_ps2bk` `key_scrmode`
   radial output → the `smode_sr` 2-FF sync; power-on-only, so it survives a
   warm reset like the real monitor-cable switch and the video pipeline). **DIP
-  2 is latched while DCLO is low** — a mid-run flip must never switch the ROM
-  source.
+  2 is also now unused** — it forced the on-chip test ROM, removed 2026-07-10
+  (ROM is always the loaded SDRAM image).
 - **Keyboard (Phase 6):** `ps2_rx` → `kbd_ps2bk` (translator, all on
   `cpu_clk`) → `bk_kbd014` (the 1801ВП1-014 bus equivalent at 177660–177663,
   decode = the 037's `PIN_nBS`, netlist-contract-validated — see
@@ -183,15 +183,20 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
 - **ROM-in-SDRAM (Phase 5):** the full BK-0010.01 ROM (`mem/roms/`, committed;
   canonical source = the BkEmu project, also the reference for BK register
   semantics) is 262 Kbit > the device's 239 Kbit, so ROM reads ride the CPU
-  datapath (arbiter port 0, linear `addr[15:1]` map → SDRAM words 0x4000–0x7F7F)
-  behind `rom_ext_en`, keeping the fixed `N_ROM=2` reply, **done-gated** on
+  datapath (arbiter port 0, linear `addr[15:1]` map → SDRAM words 0x4000–0x7F7F),
+  keeping the fixed `N_ROM=2` reply, **done-gated** on
   `mem_ready` (ROM is NOT 037-arbitrated — mask ROM is never cycle-stolen; the
   flat ROM self-loop in `golden_037_rom.txt` pins that). ROM writes reply+ignore
   (real BK would bus-timeout → trap 4; fidelity deferred to Phase 9). Boot:
   `src/epcs_boot.sv` copies the blob from EPCS offset 0x40000 through the
-  boot-writer mux onto port 0 during reset-hold (DCLO held until `boot_done`);
-  bad blob or **DIP2 ON** falls back to the on-chip 256-word test ROM (the
-  Phase-4 picture — the hardware regression path, parks 100004/100012).
+  boot-writer mux onto port 0 during reset-hold (DCLO held until `boot_done`).
+  ROM is **always** the loaded SDRAM image — the on-chip 256-word test-ROM
+  fallback and its **DIP2** force were removed (2026-07-10) to free resources.
+  A failed EPCS boot (`boot_ok=0`) now **holds the CPU in reset** (the reset
+  sequencer gates on `bo_sync`); it does not fall back. The ref037 SoC oracles'
+  default-mode bootstrap JMP therefore lives in the SDRAM ROM region (word
+  0x4000 → RAM program) instead of an on-chip stub — timing-identical (same
+  fixed `N_ROM`), `golden_037.txt` unchanged.
 - **Video pipeline conventions (Phase 4)** — mirror these in RTL, cosims and
   `gen_expected.py` alike: FB = 512 slots/line × 4-bit post-palette index ×
   256 lines, 128 words/line, slot `s` of a word at bits `[4s+3:4s]`, LSB-first in

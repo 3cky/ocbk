@@ -82,7 +82,7 @@ fi
 #     REAL qbus_mem_sdram (ROM/IO FSM + arbiter + cpu_sdram_dp + done-gate),
 #     with the 037 fetch streaming contention. Must still reproduce the golden
 #     (timing preserved) and run out of SDRAM. Run twice: program in RAM
-#     (on-chip bootstrap, rom_ext_en=0) and +romprog (Phase-5 ROM-in-SDRAM). ---
+#     (bootstrap JMP in the SDRAM ROM region) and +romprog (Phase-5 ROM-in-SDRAM). ---
 iverilog -g2012 -o "$SP/ref037soc.vvp" -s ref037_soc_tb \
    "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
    "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" \

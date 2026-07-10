@@ -19,10 +19,11 @@ never cycle-stolen — and keeps the fixed `N_ROM` reply, done-gated against a l
 SDRAM word). The 037 video fetch is decoded through the BK-0010 fixed palette
 into a **double-buffered 4-bit-index framebuffer in SDRAM** and scanned out at
 **1024×768@60** (×2H/×3V integer scale, 6-bit R-2R VGA DAC). `screen_mode`
-(colour-256 / mono-512, the physical monitor cable switch on a real BK) is DIP
-switch 1 (OFF = colour); **DIP 2 ON** boots the on-chip Phase-4 test ROM instead
-(test picture + RAM test — the hardware regression image, also the automatic
-fallback if the flash blob fails validation).
+(colour-256 / mono-512, the physical monitor cable switch on a real BK) is
+toggled by the PS/2 **Print Screen** key (power-on default = colour-256). The
+BK ROM always runs from the loaded SDRAM image; if the flash blob fails
+validation the CPU is held in reset (no on-chip fallback). DIP switches 1 and 2
+are unused.
 
 - Fits in **3660 / 12060 LEs (30%)**, **1 M4K**, **1 ASMI block**, **1 PLL**;
   timing closes.
@@ -91,23 +92,22 @@ release = reboot in <1 s): the authentic 1801ВМ1 DCLO→ACLO power-up sequence
 re-run while SDRAM init, the flash ROM load and memory contents stay untouched —
 BK hardware-reset semantics. The display is **not** affected (as on a real BK,
 whose video controller ignores CPU DCLO/ACLO): the screen keeps showing video
-RAM while the button is held, until MONITOR's screen clear. DIP 1 flips colour-256 (OFF) / mono-512 (ON) decode
-live (it is the monitor-cable switch of a real BK). DIP 2 ON boots the on-chip
-test image instead: four vertical colour bars, an all-ones border (red in colour
-mode, white in mono), the main diagonal in inverted colour, and the SDRAM RAM
-test; DIP 2 is sampled **at reset only** — flip it, then press the reset button
-(or power-cycle).
+RAM while the button is held, until MONITOR's screen clear. The PS/2 **Print
+Screen** key toggles colour-256 / mono-512 decode live (it stands in for the
+monitor-cable switch of a real BK). DIP switches 1 and 2 are unused: DIP 1 was
+the old screen-mode switch (now the Print Screen key) and DIP 2 was the on-chip
+test-ROM force (removed along with the on-chip ROM fallback — the BK ROM always
+runs from the loaded SDRAM image).
 
 ### LEDs
 
-- **Red power LED** — normal boot: solid once the ROM blob is loaded, verified
-  and selected. Fallback/test mode: solid once the CPU reaches the **success**
-  self-loop at `100004` (every word/byte RAM-test write verified from SDRAM).
+- **Red power LED** — combined power/boot-status: **solid** once SDRAM
+  `init_done`, but **blinks** if the flash blob failed validation (the CPU is
+  then held in reset — there is no on-chip fallback). Dark only during the
+  ~200 µs SDRAM init at power-on.
 - **pLed[7]** — system heartbeat off the PLL (FPGA configured / PLL locked).
-- **pLed[6]** — SDRAM `init_done`; **blinks** if the flash blob failed
-  validation (the board then falls back to the on-chip test image).
-- **pLed[5:0]** — top bits of a transaction counter (move while the CPU executes;
-  heartbeat blinking with these frozen would indicate the CPU is hung).
+- **pLed[0]** — BK speaker activity (solid while a tone plays; audio bring-up tap).
+- **pLed[6:1]** — unused.
 
 ## Known items (for later phases)
 

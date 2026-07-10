@@ -200,8 +200,9 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
 
 - **ROM-in-SDRAM:** ROM exceeds on-chip memory (262 Kbit > 239 Kbit device total),
   so ROM reads ride the CPU datapath (`cpu_sdram_dp`, arbiter port 0) via the
-  linear `addr[15:1]` map (words 0x4000–0x7F7F, below the framebuffers), selected
-  by `rom_ext_en`. ROM is *not* 037-arbitrated (real mask ROM is never
+  linear `addr[15:1]` map (words 0x4000–0x7F7F, below the framebuffers). ROM is
+  always SDRAM-backed (the on-chip ROM fallback was removed). ROM is *not*
+  037-arbitrated (real mask ROM is never
   cycle-stolen): `qbus_mem_sdram` keeps the fixed `N_ROM=2` reply, **done-gated**
   on `mem_ready` (a late word extends RPLY; sticky `dbg_romgate` diagnostic).
   Measured worst port-0 read latency: 37 sys_clk under full 4-port video
@@ -218,9 +219,9 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   flash offset 0x40000 through the `cyclone_asmiblock` primitive, validates
   magic/length/checksum, and streams words through the **boot-writer mux** onto
   arbiter port 0 during reset-hold (~22 ms; CPU DCLO held until `boot_done`).
-  Failure or **DIP2** falls back to the on-chip Phase-4 test ROM (parks
-  100004/100012 unchanged — the hardware regression path); pLed[6] blinks on a
-  bad blob. Gates: `sim/run_epcs_boot.sh` (in `make sim`; word-exact SDRAM load +
+  On failure (`boot_ok=0`) the CPU is **held in reset** — there is no on-chip
+  ROM fallback; the power LED (`pLedPwr`) blinks on a bad blob (solid = SDRAM
+  init done). Gates: `sim/run_epcs_boot.sh` (in `make sim`; word-exact SDRAM load +
   corrupted-blob run) and the ref037 `+bootload` run (flash→loader→SDRAM→fetch,
   golden exact).
 - **Flash flow:** `mem/gen_boot_blob.py` builds the blob (true bytes in the COF
@@ -259,9 +260,9 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   power-on-reset only (`vid_rst_n`) — a real BK's display controller ignores
   CPU DCLO/ACLO, so the screen keeps showing video RAM across the reset
   (no blanking while the button is held).
-- **DIP 2 is now latched at reset** (sampled only while DCLO is low): flipping
-  it mid-run no longer switches the ROM source under the running CPU — "flip
-  DIP 2, press reset" is a clean ROM swap.
+- **DIP 2 is unused** (2026-07-10): the on-chip test-ROM fallback it selected was
+  removed to free resources — ROM is always the loaded SDRAM image, and a failed
+  EPCS boot now holds the CPU in reset instead of falling back.
 - Oracle-gated: three warm-reset replay diffs in `sim/ref037/run.sh` (12 total)
   re-pulse DCLO/ACLO mid-run — mid-display-line in the video tb, all four
   arbiter ports live — and both passes must match the **same unchanged golden**:
@@ -317,7 +318,7 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   models bit 5 too), tape in/out.
 - **Milestone:** interactive — type, run BASIC, hear sound. *(Keyboard part
   of the milestone: pending the hardware smoke — type in MONITOR/BASIC, СТОП
-  drops BASIC to the monitor, warm reset keeps РУС/ЛАТ, DIP2 fallback.)*
+  drops BASIC to the monitor, warm reset keeps РУС/ЛАТ.)*
 
 ### Phase 7 — BK-0011M mode
 - 128 KB banked RAM, two video pages, 4 MHz CPU, page/control registers, MMU windows.

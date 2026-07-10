@@ -13,9 +13,10 @@
 // the reference timing (the interlock never perturbs it at 3 MHz), AND the program
 // executes correctly out of SDRAM (it reaches the self-loop).
 //
-// Default mode: bootstrap from the ON-CHIP ROM image (boot_stub.hex, the Phase-5
-// fallback path, rom_ext_en=0), program in SDRAM RAM space -> golden_037.txt.
-// +romprog:     rom_ext_en=1 - bootstrap AND program live in the SDRAM ROM region
+// Default mode: bootstrap JMP in the SDRAM ROM region (words 0x4000+), program
+// in SDRAM RAM space -> golden_037.txt. (ROM is always SDRAM-backed now; the
+// on-chip ROM fallback was removed.)
+// +romprog:     bootstrap AND program live in the SDRAM ROM region
 // (words 0x4000+, the Phase-5 ROM-in-SDRAM path with the done-gated fixed-N_ROM
 // reply) -> golden_037_rom.txt. Both runs also watch:
 //   * FETCH-ROMGATE-ERROR - the ROM done-gate extended RPLY past the fixed count;
@@ -158,7 +159,7 @@ module ref037_soc_tb;
     end
 
     // ---- the REAL integration module (ROM/IO FSM + dp + arbiter + ctrl) ------
-    reg  romprog;                    // +romprog: ROM-in-SDRAM mode (rom_ext_en)
+    reg  romprog;                    // +romprog: program in the SDRAM ROM region
     reg  bootload;                   // +bootload: populate SDRAM through epcs_boot
     wire init_done;
     wire s_cke, s_cs_n, s_ras_n, s_cas_n, s_we_n;
@@ -187,12 +188,11 @@ module ref037_soc_tb;
         .boot_active(boot_active), .boot_done(boot_done), .boot_ok(boot_ok)
     );
 
-    qbus_mem_sdram #(.MEMFILE("boot_stub.hex")) u_ms (
+    qbus_mem_sdram u_ms (
         .cpu_clk  (~clk),            // as ocbk_top: FSM on the inverted CPU clock
         .reset    (~dclo),
         .init_n   (init),            // peripheral-register reset (Phase 6)
         .kbd_down (1'b0),            // no keyboard in this oracle
-        .rom_ext_en(romprog),
         .boot_active(boot_active),
         .bw_req   (bw_req),
         .bw_addr  (bw_addr),
@@ -311,7 +311,7 @@ module ref037_soc_tb;
 
     // ---- program preload -------------------------------------------------------
     // One word table (identical to ref037_tb.v). Default: program in SDRAM RAM
-    // space at 001000, bootstrap from the on-chip stub ROM. +romprog: bootstrap
+    // space at 001000, bootstrap JMP in the SDRAM ROM region. +romprog: bootstrap
     // AND program in the SDRAM ROM region (words 0x4000+ = BK 100000+).
     reg [15:0] prog [0:16'h2F];
     integer ii;
@@ -381,6 +381,12 @@ module ref037_soc_tb;
             for (ii = 0; ii < 16'h30; ii = ii + 1)
                 u_mem.mem[16'h4100 + ii] = prog[ii];
         end else begin
+            // Default: program in SDRAM RAM at 001000; the bootstrap JMP lives in
+            // the SDRAM ROM region (the CPU boots at 100000 = SDRAM word 0x4000).
+            // Same fixed-N_ROM fetch as the old on-chip stub -> golden_037.txt
+            // unchanged (the bootstrap is outside the measured RAM window).
+            u_mem.mem[16'h4000] = 16'o000137;    // JMP @#001000 (RAM program)
+            u_mem.mem[16'h4001] = 16'o001000;
             for (ii = 0; ii < 16'h30; ii = ii + 1)
                 u_mem.mem[16'h100 + ii] = prog[ii];
         end

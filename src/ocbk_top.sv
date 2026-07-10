@@ -79,7 +79,8 @@ module ocbk_top (
     output logic        pLedPwr,   // red power LED (1 = on)
     input  logic [7:0]  pDip,      // DIP switches (ON = low); [0] = free (was
                                     // screen_mode, now the Print Screen key),
-                                    // [1] = force on-chip test ROM
+                                    // [1] = free (was force on-chip test ROM,
+                                    // removed with the on-chip ROM fallback)
     input  logic        pSltRst_n, // reset button (slot RESET net; low = pressed)
 
     // ---- PS/2 keyboard (receive-only; pins pulled up, driven Z) ----------
@@ -214,16 +215,6 @@ module ocbk_top (
     always_ff @(posedge sys_clk) smode_sr <= {smode_sr[0], key_scrmode};
     wire screen_mode = smode_sr[1];
 
-    // --- DIP 2: force the on-chip test ROM (Phase-4 regression image) --------
-    // Sampled ONLY while the CPU is in reset (initial hold or the reset button):
-    // flipping DIP 2 mid-run would switch the ROM source under the running CPU.
-    logic [1:0] dip2_sr;
-    logic       dip2_test;
-    always_ff @(posedge cpu_clk) begin
-        dip2_sr <= {dip2_sr[0], ~pDip[1]};
-        if (!dclo_n) dip2_test <= dip2_sr[1];
-    end
-
     // --- EPCS boot loader (flash blob -> SDRAM ROM region, before CPU release)
     logic        boot_active, boot_done, boot_ok;
     logic        bw_req, bw_gnt;
@@ -258,11 +249,11 @@ module ocbk_top (
         .data0out (spi_miso)
     );
 
-    // ROM source: the loaded SDRAM image unless the blob failed or DIP2 forces
-    // the on-chip test ROM. Quasi-static: settles before the CPU leaves reset.
-    wire rom_ext_en = boot_ok && !dip2_test;
-
-    // --- init_done + boot_done synchronised into the CPU-clock domain -------
+    // --- init_done + boot_done + boot_ok synced into the CPU-clock domain ---
+    // ROM is always the loaded SDRAM image: there is no on-chip fallback, so a
+    // failed EPCS boot (boot_ok=0) holds the CPU in reset forever (the reset
+    // sequencer below gates on bo_sync). Quasi-static: all settle before the
+    // CPU leaves reset. boot_ok is valid by the time boot_done rises.
     logic id_meta, id_sync;
     always_ff @(posedge cpu_clk or negedge locked) begin
         if (!locked) {id_meta, id_sync} <= 2'b00;
@@ -272,6 +263,11 @@ module ocbk_top (
     always_ff @(posedge cpu_clk or negedge locked) begin
         if (!locked) {bd_meta, bd_sync} <= 2'b00;
         else         {bd_meta, bd_sync} <= {boot_done, bd_meta};
+    end
+    logic bo_meta, bo_sync;
+    always_ff @(posedge cpu_clk or negedge locked) begin
+        if (!locked) {bo_meta, bo_sync} <= 2'b00;
+        else         {bo_meta, bo_sync} <= {boot_ok, bo_meta};
     end
 
     // --- soft reset: the reset button (slot RESET net, external pull-up) -----
@@ -303,8 +299,10 @@ module ocbk_top (
             rstc   <= 4'd0;
             dclo_n <= 1'b0;
             aclo_n <= 1'b0;
-        end else if (!id_sync || !bd_sync || warm_rst_req) begin
-            rstc   <= 4'd0;          // hold CPU in reset until SDRAM + ROM ready
+        end else if (!id_sync || !bd_sync || !bo_sync || warm_rst_req) begin
+            rstc   <= 4'd0;          // hold CPU in reset until SDRAM init + a
+                                     // VALID ROM load (bo_sync); a failed EPCS
+                                     // boot holds here forever (no on-chip ROM)
             dclo_n <= 1'b0;
             aclo_n <= 1'b0;
         end else begin
@@ -488,12 +486,11 @@ module ocbk_top (
     wire [15:0] bus_addr;
     wire        fetch_stb;
     wire        spk_bit;       // BK speaker level (bit 6 of last 177716 write)
-    qbus_mem_sdram #(.MEMFILE("mem/ram_test.hex")) u_mem (
+    qbus_mem_sdram u_mem (
         .cpu_clk  (cpu_clk_n),      // ROM/IO wait FSM advances on the inverted CPU clock
         .reset    (~dclo_n),
         .init_n   (init_n),
         .kbd_down (key_down),       // 177716 bit 6 (active low at the register)
-        .rom_ext_en(rom_ext_en),
         .boot_active(boot_active),
         .bw_req   (bw_req),
         .bw_addr  (bw_addr),
@@ -646,13 +643,6 @@ module ocbk_top (
         .pSltBdir_n()
     );
 
-    // ---- liveness --------------------------------------------------------
-    // Reached the SUCCESS self-loop at byte 100004 (RAM test passed; sticky).
-    logic reached_loop;
-    always_ff @(posedge cpu_clk_n or negedge dclo_n) begin
-        if (!dclo_n)                                   reached_loop <= 1'b0;
-        else if (fetch_stb && bus_addr == 16'o100004)  reached_loop <= 1'b1;
-    end
 
     // System heartbeat off the PLL (CPU-independent liveness).
     logic [24:0] hb;
@@ -661,14 +651,13 @@ module ocbk_top (
         else         hb <= hb + 1'b1;
     end
 
-    // pLedPwr: normal boot = solid once the real ROM is loaded and selected;
-    // fallback (DIP2 / blob failure) = the Phase-4 RAM-test success latch.
-    // pLed[6]: init_done, but BLINKS if the boot blob failed validation.
+    // pLedPwr: the combined power/boot-status LED - solid once SDRAM init is
+    // done, but BLINKS if the boot blob failed validation (the CPU is then held
+    // in reset). Dark only during the ~200 us SDRAM init at power-on.
     wire boot_fail = boot_done && !boot_ok;
-    assign pLedPwr = rom_ext_en | reached_loop;
-    // pLed[7]: PLL heartbeat.  pLed[6]: init_done (BLINKS on boot-blob failure).
-    // pLed[0]: BK speaker activity (solid while a tone plays; audio bring-up tap).
-    // pLed[5:1]: unused (the transaction counter was removed).
-    assign pLed    = {hb[24], boot_fail ? hb[22] : init_done, 4'b0, 1'b0, spk_active};
+    assign pLedPwr = boot_fail ? hb[22] : init_done;
+    // pLed[7]: PLL heartbeat.  pLed[0]: BK speaker activity (solid while a tone
+    // plays; audio bring-up tap).  pLed[6:1]: unused.
+    assign pLed    = {hb[24], 6'b0, spk_active};
 
 endmodule

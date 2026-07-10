@@ -2,21 +2,21 @@
 //
 // Supersedes qbus_sdram for the integrated top. Under Strategy A the 037
 // (va_037_sync) owns RAM RPLY and its cycle-stealing timing; this block provides:
-//   * ROM 100000-177577 + I/O on-chip decode, with the fixed N_ROM reply (the 037
+//   * ROM 100000-177577 + I/O decode, with the fixed N_ROM reply (the 037
 //     never sees these - they are outside its DRAM), driving rply_n itself; and
 //   * the RAM 000000-077777 DATA path into the board SDRAM through sdram_arbiter +
 //     cpu_sdram_dp, producing mem_ready for the 037's RPLY done-gate.
 // RAM RPLY is NOT driven here (va_037_sync drives it, gated by mem_ready).
 //
-// Phase 5 ROM source (rom_ext_en):
-//   0 = the on-chip ROM_WORDS image (the boot-fallback / DIP-selected test ROM);
-//   1 = ROM reads are served from SDRAM through the same cpu_sdram_dp port-0 path
-//       as RAM (linear map: ROM word at SDRAM word addr[15:1] = 0x4000-0x7F7F).
-//       The reply keeps the fixed N_ROM count but is done-gated on mem_ready -
-//       a late SDRAM word EXTENDS RPLY (mirroring the 037's RAM gate) instead of
-//       latching stale data. ROM is not 037-arbitrated (real BK mask ROM is not
-//       cycle-stolen); ROM writes are replied to and ignored in both modes (a
-//       real BK would bus-timeout -> trap 4; fidelity deferred to Phase 9).
+// ROM source (Phase 5): ROM reads are served from SDRAM through the same
+// cpu_sdram_dp port-0 path as RAM (linear map: ROM word at SDRAM word
+// addr[15:1] = 0x4000-0x7F7F). The reply keeps the fixed N_ROM count but is
+// done-gated on mem_ready - a late SDRAM word EXTENDS RPLY (mirroring the 037's
+// RAM gate) instead of latching stale data. ROM is not 037-arbitrated (real BK
+// mask ROM is not cycle-stolen); ROM writes are replied to and ignored (a real
+// BK would bus-timeout -> trap 4; fidelity deferred to Phase 9). There is no
+// on-chip ROM fallback: a failed EPCS boot holds the CPU in reset (see
+// ocbk_top), so ROM is always the loaded SDRAM image.
 //
 // The 037's own registers (177664 scroll) are owned by va_037_sync, the
 // keyboard block 177660-177663 by bk_kbd014 (Phase 6, behind the 037's nBS
@@ -35,8 +35,6 @@
 // directly. The Phase-4 video clients (readout / 037 fetch / FB write, all sclk
 // domain) pass through to arbiter ports 1/2/3 via the v1_*/v2_*/v3_* ports.
 module qbus_mem_sdram #(
-    parameter         MEMFILE     = "mem/ram_test.hex",
-    parameter integer ROM_WORDS   = 256,
     parameter int     CLK_FREQ_HZ = 96_650_000,
     parameter int     ROW_BITS    = 13,
     parameter int     COL_BITS    = 9,
@@ -50,7 +48,6 @@ module qbus_mem_sdram #(
     input  logic        reset,      // active high (= ~dclo_n)
     input  logic        init_n,     // Q-bus nINIT: peripheral-register reset
     input  logic        kbd_down,   // any-key-held level -> 177716 bit 6 (inverted)
-    input  logic        rom_ext_en, // 1 = serve ROM reads from SDRAM (quasi-static)
 
     // ---- SDRAM domain ---------------------------------------------------
     input  logic        sclk,       // sys_clk (96.65 MHz)
@@ -111,11 +108,6 @@ module qbus_mem_sdram #(
 );
 
     import qbus_pkg::*;
-    localparam int unsigned ROM_AW = $clog2(ROM_WORDS);
-
-    // ---- on-chip ROM ----------------------------------------------------
-    logic [15:0] rom [0:ROM_WORDS-1];
-    initial $readmemh(MEMFILE, rom);
 
     // ---- address latch (transparent on SYNC; slow logic clock, SDC-cut) --
     logic [15:0] addr;
@@ -142,8 +134,8 @@ module qbus_mem_sdram #(
                            && (addr[15:2] != (16'o177674 >> 2))
                            && !((addr >= CPUREG_LO) && (addr <= CPUREG_HI));
 
-    // ROM source select: external (SDRAM via cpu_sdram_dp) vs on-chip image.
-    wire sel_romx = sel_rom && rom_ext_en;      // SDRAM-backed ROM access
+    // ROM reads are always served from SDRAM through cpu_sdram_dp (port 0).
+    wire sel_romx = sel_rom;
 
     // ---- ROM / I/O read data --------------------------------------------
     logic sel1_wflag;   // 177716 bit 2: set on write, cleared after read
@@ -154,15 +146,13 @@ module qbus_mem_sdram #(
     // on sys_clk below - the ROM/IO wait FSM can't see the write (see there).
     initial spk_bit = 1'b0;
 
-    wire [15:0]        rom_off = addr - RAM_TOP;
-    wire [ROM_AW-1:0]  rom_idx = rom_off[ROM_AW:1];
-    wire               rom_hit = (rom_off[15:1] < ROM_WORDS);
-    wire [15:0] rom_word = rom_hit ? rom[rom_idx] : 16'o000000;
     wire [15:0] io_word  =
         (addr == REG_SYS) ? (SYS_START | (sel1_wflag ? 16'o000004 : 16'o0)
                                        | (kbd_down   ? 16'o0 : 16'o000100)) :
         16'o000000;
-    wire [15:0] rd_romio = sel_rom ? rom_word : io_word;
+    // ROM read data rides the SDRAM datapath (u_dp drives ad_n); this FSM only
+    // latches/drives I/O read data.
+    wire [15:0] rd_romio = io_word;
 
     // =====================================================================
     // RAM datapath: cpu_sdram_dp -> sdram_arbiter (port 0) -> sdram_ctrl

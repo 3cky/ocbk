@@ -32,7 +32,6 @@ module spk_capture_tb;
         .reset     (reset),
         .init_n    (1'b1),
         .kbd_down  (1'b0),
-        .rom_ext_en(1'b0),
         .sclk      (sclk),
         .srst_n    (1'b1),
         .init_done (),

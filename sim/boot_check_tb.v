@@ -169,12 +169,11 @@ module boot_check_tb;
     wire [12:0] s_addr;
     wire [DW-1:0] s_dq;
 
-    qbus_mem_sdram #(.MEMFILE("ref037/boot_stub.hex")) u_ms (
+    qbus_mem_sdram u_ms (
         .cpu_clk  (~clk),
         .reset    (~dclo),
         .init_n   (init),            // peripheral-register reset (Phase 6)
         .kbd_down (1'b0),            // keyboard idle in the boot smoke
-        .rom_ext_en(1'b1),           // the real ROM lives in SDRAM
         .boot_active(1'b0),
         .bw_req   (1'b0),
         .bw_addr  ({AB{1'b0}}),

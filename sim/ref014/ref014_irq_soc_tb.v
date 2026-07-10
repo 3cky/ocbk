@@ -3,7 +3,7 @@
 // program as ref014_irq_ref_tb.v, but on the integrated SoC stack -
 //
 //   vm1 CPU + va_037_sync (RAM RPLY / stealing / nBS) + qbus_mem_sdram
-//   (ROM-in-SDRAM, rom_ext_en=1) + sdram_model + behavioral bk_kbd014
+//   (ROM-in-SDRAM) + sdram_model + behavioral bk_kbd014
 //   + the synthetic port-2 saturator (as ref037_soc_tb)
 //
 // Must reproduce golden_kbd.txt (generated ONLY by the netlist reference
@@ -132,12 +132,11 @@ module ref014_irq_soc_tb;
     wire        fetch_stb;
     wire [DW-1:0] v_rdata_nc;
 
-    qbus_mem_sdram #(.MEMFILE("../ref037/boot_stub.hex")) u_ms (
+    qbus_mem_sdram u_ms (
         .cpu_clk  (~clk),
         .reset    (~dclo),
         .init_n   (init),
         .kbd_down (key_down),
-        .rom_ext_en(1'b1),           // bootstrap + HALT vector in SDRAM ROM
         .boot_active(1'b0),
         .bw_req   (1'b0),
         .bw_addr  ({AB{1'b0}}),

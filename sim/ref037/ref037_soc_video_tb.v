@@ -206,7 +206,7 @@ module ref037_soc_video_tb;
     );
 
     // ---- the REAL integration module (ROM/IO FSM + dp + arbiter + ctrl) ------
-    reg  romprog;                    // +romprog: ROM-in-SDRAM mode (rom_ext_en)
+    reg  romprog;                    // +romprog: program in the SDRAM ROM region
     wire s_cke, s_cs_n, s_ras_n, s_cas_n, s_we_n;
     wire [1:0]  s_ba, s_dqm;
     wire [12:0] s_addr;
@@ -214,12 +214,11 @@ module ref037_soc_video_tb;
     wire [15:0] bus_addr;
     wire        fetch_stb;
 
-    qbus_mem_sdram #(.MEMFILE("boot_stub.hex")) u_ms (
+    qbus_mem_sdram u_ms (
         .cpu_clk  (~clk),            // as ocbk_top: FSM on the inverted CPU clock
         .reset    (~dclo),
         .init_n   (init),            // peripheral-register reset (Phase 6)
         .kbd_down (1'b0),            // no keyboard in this oracle
-        .rom_ext_en(romprog),
         .boot_active(1'b0),          // loader path gated in ref037_soc_tb
         .bw_req   (1'b0),
         .bw_addr  ({AB{1'b0}}),
@@ -376,6 +375,11 @@ module ref037_soc_video_tb;
             for (ii = 0; ii < 16'h30; ii = ii + 1)
                 u_mem.mem[16'h4100 + ii] = prog[ii];
         end else begin
+            // Default: program in SDRAM RAM at 001000; bootstrap JMP in the SDRAM
+            // ROM region (CPU boots at 100000 = SDRAM word 0x4000). Same fixed-
+            // N_ROM fetch as the old on-chip stub -> golden window unchanged.
+            u_mem.mem[16'h4000] = 16'o000137;    // JMP @#001000 (RAM program)
+            u_mem.mem[16'h4001] = 16'o001000;
             for (ii = 0; ii < 16'h30; ii = ii + 1)
                 u_mem.mem[16'h100 + ii] = prog[ii];
         end
