@@ -334,9 +334,13 @@ register/behaviour reference for the exact bit fields):
   The two banked windows share the same 8 RAM pages; the *second* window can map
   either a RAM page or one of the ROM pages.
 - Banking is driven by the **177716 (SEL1)** register — a write reconfigures the
-  map only when its ENABLE bit is set, and the reset default re-inits the map
-  (INIT-keyed, like every peripheral register). The displayed **video page +
-  palette live on a separate register (177662)**, not 177716.
+  map only when its ENABLE bit is set (bit 11), and the reset default re-inits
+  the map (INIT-keyed, like every peripheral register). The displayed **video
+  page + palette live on a separate register (177662)**, not 177716.
+  **Speaker interaction:** a write with bit 11 SET is a banking write and must
+  NOT update `spk_bit` (BkEmu `Speaker.BK0011M_ENABLE_BIT`; MiSTer gates its
+  `spk_out` the same way) — gate the `qbus_mem` DOUT-window speaker capture
+  when the 0011M mapper lands (contract comment is at the capture site).
 - **Capacity is a non-issue:** the SDRAM dwarfs everything the design uses (the
   BK-0010 RAM + ROM + two framebuffers occupy a fraction of a percent). Phase 7
   is not about finding room — it is about **address translation**.

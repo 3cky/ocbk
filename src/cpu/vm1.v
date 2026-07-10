@@ -59,8 +59,17 @@ assign pin_sack_n    = pin_sack_out ? 1'b0 : 1'bZ;
 assign pin_rply_n    = pin_rply_out ? 1'b0 : 1'bZ;
 assign pin_dmr_n     = pin_dmr_out  ? 1'b0 : 1'bZ;
 assign pin_bsy_n     = pin_bsy_out  ? 1'b0 : 1'bZ;
-assign pin_sel_n[1]  = pin_sel_out[1] ? 1'b0 : 1'bZ;
-assign pin_sel_n[2]  = pin_sel_out[2] ? 1'b0 : 1'bZ;
+//
+// OCBK LOCAL HOOK (keep on upstream re-sync, like sdram_ctrl's cmd_be):
+// pin_sel_n[2:1] are PUSH-PULL here, not the upstream open-collector
+// `? 1'b0 : 1'bZ`. qbus_mem consumes nSEL1/nSEL2 for the 177716/177714
+// register decode, and a lone Z-idle OC driver feeding on-chip logic
+// degenerates to stuck-asserted in Quartus on Cyclone I (no internal
+// tri-state/pull-up - the virq_n trap, see CLAUDE.md). The CPU is the
+// only possible SEL driver, so push-pull is lossless.
+//
+assign pin_sel_n[1]  = ~pin_sel_out[1];
+assign pin_sel_n[2]  = ~pin_sel_out[2];
 
 `ifdef CONFIG_VM1_CORE_REG_USES_RAM
 defparam core.VM1_CORE_REG_USES_RAM = `CONFIG_VM1_CORE_REG_USES_RAM;

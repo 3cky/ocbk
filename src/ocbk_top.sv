@@ -332,7 +332,9 @@ module ocbk_top (
                                      // (NOT tri1 - a lone Z-idle OC net degenerates to
                                      // stuck-asserted on Cyclone I; see bk_kbd014 footer)
     wire        dmgo_n, bsy_n;
-    wire [2:1]  sel_n;
+    wire [2:1]  sel_n;              // CPU nSEL1/nSEL2 (177716/177714 selects) ->
+                                     // qbus_mem; push-pull from the vm1.v local
+                                     // hook, same rationale as virq_n above
     wire        nbs_n;              // 037 keyboard-block select (177660-177663)
 
     // RAM RPLY + its cycle-stealing timing come from the retimed 037; ROM/IO reply
@@ -488,6 +490,8 @@ module ocbk_top (
         .reset    (~dclo_n),
         .init_n   (init_n),
         .kbd_down (key_down),       // 177716 bit 6 (active low at the register)
+        .sel1_n   (sel_n[1]),       // CPU register selects (push-pull, see the
+        .sel2_n   (sel_n[2]),       //   vm1.v local hook): 177716 / 177714
         .boot_active(boot_active),
         .bw_req   (bw_req),
         .bw_addr  (bw_addr),

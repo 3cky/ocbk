@@ -102,7 +102,11 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
 
 - The `vm1` (1801ВМ1) core is **vendored** under `src/cpu/` from
   `~/projects/other/fpga/cpu11/vm1/hdl/syn`. Don't edit it casually; re-sync from
-  upstream if needed. Core config is via global Verilog macros (see below).
+  upstream if needed, but **keep the marked local hook in `vm1.v`**: `pin_sel_n`
+  is push-pull there (upstream is open-collector) because `qbus_mem` consumes
+  nSEL1/nSEL2 for the 177716/177714 decode and a lone Z-idle OC driver is the
+  Cyclone-I stuck-asserted trap (see the virq_n gotcha). Core config is via
+  global Verilog macros (see below).
 - The Q-bus is **inverted / active-low / open-collector**, carried as shared
   tri-state nets at the `cpu_test` level (no SystemVerilog `interface` — neither
   Quartus 11.0 nor Icarus handle tri-state interface members reliably). Every
@@ -163,9 +167,12 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   - **СТОП is trap-to-4 on a BK-0010 with BASIC** (per the schematic/user):
     nothing decodes 177674/177676, the HALT entry's PC/PSW stores bus-timeout
     (`qbto`, 56..63 clocks) and the CPU traps through RAM vector 4 — the
-    160002 word is never used as a vector. `qbus_mem` excludes
-    177674–177677 from `sel_io` to reproduce this; never "helpfully" reply
-    there. СТОП itself is a fixed 64-cpu_clk one-shot on nIRQ1;
+    160002 word is never used as a vector. `qbus_mem`'s I/O decode is the
+    CPU's own nSEL1/nSEL2 pins (177716/177714 only — the registers whose read
+    data `ad_oe` delegates externally; everything else in the I/O page,
+    177674/76 included, is undecoded and bus-times-out, exactly as a real BK);
+    never "helpfully" reply there. СТОП itself is a fixed 64-cpu_clk one-shot
+    on nIRQ1;
   - `N_KBD`/`N_IAK` = 1 (the async chip replies within the strobe cycle) and
     the 177660 **write** reply is combinational (`wr_fast`) — both pinned by
     `golden_kbd.txt`; vm1 slaves must hold read data past DIN release (the

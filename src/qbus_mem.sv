@@ -18,16 +18,21 @@
 // on-chip ROM fallback: a failed EPCS boot holds the CPU in reset (see
 // ocbk_top), so ROM is always the loaded SDRAM image.
 //
-// The 037's own registers (177664 scroll) are owned by va_037_sync, the
-// keyboard block 177660-177663 by bk_kbd014 (Phase 6, behind the 037's nBS
-// decode), and the CPU-internal block 177700-177713 (CSR/error/timer) is
-// decoded, replied and data-driven by the 1801ВМ1 itself - all are excluded
-// from the I/O decode here to avoid a double reply / bus contention. I/O
-// stubs served here:
+// The I/O decode here comes from the CPU's own nSEL1/nSEL2 register-select
+// pins (as on the real BK board): only the two registers the 1801ВМ1 delegates
+// externally - 177716 (system, nSEL1) and 177714 (parallel port, nSEL2) - are
+// served; EVERYTHING else is left undecoded and bus-times-out (qbto -> trap 4),
+// which is authentic BkEmu behaviour. This needs no carve-outs: the 037 scroll
+// (177664), the keyboard block (177660-663) and the CPU-internal block
+// (177700-717, which the 1801ВМ1 decodes/replies/data-drives itself) never
+// assert a SEL pin, so there is never a double reply or an AD fight. I/O
+// served here:
 //   177716 = SYS_START | bit-2 write-flag (set on write, cleared after read;
 //            INIT-keyed, as every BK peripheral register) | bit-6 = any-key-
 //            down from the keyboard translator, ACTIVE LOW (1 = no key held);
-//   all other decoded I/O reads return 0 (BkEmu register semantics).
+//   177714 = reply, read 0, writes ignored (Covox/joystick/AY not modelled).
+// nSEL covers BOTH bytes of its register (the CPU decodes addr[3:1]), so odd-
+// byte accesses (177715/177717) are served with the full register word too.
 //
 // Domains: the ROM/IO wait-state FSM runs on cpu_clk (fixed N_ROM, as the validated
 // qbus_sdram FSM); the datapath/arbiter/controller run on sclk (sys_clk). Bus
@@ -48,6 +53,8 @@ module qbus_mem #(
     input  logic        reset,      // active high (= ~dclo_n)
     input  logic        init_n,     // Q-bus nINIT: peripheral-register reset
     input  logic        kbd_down,   // any-key-held level -> 177716 bit 6 (inverted)
+    input  logic        sel1_n,     // CPU nSEL1: 177716/17 register select
+    input  logic        sel2_n,     // CPU nSEL2: 177714/15 register select
 
     // ---- SDRAM domain ---------------------------------------------------
     input  logic        sclk,       // sys_clk (96.65 MHz)
@@ -116,23 +123,36 @@ module qbus_mem #(
 
     wire sel_ram = !sync_n && (addr <  RAM_TOP);
     wire sel_rom = !sync_n && (addr >= RAM_TOP) && (addr < IO_BASE);
-    // I/O here excludes the 037's own scroll register (177664, owned by
-    // va_037_sync), the keyboard block 177660-177663 (owned by bk_kbd014
-    // behind the 037's nBS window - same [15:2] compare), the CPU-internal
-    // block 177700-177713 (the 1801ВМ1 replies and drives data for those
-    // itself - an external reply/drive there is a bus fight; MONITOR touches
-    // the internal timer constantly) AND 177674-177677: no BK device lives
-    // there, and the vm1's IRQ1/HALT entry writes its PC/PSW to 177674/676 -
-    // on a real BK nothing replies, the write times out (qbto, 56..63 CPU
-    // clocks) and the CPU takes trap 4 instead of completing the HALT entry.
-    // That trap-4 path IS the authentic СТОП behaviour with the BASIC ROM
-    // (BkEmu decodes nothing there either); replying would send the CPU
-    // through the never-used 160002 "vector" into garbage. Pinned by the
-    // Phase-6 interrupt-latency golden.
-    wire sel_io  = !sync_n && (addr >= IO_BASE) && (addr != 16'o177664)
-                           && (addr[15:2] != (16'o177660 >> 2))
-                           && (addr[15:2] != (16'o177674 >> 2))
-                           && !((addr >= CPUREG_LO) && (addr <= CPUREG_HI));
+    // ---- I/O decode: the CPU's own nSEL1/nSEL2 register-select pins --------
+    // The only I/O the CPU delegates to us is its nSEL pair: nSEL1 = 177716/17
+    // (system register), nSEL2 = 177714/15 (programmable parallel port -
+    // Covox/joystick/AY). The 1801ВМ1 decodes them itself during the address
+    // phase (sel_16/sel_14 register on clk_p while SYNC is idle, so they are
+    // stable strictly before our negedge-SYNC addr latch and frozen for the
+    // whole SYNC window) and withholds its own AD drive for exactly these
+    // reads (ad_oe), leaving the read data to us - the same wiring as the
+    // real BK board, where nSEL1 gates the discrete 177716 logic. Gating with
+    // !sync_n below makes the timing identical to the old SYNC-latched
+    // address compare (goldens unchanged). The vendored vm1.v drives the pins
+    // push-pull via a marked local hook (a lone Z-idle OC driver feeding
+    // on-chip logic degenerates to stuck-asserted on Cyclone I - the virq_n
+    // trap); keep that hook on upstream re-syncs.
+    //   nSEL1 (177716, either byte): io_word = SYS_START | write-flag | kbd.
+    //   nSEL2 (177714, either byte): reply, read 0, writes ignored.
+    // Everything ELSE is UNDECODED: no reply -> the CPU's qbto timer expires
+    // (56..63 clocks) -> trap 4. That is authentic BkEmu behaviour (it times
+    // out on ALL undecoded addresses, not just the system page) and subsumes
+    // every old carve-out for free: 177664 (037), 177660-663 (keyboard) and the
+    // whole 177700-717 CPU-internal block never assert a SEL pin, so we
+    // never fight them; and the СТОП path (nothing decodes 177674/76 -> the
+    // IRQ1/HALT-entry PC/PSW write there times out -> trap 4 with the BASIC ROM)
+    // is now just a consequence of not decoding it, not a special exclusion. The
+    // previous exclude-list "reply 0 to the whole page minus holes" was
+    // inauthentic - it handed MONITOR phantom device responses on its presence
+    // probes. Phase-8 SMK512 note: its registers (177130/177132, AY, ...) live
+    // OUTSIDE this page, INSIDE the ROM window - they get their own positive
+    // decode carved out of sel_rom there, not here (no SEL pin involved).
+    wire sel_io  = !sync_n && (!sel1_n || !sel2_n);
 
     // ROM reads are always served from SDRAM through cpu_sdram_dp (port 0).
     wire sel_romx = sel_rom;
@@ -146,9 +166,13 @@ module qbus_mem #(
     // on sys_clk below - the ROM/IO wait FSM can't see the write (see there).
     initial spk_bit = 1'b0;
 
+    // nSEL1 selects the register for BOTH its bytes, so a byte read of 177717
+    // gets the full word too (the CPU extracts the byte; BkEmu semantics) -
+    // and its driven-low bit 15 agrees with the 037's start-vector AD15 assist
+    // instead of fighting it.
     wire [15:0] io_word  =
-        (addr == REG_SYS) ? (SYS_START | (sel1_wflag ? 16'o000004 : 16'o0)
-                                       | (kbd_down   ? 16'o0 : 16'o000100)) :
+        !sel1_n ? (SYS_START | (sel1_wflag ? 16'o000004 : 16'o0)
+                             | (kbd_down   ? 16'o0 : 16'o000100)) :
         16'o000000;
     // ROM read data rides the SDRAM datapath (u_dp drives ad_n); this FSM only
     // latches/drives I/O read data.
@@ -260,6 +284,16 @@ module qbus_mem #(
                     drive_data <= 1'b0;
                     reply      <= 1'b0;
                     if (!sync_n && selected && (is_read || is_write)) begin
+                        // 177716 bit-2 write-flag: set at THIS detection edge,
+                        // not the reply point - the vm1 self-replies every
+                        // write in the 177700-177717 block, so the DOUT window
+                        // closes before our reply point (the S_WAIT stand-down
+                        // below) and detection is the only edge where this FSM
+                        // observes the write. Any write sets it, word or byte
+                        // (nSEL1 covers 177717 too) - BkEmu
+                        // Sel1RegisterSystemBits semantics.
+                        if (is_write && !sel1_n)
+                            sel1_wflag <= 1'b1;
                         wcnt  <= 3'(N_ROM-2);
                         state <= S_WAIT;
                     end
@@ -289,10 +323,13 @@ module qbus_mem #(
                                 drive_data <= !sel_romx;   // SDRAM ROM data: u_dp drives
                                 fetch_stb  <= 1'b1;
                             end
-                            // I/O register side effects at the reply point (BkEmu
-                            // semantics; rdata latched above still sees the old flag)
-                            if (sel_io && addr == REG_SYS)
-                                sel1_wflag <= is_write;    // set on write, clear on read
+                            // 177716 write-flag: cleared after read (rdata
+                            // latched above still sees the old value; the SET
+                            // side lives at the S_IDLE detection edge - writes
+                            // never reach this reply point). Byte reads of
+                            // 177717 clear it too (BkEmu clears on any read).
+                            if (is_read && !sel1_n)
+                                sel1_wflag <= 1'b0;
                             state <= S_REPLY;
                         end
                     end else
@@ -315,14 +352,22 @@ module qbus_mem #(
     // ---- BK speaker capture (177716 bit 6) ------------------------------
     // The vm1 self-replies for the whole 177700-177717 block (sel177x, its own
     // pin_rply_out), so a 177716 write completes on the CPU's fast internal
-    // reply and the ROM/IO wait FSM above stands down before its reply point -
-    // it never observes the write. Capture the write data straight off the bus
+    // reply and the ROM/IO wait FSM above stands down before its reply point
+    // (it observes the write only at its S_IDLE detection edge, where the
+    // 177716 write-flag is set). Capture the write data straight off the bus
     // during the DOUT window on the fast sys_clk instead, independent of any
-    // reply. addr==REG_SYS (177716, even) => word or low-byte write, so the
-    // true bit 6 (~ad_n[6]) is always the intended data bit. Never runtime-
-    // reset (software-owned latch; survives nINIT and warm reset).
+    // reply. nSEL1 with addr[0]==0 => word or low-byte write, so the true
+    // bit 6 (~ad_n[6]) is always the intended data bit (a 177717 high-byte
+    // write must NOT touch it). Never runtime-reset (software-owned latch;
+    // survives nINIT and warm reset). Bit 6 only = the BkEmu Speaker contract
+    // for a BK-0010 (MiSTer's extra spk_out bits are its tape-monitor mixing,
+    // not register semantics). PHASE-7 (BK-0011M) CONTRACT: word writes with
+    // bit 11 SET are memory-BANKING writes and must NOT update the speaker
+    // (BkEmu Speaker.BK0011M_ENABLE_BIT; MiSTer agrees) - when the 0011M
+    // mapper lands here, gate this capture with (addr[0] | ~wdata bit 11
+    // semantics) accordingly.
     always_ff @(posedge sclk) begin
-        if (!sync_n && !dout_n && addr == REG_SYS)
+        if (!sync_n && !dout_n && !sel1_n && !addr[0])
             spk_bit <= ~ad_n[6];
     end
 

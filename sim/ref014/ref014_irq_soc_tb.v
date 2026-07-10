@@ -137,6 +137,8 @@ module ref014_irq_soc_tb;
         .reset    (~dclo),
         .init_n   (init),
         .kbd_down (key_down),
+        .sel1_n   (sel[1]),          // CPU nSEL1/nSEL2 register selects
+        .sel2_n   (sel[2]),
         .boot_active(1'b0),
         .bw_req   (1'b0),
         .bw_addr  ({AB{1'b0}}),

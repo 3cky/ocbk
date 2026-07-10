@@ -20,6 +20,10 @@ module spk_capture_tb;
     assign ad_n = ad_oe ? ad_drive : 16'hzzzz;   // tb == the "CPU" driver
 
     logic sync_n = 1'b1, din_n = 1'b1, dout_n = 1'b1, wtbt_n = 1'b1;
+    // CPU register-select pins (push-pull from the vm1.v hook): the tb models
+    // the core's behaviour - decoded from the address during the address
+    // phase, stable before SYNC falls, held for the whole cycle.
+    logic sel1_n = 1'b1, sel2_n = 1'b1;
     logic reset  = 1'b1;   // = ~dclo_n; held at power-on to init the wait FSM
     wire        spk_bit;
     wire [15:0] bus_addr;
@@ -32,6 +36,8 @@ module spk_capture_tb;
         .reset     (reset),
         .init_n    (1'b1),
         .kbd_down  (1'b0),
+        .sel1_n    (sel1_n),
+        .sel2_n    (sel2_n),
         .sclk      (sclk),
         .srst_n    (1'b1),
         .init_done (),
@@ -57,12 +63,15 @@ module spk_capture_tb;
     task bus_write(input [15:0] a, input [15:0] d);
         begin
             ad_oe = 1'b1; ad_drive = ~a;       // address onto the (inverted) bus
+            sel1_n = !(a[15:1] == (16'o177716 >> 1));   // CPU decodes its SEL
+            sel2_n = !(a[15:1] == (16'o177714 >> 1));   //   pins at address phase
             #6  sync_n = 1'b0;                  // negedge SYNC latches addr = a
             #6  ad_drive = ~d;                  // switch bus to write data
             #4  wtbt_n = 1'b0;                  // WTBT = write at SYNC, byte at DOUT (unused here)
                 dout_n = 1'b1; #1 dout_n = 1'b0;// assert DOUT (data-out phase)
             repeat (4) @(posedge sclk);         // let the sys_clk capture sample
             dout_n = 1'b1; #6 sync_n = 1'b1; wtbt_n = 1'b1; ad_oe = 1'b0;
+            sel1_n = 1'b1; sel2_n = 1'b1;
             repeat (2) @(posedge sclk);
         end
     endtask
@@ -88,6 +97,9 @@ module spk_capture_tb;
         bus_write(16'o177716, 16'o000144); expect_spk(1'b1, "set bit6 (other bits hi)");
         // a write to a different I/O register must not disturb spk_bit
         bus_write(16'o177560, 16'o000000); expect_spk(1'b1, "unrelated write ignored");
+        // a 177717 HIGH-BYTE write asserts nSEL1 but must not touch bit 6
+        // (it lives in the low byte) - pins the addr[0] gate in the capture
+        bus_write(16'o177717, 16'o000000); expect_spk(1'b1, "177717 high-byte write ignored");
         bus_write(16'o177716, 16'o177677); expect_spk(1'b0, "clear via word w/ bit6=0");
         bus_write(16'o177716, 16'o000100); expect_spk(1'b1, "set again");
 
