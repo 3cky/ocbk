@@ -1,0 +1,16 @@
+{
+  "flags": "-f ocbk.f",
+  "index": [
+    {
+      "dirs": [
+        "src"
+      ],
+      "excludeDirs": [
+        "build",
+        "sim",
+        "node_modules"
+      ]
+    }
+  ],
+  "build": "ocbk.f"
+}
