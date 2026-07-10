@@ -118,7 +118,7 @@ leaves `qbus_sdram` owning RPLY). Cycle-accuracy is then *structural* — the 03
 **Done:** reference oracle (`sim/ref037/`, `golden_037.txt`) established the ground-truth
 with-display cycle counts; `src/va_037_sync.sv` (retimed 037, bit-exact vs golden),
 `src/sdram_arbiter.sv` (4-client fixed-priority non-preemptive + `served` mask),
-`src/cpu_sdram_dp.sv` (RAM datapath + done-gate) and `src/qbus_mem_sdram.sv` integrate
+`src/cpu_sdram_dp.sv` (RAM datapath + done-gate) and `src/qbus_mem.sv` integrate
 into `src/ocbk_top.sv` — the 037 owns RAM RPLY, RAM lives in SDRAM via the arbiter, the
 done-gate interlock is in place. The SoC cosim (`ref037_soc_tb`) runs the program from
 SDRAM and reproduces `golden_037.txt` exactly even under worst-case fetch contention
@@ -203,7 +203,7 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   linear `addr[15:1]` map (words 0x4000–0x7F7F, below the framebuffers). ROM is
   always SDRAM-backed (the on-chip ROM fallback was removed). ROM is *not*
   037-arbitrated (real mask ROM is never
-  cycle-stolen): `qbus_mem_sdram` keeps the fixed `N_ROM=2` reply, **done-gated**
+  cycle-stolen): `qbus_mem` keeps the fixed `N_ROM=2` reply, **done-gated**
   on `mem_ready` (a late word extends RPLY; sticky `dbg_romgate` diagnostic).
   Measured worst port-0 read latency: 37 sys_clk under full 4-port video
   contention vs the ~64 sys_clk window — the gate never fires. ROM writes:
@@ -212,7 +212,7 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   reference netlist only) — the same program words executed *from ROM*; key
   property: ROM execution is **flat** (self-loop constant 13 cycles vs the RAM
   loop's 17,15,16,16 beat). The SoC cosims now instantiate the *real*
-  `qbus_mem_sdram` and reproduce both goldens; the video tb holds the flat-13
+  `qbus_mem` and reproduce both goldens; the video tb holds the flat-13
   invariant across 64 display lines of 4-port contention. 9 ref037 diffs total.
 - **EPCS boot loader:** `src/epcs_boot.sv` (SPI mode-0, DCLK = sys_clk/8 =
   12.08 MHz; EPCS4 plain READ 0x03 is only ~20–25 MHz-capable) reads the blob at
@@ -310,7 +310,7 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   bit 6 of the 177716 write (`spk_bit`, a plain software-owned latch, NOT
   nINIT-reset). The
   vm1 self-replies for 177700-177717, so the write is captured **directly in the
-  DOUT window on sys_clk** in `qbus_mem_sdram` (reply-independent — the wait-FSM
+  DOUT window on sys_clk** in `qbus_mem` (reply-independent — the wait-FSM
   never sees it), then `bk_audio` (2-FF resync + **push-pull mono R-2R drive**,
   ocb-test-proven; idle = mid-scale) → board sound DAC `pDac_SL`/`pDac_SR`
   (PIN_105-114/115-120). `pLed[0]` = speaker-activity tap. Oracles: `sim/run_audio.sh`

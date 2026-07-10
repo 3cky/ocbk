@@ -31,7 +31,7 @@ src/sdram_ctrl.sv
 src/sdram_arbiter.sv
 src/va_037_sync.sv
 src/cpu_sdram_dp.sv
-src/qbus_mem_sdram.sv
+src/qbus_mem.sv
 src/ps2_rx.sv
 src/kbd_ps2bk.sv
 src/bk_kbd014.sv

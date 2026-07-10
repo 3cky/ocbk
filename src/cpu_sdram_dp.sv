@@ -24,7 +24,7 @@
 // Phase 5: SDRAM-backed ROM reads (sel_romr) ride the same read path - the linear
 // addr[15:1] map puts ROM 100000-177577 at SDRAM words 0x4000-0x7F7F, below the
 // framebuffers. ROM is read-only here: a ROM write (or the DOUT phase of a ROM
-// DATIO) is never issued to the SDRAM - the qbus_mem_sdram front-end replies and
+// DATIO) is never issued to the SDRAM - the qbus_mem front-end replies and
 // ignores it, so nothing in this FSM changes for it.
 module cpu_sdram_dp #(
     parameter int ADDR_BITS = 24,

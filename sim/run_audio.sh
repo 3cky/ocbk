@@ -19,10 +19,10 @@ vvp -n "$SP/audio.vvp" | tee "$SP/out.txt" | grep -E "AUDIO-ERROR|COSIM" || true
 grep -q '^COSIM PASS$' "$SP/out.txt" || { echo "audio DAC unit cosim: FAIL" >&2; exit 1; }
 echo "audio DAC unit cosim: PASS"
 
-# --- Leg 2: 177716-bit-6 speaker capture in qbus_mem_sdram ------------------
+# --- Leg 2: 177716-bit-6 speaker capture in qbus_mem ------------------
 iverilog -g2012 -o "$SP/spk.vvp" -s spk_capture_tb \
    ../src/qbus_pkg.sv ../src/sdram_ctrl.sv ../src/sdram_arbiter.sv \
-   ../src/cpu_sdram_dp.sv ../src/qbus_mem_sdram.sv audio/spk_capture_tb.v \
+   ../src/cpu_sdram_dp.sv ../src/qbus_mem.sv audio/spk_capture_tb.v \
    2>&1 | grep -v 'sorry:' || true
 
 vvp -n "$SP/spk.vvp" | tee "$SP/spk.txt" | grep -E "AUDIO-ERROR|COSIM" || true

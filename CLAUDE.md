@@ -41,7 +41,7 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   *from the ROM region* — ROM is never 037-cycle-stolen, so its self-loop is
   **flat at 13 cycles**; the RAM loop beats 17,15,16,16): the reference netlist,
   the retimed `va_037_sync`, the SoC integration (now instantiating the *real*
-  `qbus_mem_sdram`) with a synthetic port-2 saturator, the `+bootload` run (the
+  `qbus_mem`) with a synthetic port-2 saturator, the `+bootload` run (the
   EPCS loader populates SDRAM through the boot-writer mux, then golden must
   still match), **`ref037_soc_video_tb`** — real video pipeline on all 4
   arbiter ports, golden window exact, then 64 display lines with the loop
@@ -64,7 +64,7 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   `sim/ref014/README.md`). Interrupt latency: the `mem/gen_kbd_test.py`
   program (VIRQ 060/0274 ISRs, masked press, nIRQ1 pulse → **trap 4**, the
   authentic СТОП path) runs on the netlist reference stack →
-  `golden_kbd.txt`, and the SoC stack (va_037_sync + qbus_mem_sdram + SDRAM
+  `golden_kbd.txt`, and the SoC stack (va_037_sync + qbus_mem + SDRAM
   model + bk_kbd014) must match the same golden — this diff calibrated
   `N_KBD`/`N_IAK` (=1) and the write fast path. **Goldens regenerate only
   from netlist runs.**
@@ -163,7 +163,7 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   - **СТОП is trap-to-4 on a BK-0010 with BASIC** (per the schematic/user):
     nothing decodes 177674/177676, the HALT entry's PC/PSW stores bus-timeout
     (`qbto`, 56..63 clocks) and the CPU traps through RAM vector 4 — the
-    160002 word is never used as a vector. `qbus_mem_sdram` excludes
+    160002 word is never used as a vector. `qbus_mem` excludes
     177674–177677 from `sel_io` to reproduce this; never "helpfully" reply
     there. СТОП itself is a fixed 64-cpu_clk one-shot on nIRQ1;
   - `N_KBD`/`N_IAK` = 1 (the async chip replies within the strobe cycle) and
@@ -175,7 +175,7 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   slot pin map lives commented in `ocbk_common.qsf`. Real BK hardware needs an
   external 5V↔3.3V level-shifter (Cyclone I is not 5V-tolerant).
 - On-chip RAM is tight (~239 Kbit). BK RAM (000000–077777) lives in the board
-  **SDRAM** via the 037-fronted arbiter path (`qbus_mem_sdram`; the Phase-2
+  **SDRAM** via the 037-fronted arbiter path (`qbus_mem`; the Phase-2
   `qbus_sdram` is retired from the build but kept for its cosim). The vendored
   `src/sdram_ctrl.sv` (from `ocb-test`) gained a 2-bit `cmd_be` byte mask for
   the BK's byte writes — re-sync from upstream but keep that hook.
@@ -249,7 +249,7 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   to the CPU clock rising edge, nRPLY to the falling edge.** The core samples
   all of them at `posedge pin_clk_p` with **no synchronizer flops**
   (`vm1_qbus.v` `rply_ack[1]`, `rq[]`, `irq2`/`irq3` edge detectors). RPLY
-  already complies: `qbus_mem_sdram`'s wait FSM runs on `cpu_clk_n`
+  already complies: `qbus_mem`'s wait FSM runs on `cpu_clk_n`
   (falling-edge launch); `va_037_sync` transitions land 1–2 sys_clk after a
   CPU edge (~300 ns setup, deterministic — same divider chain). Any Phase-6+
   interrupt source must put its final flop on `posedge cpu_clk` (2-FF resync

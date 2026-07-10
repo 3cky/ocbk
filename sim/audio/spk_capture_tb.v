@@ -1,6 +1,6 @@
 // ============================================================================
 //  spk_capture_tb - directed oracle for the 177716-bit-6 speaker capture in
-//  qbus_mem_sdram. Drives real Q-bus write cycles (SYNC latches the address,
+//  qbus_mem. Drives real Q-bus write cycles (SYNC latches the address,
 //  DOUT presents the data) to 177716 and checks spk_bit follows bit 6 - the
 //  key point being that the capture must NOT depend on the ROM/IO wait FSM's
 //  reply (the vm1 self-replies for 177700-177717, so the FSM never sees the
@@ -27,7 +27,7 @@ module spk_capture_tb;
 
     integer errors = 0;
 
-    qbus_mem_sdram dut (
+    qbus_mem dut (
         .cpu_clk   (cclk),
         .reset     (reset),
         .init_n    (1'b1),

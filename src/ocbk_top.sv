@@ -339,7 +339,7 @@ module ocbk_top (
     wire        nbs_n;              // 037 keyboard-block select (177660-177663)
 
     // RAM RPLY + its cycle-stealing timing come from the retimed 037; ROM/IO reply
-    // from qbus_mem_sdram. The 037's RPLY (hard-driven) is converted to open-collector
+    // from qbus_mem. The 037's RPLY (hard-driven) is converted to open-collector
     // here so it wire-ANDs onto the shared rply_n. mem_ready is the RAM SDRAM done-gate.
     wire        rply037_n;
     wire        mem_ready;
@@ -486,7 +486,7 @@ module ocbk_top (
     wire [15:0] bus_addr;
     wire        fetch_stb;
     wire        spk_bit;       // BK speaker level (bit 6 of last 177716 write)
-    qbus_mem_sdram u_mem (
+    qbus_mem u_mem (
         .cpu_clk  (cpu_clk_n),      // ROM/IO wait FSM advances on the inverted CPU clock
         .reset    (~dclo_n),
         .init_n   (init_n),

@@ -4,7 +4,7 @@
 // saturator stays alongside as the worst-case upper bound).
 //
 //   vm1 CPU (port 0)  +  va_037_sync  +  the REAL integration module
-//   qbus_mem_sdram (ROM/IO N_ROM FSM + cpu_sdram_dp + sdram_arbiter + sdram_ctrl)
+//   qbus_mem (ROM/IO N_ROM FSM + cpu_sdram_dp + sdram_arbiter + sdram_ctrl)
 //   +  fb_readout (port 1: paced line prefetch, driven by a real 3:2 pixel
 //      clock + vga_out line requests + fb_linebuf)
 //   +  fb_video (ports 2+3: video fetch -> palette -> FB write)
@@ -214,7 +214,7 @@ module ref037_soc_video_tb;
     wire [15:0] bus_addr;
     wire        fetch_stb;
 
-    qbus_mem_sdram u_ms (
+    qbus_mem u_ms (
         .cpu_clk  (~clk),            // as ocbk_top: FSM on the inverted CPU clock
         .reset    (~dclo),
         .init_n   (init),            // peripheral-register reset (Phase 6)

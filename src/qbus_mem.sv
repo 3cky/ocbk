@@ -1,4 +1,4 @@
-// qbus_mem_sdram - Strategy-A memory subsystem (Phase 3 SoC integration).
+// qbus_mem - Strategy-A memory subsystem (Phase 3 SoC integration).
 //
 // Supersedes qbus_sdram for the integrated top. Under Strategy A the 037
 // (va_037_sync) owns RAM RPLY and its cycle-stealing timing; this block provides:
@@ -34,7 +34,7 @@
 // strobes are synchronous to sclk (cpu_clk = sclk/32), so cpu_sdram_dp samples them
 // directly. The Phase-4 video clients (readout / 037 fetch / FB write, all sclk
 // domain) pass through to arbiter ports 1/2/3 via the v1_*/v2_*/v3_* ports.
-module qbus_mem_sdram #(
+module qbus_mem #(
     parameter int     CLK_FREQ_HZ = 96_650_000,
     parameter int     ROW_BITS    = 13,
     parameter int     COL_BITS    = 9,

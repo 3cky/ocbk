@@ -5,7 +5,7 @@
 // The REAL BK-0010.01 ROM blob (mem/boot_blob_flash.hex) is preloaded directly
 // into the SDRAM model ROM region (the EPCS loader path has its own gates:
 // run_epcs_boot.sh + the ref037 +bootload golden run) and the full SoC - CPU,
-// va_037_sync, qbus_mem_sdram, complete video pipeline on all 4 arbiter ports -
+// va_037_sync, qbus_mem, complete video pipeline on all 4 arbiter ports -
 // cold-boots the actual MONITOR. Bounded checks, cheapest first:
 //
 //   1. no-X on the Q-bus data/reply at every read-reply point (backstops the
@@ -169,7 +169,7 @@ module boot_check_tb;
     wire [12:0] s_addr;
     wire [DW-1:0] s_dq;
 
-    qbus_mem_sdram u_ms (
+    qbus_mem u_ms (
         .cpu_clk  (~clk),
         .reset    (~dclo),
         .init_n   (init),            // peripheral-register reset (Phase 6)

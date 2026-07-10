@@ -2,7 +2,7 @@
 // Phase 3 SoC-integration cosim: the Strategy-A RAM path end to end.
 //
 //   vm1 CPU  +  va_037_sync (owns RAM RPLY, done-gate)  +  the REAL integration
-//   module qbus_mem_sdram (ROM/IO N_ROM FSM + cpu_sdram_dp + sdram_arbiter +
+//   module qbus_mem (ROM/IO N_ROM FSM + cpu_sdram_dp + sdram_arbiter +
 //   sdram_ctrl)  +  behavioural sdram_model
 //
 // The bk10 test program runs FROM SDRAM (preloaded into the model), RAM RPLY comes
@@ -188,7 +188,7 @@ module ref037_soc_tb;
         .boot_active(boot_active), .boot_done(boot_done), .boot_ok(boot_ok)
     );
 
-    qbus_mem_sdram u_ms (
+    qbus_mem u_ms (
         .cpu_clk  (~clk),            // as ocbk_top: FSM on the inverted CPU clock
         .reset    (~dclo),
         .init_n   (init),            // peripheral-register reset (Phase 6)

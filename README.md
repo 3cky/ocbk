@@ -46,7 +46,7 @@ src/sdram_ctrl.sv vendored single-word SDR SDRAM controller (+byte-enable)
 src/va_037_sync.sv retimed 1801ВП1-037 (RAM RPLY / grants / video counters)
 src/sdram_arbiter.sv 4-port fixed-priority SDRAM arbiter (CPU/readout/fetch/FB)
 src/cpu_sdram_dp.sv CPU RAM datapath (arbiter port 0) + RPLY done-gate
-src/qbus_mem_sdram.sv ROM/IO front-end (N_ROM + done-gate) + datapath + arbiter
+src/qbus_mem.sv ROM/IO front-end (N_ROM + done-gate) + datapath + arbiter
                 + ctrl + the boot-writer mux (EPCS loader -> port 0)
 src/epcs_boot.sv EPCS flash -> SDRAM boot loader (SPI via cyclone_asmiblock)
 mem/roms/       BK-0010.01 ROM set (monit10 + BASIC Vilnius, from BkEmu)

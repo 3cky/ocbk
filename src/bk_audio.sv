@@ -2,7 +2,7 @@
 //  bk_audio - BK 1-bit speaker -> board R-2R sound DAC
 // ----------------------------------------------------------------------------
 //  The BK-0010 built-in speaker is a single output bit (bit 6 of register
-//  177716; captured in qbus_mem_sdram as spk_bit). Software toggles it at audio
+//  177716; captured in qbus_mem as spk_bit). Software toggles it at audio
 //  rates and the board's analog stage (RC low-pass + amp) turns the square wave
 //  into a tone - so no oversampling/PWM is needed for the 1-bit source: we drive
 //  the speaker level straight onto the R-2R ladder.

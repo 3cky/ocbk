@@ -2,7 +2,7 @@
 // Phase 6 interrupt-latency SoC equivalence: the same gen_kbd_test.py
 // program as ref014_irq_ref_tb.v, but on the integrated SoC stack -
 //
-//   vm1 CPU + va_037_sync (RAM RPLY / stealing / nBS) + qbus_mem_sdram
+//   vm1 CPU + va_037_sync (RAM RPLY / stealing / nBS) + qbus_mem
 //   (ROM-in-SDRAM) + sdram_model + behavioral bk_kbd014
 //   + the synthetic port-2 saturator (as ref037_soc_tb)
 //
@@ -132,7 +132,7 @@ module ref014_irq_soc_tb;
     wire        fetch_stb;
     wire [DW-1:0] v_rdata_nc;
 
-    qbus_mem_sdram u_ms (
+    qbus_mem u_ms (
         .cpu_clk  (~clk),
         .reset    (~dclo),
         .init_n   (init),

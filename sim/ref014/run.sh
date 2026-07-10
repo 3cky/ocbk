@@ -50,7 +50,7 @@ fi
 #     (a) the REFERENCE stack - vm1 + real va_037 + behavioural memory + the
 #     vp_014 GATE NETLIST with its matrix/RC debounce (this run is what
 #     generated golden_kbd.txt - never regenerate it from the SoC run), and
-#     (b) the SoC stack - vm1 + va_037_sync + qbus_mem_sdram + SDRAM model +
+#     (b) the SoC stack - vm1 + va_037_sync + qbus_mem + SDRAM model +
 #     behavioral bk_kbd014. Both reduced FETCH traces must match the same
 #     golden; this diff is what calibrated N_KBD/N_IAK (=1: the async chip
 #     replies inside the same CPU cycle) and bk_kbd014's write fast path. ---
@@ -79,7 +79,7 @@ iverilog -g2012 -o "$SP/irqsoc.vvp" -s ref014_irq_soc_tb \
    "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
    "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" \
    ../../src/qbus_pkg.sv ../../src/va_037_sync.sv ../../src/cpu_sdram_dp.sv \
-   ../../src/sdram_arbiter.sv ../../src/sdram_ctrl.sv ../../src/qbus_mem_sdram.sv \
+   ../../src/sdram_arbiter.sv ../../src/sdram_ctrl.sv ../../src/qbus_mem.sv \
    ../../src/bk_kbd014.sv ../sdram_model.sv \
    ref014_irq_soc_tb.v 2>&1 | grep -v 'sorry:' || true
 

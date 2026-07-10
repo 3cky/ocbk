@@ -3,7 +3,7 @@
 // (authentic nBS + RAM cycle-stealing) + behavioural DRAM/ROM + the VENDORED
 // vp_014 gate netlist (matrix + RC debounce). Runs the gen_kbd_test.py
 // program; the reduced FETCH trace is committed as golden_kbd.txt, which the
-// SoC integration run (ref014_irq_soc_tb.v: va_037_sync + qbus_mem_sdram +
+// SoC integration run (ref014_irq_soc_tb.v: va_037_sync + qbus_mem +
 // SDRAM model + behavioral bk_kbd014) must reproduce exactly - that diff is
 // what calibrates N_KBD / N_IAK and the VIRQ pin-flop timing.
 //

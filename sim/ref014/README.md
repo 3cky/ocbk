@@ -26,7 +26,7 @@ Ground-truth bus contract for the BK keyboard controller (1801ВП1-014 at
   loop, a tb-driven nIRQ1 fixed pulse → HALT entry through the 160002
   vector; parks 001004 = success/stop, 001012 = fail) runs on the reference
   stack (vm1 + real va_037 + behavioural memory + the **netlist** with its
-  matrix/RC debounce) and on the SoC stack (va_037_sync + qbus_mem_sdram +
+  matrix/RC debounce) and on the SoC stack (va_037_sync + qbus_mem +
   SDRAM model + behavioral bk_kbd014). Both reduced FETCH traces must match
   `golden_kbd.txt` (generated ONLY by the reference run). Key injections are
   anchored to the ARM-mailbox (000776) SYNC fall — a vm1-launched edge that
@@ -55,7 +55,7 @@ Ground-truth bus contract for the BK keyboard controller (1801ВП1-014 at
   vmux) and the vector PSW must carry **bit 8** (HALT mode) to mask a still-
   asserted nIRQ1 — the real BASIC ROM loads 0o100412 there; without it a
   held СТОП re-enters the handler forever.
-- `qbus_mem_sdram`'s ROM/IO FSM must **stand down when the strobes release
+- `qbus_mem`'s ROM/IO FSM must **stand down when the strobes release
   before its reply point**: the vm1 self-replies to 177700-177717 writes
   (the HALT entry's 177716 update) faster than N_ROM, and an unguarded late
   RPLY into the idle bus shifts the next cycle.
