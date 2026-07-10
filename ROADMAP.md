@@ -326,6 +326,34 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
 - Runtime model select (BK0010 ↔ BK0011M) via DIP/menu.
 - **Milestone:** BK-0011M software boots and runs.
 
+**Memory model & banking — design notes** (BkEmu remains the authoritative
+register/behaviour reference for the exact bit fields):
+- BK-0011M RAM is 8 × 16 KB pages (128 KB) plus 4 × 16 KB ROM pages. Of the four
+  16 KB CPU windows, **two are banked** (`040000–077777` and `100000–137777`);
+  `000000–037777` is a fixed RAM page and `140000–177777` is fixed top ROM + I/O.
+  The two banked windows share the same 8 RAM pages; the *second* window can map
+  either a RAM page or one of the ROM pages.
+- Banking is driven by the **177716 (SEL1)** register — a write reconfigures the
+  map only when its ENABLE bit is set, and the reset default re-inits the map
+  (INIT-keyed, like every peripheral register). The displayed **video page +
+  palette live on a separate register (177662)**, not 177716.
+- **Capacity is a non-issue:** the SDRAM dwarfs everything the design uses (the
+  BK-0010 RAM + ROM + two framebuffers occupy a fraction of a percent). Phase 7
+  is not about finding room — it is about **address translation**.
+- The core change is a **page-translation stage on the CPU→SDRAM path**
+  (`cpu_sdram_dp`): today's flat `addr[15:1]` map becomes a per-window,
+  page-register-indexed base + in-window offset. BK-0010 mode is the same path
+  with banking disabled, so both models can stay resident in SDRAM and the
+  runtime model select becomes a base-address swap rather than a reload.
+- **Open points to settle reference-tb-first** (per the verification discipline):
+  - *RPLY ownership becomes dynamic* — the `100000–137777` window is RAM (037
+    cycle-stolen, done-gated) in one mapping and ROM (fixed `N_ROM`, not stolen)
+    in another, so the reply source depends on the current bank selection.
+  - *Video fetch base* moves off the fixed `VRAM_BASE` onto the 177662 page
+    select (synced into the video domain like `screen_mode`).
+  - *0011M cycle-stealing may differ from the 037 model* — validate the banked
+    RAM timing against a reference before trusting the current 037 for 0011M.
+
 ### Phase 8 — Storage
 - SD card (reuse esemsx3 SD/SPI infrastructure) for disk images / file loading;
   emulate the BK FDD / disk controller as software sees it.
