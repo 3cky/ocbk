@@ -345,6 +345,11 @@ register/behaviour reference for the exact bit fields):
   page-register-indexed base + in-window offset. BK-0010 mode is the same path
   with banking disabled, so both models can stay resident in SDRAM and the
   runtime model select becomes a base-address swap rather than a reload.
+- **Design the `100000–177777` window with an explicit "who owns it" hook**
+  (not just the 0011M banker): Phase 8's SMK512 controller re-maps that same
+  window on a finer 4 KB granularity from its own register. Making window
+  ownership a selectable source now (0011M banker vs. a later extension) keeps
+  Phase 8 a layer-in rather than a rewrite of the translate stage.
 - **Open points to settle reference-tb-first** (per the verification discipline):
   - *RPLY ownership becomes dynamic* — the `100000–137777` window is RAM (037
     cycle-stolen, done-gated) in one mapping and ROM (fixed `N_ROM`, not stolen)
@@ -354,10 +359,33 @@ register/behaviour reference for the exact bit fields):
   - *0011M cycle-stealing may differ from the 037 model* — validate the banked
     RAM timing against a reference before trusting the current 037 for 0011M.
 
-### Phase 8 — Storage
-- SD card (reuse esemsx3 SD/SPI infrastructure) for disk images / file loading;
-  emulate the BK FDD / disk controller as software sees it.
-- **Milestone:** load and run programs/disks from SD.
+### Phase 8 — Storage (SMK512)
+- Emulate the **SMK512** controller — the mainstream BK HDD/storage controller —
+  backing its disk operations with an SD card (reuse the esemsx3 SD/SPI
+  infrastructure). BkEmu is the authoritative behaviour reference.
+- **Milestone:** boot the SMK BIOS and load/run programs from an SD-backed HDD image.
+
+**SMK512 — design notes.** The SMK512 is *three* devices on one board, so Phase 8
+is not a single peripheral:
+- **IDE/HDD interface** — a standard ATA task-file, memory-mapped as a small
+  block of registers in the I/O page. `SECTOR_SIZE = 512`, so the ATA LBA maps
+  1:1 onto SD's native sector — the disk image is just an SD-resident sector
+  range. The heavy part is an ATA command engine (BSY/DRQ handshake,
+  READ/WRITE SECTOR(S), IDENTIFY) with a one-sector buffer; the CPU-visible
+  data port is **bit-inverted** on the bus. This part is nearly memory-layout-free.
+- **512 KB segmented RAM extension** — the memory-layout piece, and it *is* the
+  Phase-7 coupling: 8 × 4 KB segments mapped into the `100000–177777` window,
+  reconfigured from its own control register (with several layout modes) that
+  also selects/deselects the BK-10 monitor / BK-11 BOS ROM / 0011M second banked
+  window. It must slot into the Phase-7 window-ownership hook as an alternative
+  mapping source at 4 KB granularity — do **not** design it as a bolt-on. The
+  512 KB (256 Kword) lives in SDRAM; capacity is again a non-issue, addressing is
+  the work.
+- **SMK BIOS ROM** — the code that drives the IDE; a few KB in the SDRAM ROM
+  region alongside the other ROM images.
+- **Open point:** the extension's cycle-stealing / RPLY behaviour on this window
+  interacts with the Phase-7 dynamic-RPLY-ownership question — settle both
+  together, reference-tb-first.
 
 ### Phase 9 — Fidelity & polish
 - Cycle-accuracy regression vs reference traces; turbo (6 MHz) mode.
