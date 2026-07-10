@@ -44,12 +44,4 @@ package qbus_pkg;
    localparam logic [15:0] REG_SYS   = 16'o177716;
    localparam logic [15:0] SYS_START = 16'o100000;
 
-   // CPU-internal register block 177700-177713 (CSR / error / vm1_tve timer,
-   // with pin_pa = 00): the 1801ВМ1 decodes, replies and drives read data for
-   // these itself (vm1_qbus sel177x) - nothing external may reply or drive
-   // there. 177714/177716 stay externally served (the CPU's ad_oe excludes
-   // them from its own data drive).
-   localparam logic [15:0] CPUREG_LO = 16'o177700;
-   localparam logic [15:0] CPUREG_HI = 16'o177713;
-
 endpackage
