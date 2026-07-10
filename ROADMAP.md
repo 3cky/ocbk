@@ -315,13 +315,13 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   (PIN_105-114/115-120). `pLed[0]` = speaker-activity tap. Oracles: `sim/run_audio.sh`
   (DAC unit + directed 177716-capture). **Still open:** Covox / tape bit 5 (MiSTer
   models bit 5 too), tape in/out.
-- System timer + interrupt wiring (50 Hz EVNT/IRQ2 from vsync).
 - **Milestone:** interactive — type, run BASIC, hear sound. *(Keyboard part
   of the milestone: pending the hardware smoke — type in MONITOR/BASIC, СТОП
   drops BASIC to the monitor, warm reset keeps РУС/ЛАТ, DIP2 fallback.)*
 
 ### Phase 7 — BK-0011M mode
 - 128 KB banked RAM, two video pages, 4 MHz CPU, page/control registers, MMU windows.
+- System timer + interrupt wiring (50 Hz EVNT/IRQ2 from vsync).
 - Runtime model select (BK0010 ↔ BK0011M) via DIP/menu.
 - **Milestone:** BK-0011M software boots and runs.
 
