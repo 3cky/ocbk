@@ -131,5 +131,12 @@ runs from the loaded SDRAM image).
   guaranteed stable because an SDRAM access finishes well within one CPU cycle.
 - **ROM writes are replied-to and ignored** (a real BK would time out to trap 4);
   the timeout-fidelity question is deferred to Phase 9.
-- Keyboard (177660–177663, the 1801ВП1-014), tape/audio and interrupts arrive in
-  Phase 6 — until then 177660 reads the cold status stub and no key events occur.
+- Keyboard (177660–177663, the 1801ВП1-014), the 1-bit speaker and the tape
+  interface are in (Phase 6). **Tape** uses the right sound-jack channel as
+  the cassette port (esemsx3 CMT scheme), toggled by the PS/2 **Scroll Lock**
+  key (`pLed[1]` lights while CMT mode is on; the key esemsx3 uses for the
+  same jack trick): toggle it on, play a BK tape recording (e.g. a WAV
+  rendered from a `.BIN`) into the right channel and use MONITOR's СЧИТ /
+  BASIC CLOAD; ЗАПИС/CSAVE records BK→PC through the same jack. Toggle it
+  off to get right-channel audio back. Interrupts (50 Hz EVNT/IRQ2) arrive
+  with Phase 7.

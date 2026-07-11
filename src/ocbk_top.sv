@@ -69,7 +69,9 @@
 //                    validation (the CPU is then held in reset).
 //   pLed[7]        : system heartbeat off the PLL (FPGA configured + PLL locked).
 //   pLed[0]        : BK speaker activity (solid while a tone plays; audio tap).
-//   pLed[6:1]      : unused (0).
+//   pLed[1]        : CMT tape-in mode (Scroll Lock toggle; lit = the right
+//                    jack is the cassette port).
+//   pLed[6:2]      : unused (0).
 module ocbk_top (
     input  logic        pClk21m,   // 21.47727 MHz crystal (PIN_28)
     output logic [7:0]  pLed,      // green LEDs   (1 = on)
@@ -92,8 +94,12 @@ module ocbk_top (
     output logic [5:0]  pDac_VB,
 
     // ---- Sound (6-bit R-2R DAC per channel; BK 1-bit speaker) -----------
+    // Right channel doubles as the CMT (cassette) jack while CMT mode is on
+    // (PS/2 Scroll Lock toggle): pDac_SR[5] = tape input, [3:1] the ladder
+    // Schmitt-feedback network, [0] = tape out - esemsx3's CmtScro scheme
+    // (see bk_audio.sv). Audio (push-pull mono) otherwise.
     output logic [5:0]  pDac_SL,
-    output logic [5:0]  pDac_SR,
+    inout  wire  [5:0]  pDac_SR,
 
     // ---- SDRAM (16-bit SDR, 13 row / 9 col / 2 bank, CL2) ---------------
     output logic        pMemClk,   // SDRAM chip clock (PLL extclk0)
@@ -211,6 +217,17 @@ module ocbk_top (
     logic [1:0] smode_sr;
     always_ff @(posedge sys_clk) smode_sr <= {smode_sr[0], key_scrmode};
     wire screen_mode = smode_sr[1];
+
+    // --- cmt_mode: toggled by the PS/2 Scroll Lock key (power-on default =
+    //     audio) - the esemsx3 CmtScro convention. Same quasi-static cpu_clk
+    //     toggle -> 2-FF sys_clk resync pattern as screen_mode; survives warm
+    //     reset like a physically plugged tape cable. (The 177716 motor bit
+    //     was the enable first - real BK software writes bit 7 = 0 outside
+    //     tape ops and wrongly killed the right audio channel.)
+    logic       key_cmt;
+    logic [1:0] cmt_sr;
+    always_ff @(posedge sys_clk) cmt_sr <= {cmt_sr[0], key_cmt};
+    wire cmt_mode = cmt_sr[1];
 
     // --- EPCS boot loader (flash blob -> SDRAM ROM region, before CPU release)
     logic        boot_active, boot_done, boot_ok;
@@ -412,7 +429,8 @@ module ocbk_top (
         .key_ar2  (key_ar2),
         .key_down (key_down),
         .key_stop (key_stop),
-        .key_scrmode (key_scrmode)   // Print Screen -> screen_mode toggle
+        .key_scrmode (key_scrmode),  // Print Screen -> screen_mode toggle
+        .key_cmt     (key_cmt)       // Scroll Lock  -> cmt_mode toggle
     );
 
     bk_kbd014 u_kbd (
@@ -485,11 +503,19 @@ module ocbk_top (
     wire [15:0] bus_addr;
     wire        fetch_stb;
     wire        spk_bit;       // BK speaker level (bit 6 of last 177716 write)
+    wire        tape_lvl;      // CMT comparator level (sys_clk, from bk_audio)
+
+    // tape_lvl -> 177716 read bit 5: 2-FF resync onto the qbus_mem FSM clock
+    // (cpu_clk_n). Quasi-static at tape rates (~1 kHz half-periods).
+    logic [1:0] tape_sr = '0;
+    always_ff @(posedge cpu_clk_n) tape_sr <= {tape_sr[0], tape_lvl};
+
     qbus_mem u_mem (
         .cpu_clk  (cpu_clk_n),      // ROM/IO wait FSM advances on the inverted CPU clock
         .reset    (~dclo_n),
         .init_n   (init_n),
         .kbd_down (key_down),       // 177716 bit 6 (active low at the register)
+        .tape_in  (tape_sr[1]),     // 177716 bit 5 (CMT comparator level)
         .sel1_n   (sel_n[1]),       // CPU register selects (push-pull, see the
         .sel2_n   (sel_n[2]),       //   vm1.v local hook): 177716 / 177714
         .boot_active(boot_active),
@@ -531,23 +557,45 @@ module ocbk_top (
         .s_dq     (pMemDat),
         .bus_addr (bus_addr),
         .fetch_stb(fetch_stb),
-        .spk_bit  (spk_bit)          // BK speaker: bit 6 of last 177716 write
+        .spk_bit  (spk_bit),         // BK speaker: bit 6 of last 177716 write
+        .mot_bit  ()                 // tape motor: bit 7 (1 = stopped). Captured
+                                     // and oracle-pinned but deliberately unused:
+                                     // it was the CMT-mode enable first, but real
+                                     // BK software writes bit 7 = 0 outside tape
+                                     // ops - cmt_mode comes from Scroll Lock now.
     );
 
-    // ---- Sound: BK 1-bit speaker -> board R-2R sound DAC -----------------
-    // spk_bit is captured in u_mem (cpu_clk domain, software-owned latch);
-    // bk_audio resyncs it to sys_clk and drives the balanced R-2R pattern.
-    // Power-on reset only (vid_rst_n) - like the display, sound survives a warm
-    // reset; spk_bit itself is never cleared by nINIT (software owns it).
+    // ---- Sound + CMT jack: BK 1-bit speaker -> board R-2R sound DAC ------
+    // spk_bit is captured in u_mem on sys_clk (a software-owned latch);
+    // bk_audio drives the balanced R-2R pattern, and while CMT mode is on
+    // (Scroll Lock toggle, see cmt_mode above) it turns the right channel
+    // into the esemsx3-style CMT comparator (pDac_SR[5] input + ladder
+    // feedback; see bk_audio.sv). Power-on reset only (vid_rst_n) - like the
+    // display, sound survives a warm reset; spk_bit is never cleared by
+    // nINIT (software owns it).
     wire spk_active;
+    wire [5:0] dac_r_o, dac_r_oe;
     bk_audio u_audio (
-        .sys_clk (sys_clk),
-        .rst_n   (vid_rst_n),
-        .spk_bit (spk_bit),
-        .dac_l   (pDac_SL),
-        .dac_r   (pDac_SR),
-        .active  (spk_active)
+        .sys_clk    (sys_clk),
+        .rst_n      (vid_rst_n),
+        .spk_bit    (spk_bit),
+        .cmt_mode   (cmt_mode),
+        .cmt_in_pad (pDac_SR[5]),
+        .tape_lvl   (tape_lvl),
+        .dac_l      (pDac_SL),
+        .dac_r_o    (dac_r_o),
+        .dac_r_oe   (dac_r_oe),
+        .active     (spk_active)
     );
+    // Per-bit pad tri-states (real I/O-buffer OEs at the pins - NOT the
+    // internal single-driver-Z trap; nothing on-chip reads these nets except
+    // the [5] input path).
+    genvar gi;
+    generate
+        for (gi = 0; gi < 6; gi = gi + 1) begin : g_sr
+            assign pDac_SR[gi] = dac_r_oe[gi] ? dac_r_o[gi] : 1'bZ;
+        end
+    endgenerate
 
     // ---- Phase-4 video pipeline ------------------------------------------
     // 037 fetch -> palette_apply -> double-buffered FB in SDRAM (fb_video,
@@ -657,8 +705,9 @@ module ocbk_top (
     // in reset). Dark only during the ~200 us SDRAM init at power-on.
     wire boot_fail = boot_done && !boot_ok;
     assign pLedPwr = boot_fail ? hb[22] : init_done;
-    // pLed[7]: PLL heartbeat.  pLed[0]: BK speaker activity (solid while a tone
-    // plays; audio bring-up tap).  pLed[6:1]: unused.
-    assign pLed    = {hb[24], 6'b0, spk_active};
+    // pLed[7]: PLL heartbeat.  pLed[1]: CMT tape-in mode (Scroll Lock; lit =
+    // right jack is the cassette port).  pLed[0]: BK speaker activity (solid
+    // while a tone plays; audio bring-up tap).  pLed[6:2]: unused.
+    assign pLed    = {hb[24], 5'b0, cmt_mode, spk_active};
 
 endmodule

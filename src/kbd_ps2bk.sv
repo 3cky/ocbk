@@ -23,6 +23,15 @@
 //                            like СТОП - never a matrix code; power-on init
 //                            only (survives ACLO/warm reset), matching a real
 //                            BK's physical monitor-cable switch.
+//   Scroll Lock (7E)      -> key_cmt toggle: right sound jack = CMT cassette
+//                            port while on (the esemsx3 CmtScro convention -
+//                            same key, same meaning). Radial, power-on init
+//                            only, like a physically plugged tape cable.
+//                            (The 177716 motor bit was tried as the enable
+//                            first - authentic, but real BK software writes
+//                            bit 7 = 0 outside tape ops and wrongly killed
+//                            the right audio channel; hardware finding
+//                            2026-07-10.)
 //
 // Case algebra per BkEmu KeyboardManager (the canonical BK behaviour):
 // letters take low register = latin ^ (caps_upper | shift); СУ masks codes
@@ -51,7 +60,8 @@ module kbd_ps2bk (
     output logic       key_ar2,
     output logic       key_down,   // any-key-held level (177716 bit 6)
     output logic       key_stop,   // 1-clk: СТОП make -> nIRQ1 one-shot
-    output logic       key_scrmode // level: display-mode toggle (Print Screen)
+    output logic       key_scrmode,// level: display-mode toggle (Print Screen)
+    output logic       key_cmt     // level: CMT tape-in mode toggle (Scroll Lock)
 );
 
     // ---- prefix tracking --------------------------------------------------
@@ -72,8 +82,11 @@ module kbd_ps2bk (
     logic stop_down   = 1'b0;      // СТОП key level (repeat suppression)
     logic scrmode     = 1'b0;      // display-mode toggle; power-on = colour-256
     logic prtsc_down  = 1'b0;      // Print Screen level (repeat suppression)
+    logic cmt_en      = 1'b0;      // CMT-mode toggle; power-on = audio
+    logic scrlk_down  = 1'b0;      // Scroll Lock level (repeat suppression)
     wire  mod_shift   = mod_shift_l | mod_shift_r;
     assign key_scrmode = scrmode;
+    assign key_cmt     = cmt_en;
 
     // ---- held-key list (code-producing keys only) ---------------------------
     // 4 slots of {valid, e0, scan}; a make already present = typematic repeat.
@@ -260,6 +273,13 @@ module kbd_ps2bk (
                 else if (got_e0 && ps2_byte == 8'h7C) begin
                     if (!got_f0 && !prtsc_down) scrmode <= ~scrmode;
                     prtsc_down <= !got_f0;
+                end
+                // -- Scroll Lock (7E): toggle the CMT tape-in mode on make
+                //    (esemsx3 convention); same radial/typematic handling as
+                //    Print Screen, power-on init only.
+                else if (!got_e0 && ps2_byte == 8'h7E) begin
+                    if (!got_f0 && !scrlk_down) cmt_en <= ~cmt_en;
+                    scrlk_down <= !got_f0;
                 end
                 // -- code-producing keys --------------------------------------
                 else if (got_f0) begin

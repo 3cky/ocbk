@@ -272,7 +272,7 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
 - **Milestone: press reset → banner reboots; the Phase-6 keyboard reset chord
   can OR into the same warm_rst_req line.**
 
-### Phase 6 — Peripherals
+### Phase 6 — Peripherals ✅ DONE
 - **Reset wiring (real BK): DCLO/ACLO reset the CPU only — all peripherals
   reset via the CPU's nINIT Q-bus line** (asserted during CPU reset and pulsed
   by the RESET instruction). Key every peripheral's reset to `init_n`, never
@@ -314,8 +314,33 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   never sees it), then `bk_audio` (2-FF resync + **push-pull mono R-2R drive**,
   ocb-test-proven; idle = mid-scale) → board sound DAC `pDac_SL`/`pDac_SR`
   (PIN_105-114/115-120). `pLed[0]` = speaker-activity tap. Oracles: `sim/run_audio.sh`
-  (DAC unit + directed 177716-capture). **Still open:** Covox / tape bit 5 (MiSTer
-  models bit 5 too), tape in/out.
+  (DAC unit + directed 177716-capture).
+- **Tape (магнитофон) — WORKS ON HARDWARE (2026-07-10):** the **esemsx3
+  CMT-jack scheme** — the right sound-DAC ladder doubles as the cassette
+  port. **PS/2 Scroll Lock toggles CMT mode** (the same key esemsx3 uses;
+  `key_cmt` radial output → 2-FF sys_clk sync, power-on default = audio,
+  survives warm reset like a plugged cable; `pLed[1]` = mode tap). In CMT
+  mode `bk_audio` switches `pDac_SR` from push-pull audio to the comparator
+  network: `[5]` = tape **input** pad (tri-stated, 2-FF-sampled), `[3:2]` =
+  `{lvl, ~lvl}` Schmitt positive feedback through the ladder resistors,
+  `[1]` = 0, `[0]` = the speaker level = BK tape **out** (bit 6 — record to
+  a PC through the same jack). The sampled level feeds **177716 read bit 5**
+  (2-FF onto `cpu_clk_n` → `qbus_mem.tape_in`). Bit semantics verified
+  against the original MONITOR sources (`bk-0010-sources/d6.mac`): read
+  bit 5 polled by duration-timing loops, polarity-insensitive,
+  self-calibrating from the pilot — so no tape-image machinery is needed in
+  the FPGA: a WAV played into the jack is enough. **Motor-bit gating was
+  tried and reverted**: bit 7 (`KPUSK=020`/`KSTOP=220`, 1 = stopped) is
+  authentic MONITOR behaviour, but real BK software writes bit 7 = 0
+  outside tape ops and wrongly killed the right audio channel on hardware —
+  `mot_bit` stays captured in `qbus_mem` (oracle-pinned register semantics)
+  but unused in the top. Oracles: `sim/run_audio.sh` (CMT drive pattern +
+  feedback in `bk_audio_tb`; bit-5 reads, bit-7 capture and the nINIT
+  survival in `spk_capture_tb`); `sim/run_ps2.sh` (the Scroll Lock radial
+  toggle). No goldens changed (bit 5 reads 0 with the tie-off).
+  **Still open:** Covox; tape-out 3-level fidelity (real BK mixes write
+  bits 6+5 resistively — bit 6 alone is the dominant component); an
+  optional slow MONITOR-load cosim oracle.
 - **Milestone:** interactive — type, run BASIC, hear sound. *(Keyboard part
   of the milestone: pending the hardware smoke — type in MONITOR/BASIC, СТОП
   drops BASIC to the monitor, warm reset keeps РУС/ЛАТ.)*
@@ -442,11 +467,13 @@ done-gated fixed-N_ROM path, oracle-gated for cycle accuracy under full 4-port
 contention (`golden_037.txt` + `golden_037_rom.txt`, twelve ref037 diffs incl.
 the Phase-5.5 warm-reset replays; the reset button warm-restarts without
 re-running SDRAM init or the EPCS load). Fits
-30% / 1 M4K / 1 ASMI / 1 PLL / timing closes. The Phase-6 keyboard is in
-(PS/2 → 1801ВП1-014 equivalent, netlist-golden-validated incl. interrupt
-latency and the СТОП trap-4 path; fits 34%, timing closes) — awaiting the
-hardware smoke. Next: hardware smoke, then tape/audio and the 50 Hz
-EVNT/IRQ2 wiring.*
+30% / 1 M4K / 1 ASMI / 1 PLL / timing closes. The Phase-6 keyboard and 1-bit
+speaker are **confirmed on hardware 2026-07-07** (typing + keyclick; PS/2 →
+1801ВП1-014 equivalent, netlist-golden-validated incl. interrupt latency and
+the СТОП trap-4 path). Phase-6 tape **works on hardware 2026-07-10** (the CMT
+jack on the right sound channel, Scroll-Lock-gated after the motor-bit
+experiment broke right audio; oracle-tested). Next: the 50 Hz EVNT/IRQ2
+wiring.*
 *See also the project memory notes `bk-on-1chipmsx-feasibility` (bring-up history),
 `bk-video-pipeline-decision` (Phase 3/4 design) and `bkemu-reference-and-roms`
 (BkEmu is the canonical BK reference; ROMs committed in-tree).*

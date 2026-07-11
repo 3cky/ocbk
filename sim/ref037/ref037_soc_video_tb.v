@@ -219,6 +219,7 @@ module ref037_soc_video_tb;
         .reset    (~dclo),
         .init_n   (init),            // peripheral-register reset (Phase 6)
         .kbd_down (1'b0),            // no keyboard in this oracle
+        .tape_in  (1'b0),            // no tape signal in this oracle
         .sel1_n   (sel[1]),          // CPU nSEL1/nSEL2 register selects
         .sel2_n   (sel[2]),
         .boot_active(1'b0),          // loader path gated in ref037_soc_tb

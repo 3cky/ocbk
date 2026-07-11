@@ -1,10 +1,15 @@
 // ============================================================================
-//  spk_capture_tb - directed oracle for the 177716-bit-6 speaker capture in
-//  qbus_mem. Drives real Q-bus write cycles (SYNC latches the address,
-//  DOUT presents the data) to 177716 and checks spk_bit follows bit 6 - the
-//  key point being that the capture must NOT depend on the ROM/IO wait FSM's
-//  reply (the vm1 self-replies for 177700-177717, so the FSM never sees the
-//  write). Also checks a write to a different I/O address leaves spk_bit alone.
+//  spk_capture_tb - directed oracle for the 177716 register bits in qbus_mem.
+//  Drives real Q-bus write cycles (SYNC latches the address, DOUT presents
+//  the data) to 177716 and checks spk_bit (bit 6) and mot_bit (bit 7, tape
+//  motor; 1 = stopped) follow the written data - the key point being that the
+//  capture must NOT depend on the ROM/IO wait FSM's reply (the vm1
+//  self-replies for 177700-177717, so the FSM never sees the write). Also
+//  checks a write to a different I/O address leaves the latches alone, that
+//  nINIT does NOT clear them (software-owned; it does clear the bit-2
+//  write-flag), and - via real DATI cycles - that the 177716 read word
+//  carries the start vector, the write-flag, the kbd bit and the Phase-6
+//  tape-in level on bit 5.
 // ============================================================================
 `timescale 1ns/1ps
 module spk_capture_tb;
@@ -25,7 +30,11 @@ module spk_capture_tb;
     // phase, stable before SYNC falls, held for the whole cycle.
     logic sel1_n = 1'b1, sel2_n = 1'b1;
     logic reset  = 1'b1;   // = ~dclo_n; held at power-on to init the wait FSM
+    logic init_n  = 1'b1;  // Q-bus nINIT (pulsed by the RESET-instruction test)
+    logic tape_in = 1'b0;  // CMT comparator level -> 177716 read bit 5
     wire        spk_bit;
+    wire        mot_bit;
+    wire        rply_n;
     wire [15:0] bus_addr;
     wire        s_dq_dummy;   // unused SDRAM data bus stays floating
 
@@ -34,8 +43,9 @@ module spk_capture_tb;
     qbus_mem dut (
         .cpu_clk   (cclk),
         .reset     (reset),
-        .init_n    (1'b1),
+        .init_n    (init_n),
         .kbd_down  (1'b0),
+        .tape_in   (tape_in),
         .sel1_n    (sel1_n),
         .sel2_n    (sel2_n),
         .sclk      (sclk),
@@ -46,7 +56,7 @@ module spk_capture_tb;
         .din_n     (din_n),
         .dout_n    (dout_n),
         .wtbt_n    (wtbt_n),
-        .rply_n    (),
+        .rply_n    (rply_n),
         .mem_ready (),
         .boot_active(1'b0),
         .bw_req    (1'b0), .bw_addr('0), .bw_wdata('0), .bw_gnt(),
@@ -56,7 +66,8 @@ module spk_capture_tb;
         .s_cke(), .s_cs_n(), .s_ras_n(), .s_cas_n(), .s_we_n(),
         .s_ba(), .s_addr(), .s_dqm(), .s_dq(),
         .bus_addr(bus_addr), .fetch_stb(),
-        .spk_bit(spk_bit)
+        .spk_bit(spk_bit),
+        .mot_bit(mot_bit)
     );
 
     // One DATO (write) bus cycle: SYNC latches `a`, DOUT presents `d`.
@@ -76,10 +87,43 @@ module spk_capture_tb;
         end
     endtask
 
+    // One DATI (read) bus cycle: SYNC latches `a`, DIN strobes, the DUT's wait
+    // FSM replies (N_ROM edges on cclk) and drives the read word; compare it.
+    task bus_read(input [15:0] a, input [15:0] e, input [127:0] tag);
+        begin
+            ad_oe = 1'b1; ad_drive = ~a;
+            sel1_n = !(a[15:1] == (16'o177716 >> 1));
+            sel2_n = !(a[15:1] == (16'o177714 >> 1));
+            #6  sync_n = 1'b0;                  // negedge SYNC latches addr = a
+            #6  ad_oe = 1'b0;                   // release the bus for read data
+            #4  din_n = 1'b0;                   // data-in phase
+            wait (rply_n === 1'b0);             // FSM reply point
+            #2;
+            if (~ad_n !== e) begin
+                $display("AUDIO-ERROR %0s: read %o exp=%o got=%o",
+                         tag, a, e, ~ad_n);
+                errors = errors + 1;
+            end
+            #6  din_n = 1'b1;
+            #6  sync_n = 1'b1; sel1_n = 1'b1; sel2_n = 1'b1;
+            wait (rply_n !== 1'b0);
+            repeat (2) @(posedge sclk);
+        end
+    endtask
+
     task expect_spk(input e, input [127:0] tag);
         begin
             if (spk_bit !== e) begin
                 $display("AUDIO-ERROR %0s: spk_bit exp=%b got=%b", tag, e, spk_bit);
+                errors = errors + 1;
+            end
+        end
+    endtask
+
+    task expect_mot(input e, input [127:0] tag);
+        begin
+            if (mot_bit !== e) begin
+                $display("AUDIO-ERROR %0s: mot_bit exp=%b got=%b", tag, e, mot_bit);
                 errors = errors + 1;
             end
         end
@@ -102,6 +146,39 @@ module spk_capture_tb;
         bus_write(16'o177717, 16'o000000); expect_spk(1'b1, "177717 high-byte write ignored");
         bus_write(16'o177716, 16'o177677); expect_spk(1'b0, "clear via word w/ bit6=0");
         bus_write(16'o177716, 16'o000100); expect_spk(1'b1, "set again");
+
+        // ---- tape motor (bit 7; 1 = stopped) - MONITOR d6.mac constants ----
+        expect_mot(1'b0, "motor running after bit7=0 write");
+        bus_write(16'o177716, 16'o000220); expect_mot(1'b1, "KSTOP stops");
+                                           expect_spk(1'b0, "KSTOP clears spk");
+        bus_write(16'o177716, 16'o000320); expect_mot(1'b1, "keyclick keeps stopped");
+                                           expect_spk(1'b1, "keyclick sets spk");
+        bus_write(16'o177716, 16'o000020); expect_mot(1'b0, "KPUSK starts");
+        bus_write(16'o177560, 16'o000200); expect_mot(1'b0, "unrelated write ignored");
+        bus_write(16'o177717, 16'o000200); expect_mot(1'b0, "177717 high-byte write ignored");
+        bus_write(16'o177716, 16'o000220); expect_mot(1'b1, "KSTOP again");
+
+        // ---- 177716 reads: start vector | write-flag | kbd | tape bit 5 ----
+        // kbd_down=0 => bit 6 reads 1 (active low); the KSTOP write above set
+        // the write-flag; the first read returns it and clears it.
+        bus_read(16'o177716, 16'o100104, "read: wflag set, tape=0");
+        bus_read(16'o177716, 16'o100100, "read: wflag cleared");
+        tape_in = 1'b1;
+        bus_read(16'o177716, 16'o100140, "read: tape=1");
+        bus_read(16'o177717, 16'o100140, "read 177717: full word (nSEL1 both bytes)");
+        tape_in = 1'b0;
+        bus_read(16'o177716, 16'o100100, "read: tape=0 again");
+
+        // ---- nINIT (RESET instruction): clears the write-flag, but NOT the
+        //      software-owned spk/mot latches -------------------------------
+        bus_write(16'o177716, 16'o000320);  // spk=1, mot=1, wflag set
+        @(negedge cclk) init_n = 1'b0;
+        repeat (3) @(posedge cclk);
+        @(negedge cclk) init_n = 1'b1;
+        repeat (2) @(posedge cclk);
+        expect_spk(1'b1, "nINIT keeps spk");
+        expect_mot(1'b1, "nINIT keeps mot");
+        bus_read(16'o177716, 16'o100100, "read: nINIT cleared wflag");
 
         if (errors == 0) $display("COSIM PASS");
         else             $display("COSIM FAIL (%0d errors)", errors);

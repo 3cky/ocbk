@@ -71,8 +71,16 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
 - `sim/run_ps2.sh` — the PS/2 front end (`ps2_rx` + `kbd_ps2bk`) against a
   hand-written expected event list: BkEmu case algebra over ЛАТ/РУС ×
   ЗАГЛ/СТР × НР, СУ masking, АР2 + the silicon auto-274 code group,
-  typematic suppression, multi-key `key_down`, СТОП strobes, parity-error
-  and stale-prefix recovery.
+  typematic suppression, multi-key `key_down`, СТОП strobes, the Print
+  Screen / Scroll Lock radial toggles (screen_mode / CMT tape mode),
+  parity-error and stale-prefix recovery.
+- `sim/run_audio.sh` — Phase-6 audio + tape unit oracles: `bk_audio_tb`
+  (push-pull DAC pattern, mid-scale reset, activity one-shot, and the CMT-mode
+  right-channel comparator network incl. the `cmt_in_pad` → `tape_lvl`
+  feedback) and `spk_capture_tb` (directed Q-bus cycles into the real
+  `qbus_mem`: bit-6/bit-7 DOUT-window captures, 177716 DATI reads — start
+  vector / write-flag / kbd / tape bit 5 — and nINIT keeping the
+  software-owned spk/mot latches).
 - `sim/run_epcs_boot.sh` — the Phase-5 EPCS loader unit cosim (flash model →
   `epcs_boot` → arbiter port 0 → SDRAM): word-exact load + a corrupted-blob run
   that must end `boot_ok=0`.
@@ -158,8 +166,9 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
     while РУС/ЛАТ are ordinary matrix keys emitting 016/017 — mapped here as
     CapsLock = the ЗАГЛ/СТР trigger, LCtrl = РУС, Home = ЛАТ, Insert = СУ
     (held), either Shift = НР, either Alt = АР2, **Delete = СТОП**,
-    **Print Screen = screen_mode toggle** (a `key_scrmode` radial control
-    output, never a matrix code, power-on-only — see the screen_mode note above);
+    **Print Screen = screen_mode toggle**, **Scroll Lock = CMT tape-mode
+    toggle** (both radial control outputs like СТОП, never matrix codes,
+    power-on-only — see the screen_mode and tape notes);
   - case algebra per BkEmu (`latin ^ (caps | shift)` on letters, СУ = `&037`
     on 01xx codes); the **silicon auto-274 code group**
     {0,1,2,4,5,6,7,011,013,021} vectors to 0274 without АР2 (measured over
@@ -177,6 +186,30 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
     the 177660 **write** reply is combinational (`wr_fast`) — both pinned by
     `golden_kbd.txt`; vm1 slaves must hold read data past DIN release (the
     IAK vector capture relies on it — bus-charge physics on the real board).
+- **Tape (Phase 6):** the esemsx3 **CMT-jack scheme** — `pDac_SR` (right sound
+  channel, now `inout`) doubles as the cassette port while CMT mode is on:
+  the **PS/2 Scroll Lock key toggles it** (`key_cmt` radial output, the same
+  key esemsx3 uses; power-on default = audio, power-on-only state so it
+  survives a warm reset like a plugged cable; `pLed[1]` = mode tap). **Do NOT
+  gate CMT on the 177716 motor bit** — that was tried first (authentic:
+  MONITOR d6.mac `KPUSK=020`/`KSTOP=220`, bit 7 = 1 = stopped, held 1 outside
+  tape ops) but **real BK software writes bit 7 = 0 outside tape operations
+  and wrongly killed the right audio channel** (hardware finding 2026-07-10).
+  `mot_bit` is still captured next to `spk_bit` in `qbus_mem` (same
+  DOUT-window sys_clk capture, same software-owned NOT-nINIT-reset contract,
+  oracle-pinned) but left unconnected in the top. In CMT mode `bk_audio`
+  drives `pDac_SR` as `[5]`=input(Z) `[4]`=Z `[3:2]`={lvl,~lvl} (Schmitt
+  feedback through the ladder resistors) `[1]`=0 `[0]`=spk level (BK tape-out
+  IS bit 6); the sampled level feeds **177716 read bit 5** (`tape_in`,
+  2-FF onto `cpu_clk_n`). The MONITOR read loop is duration-based and
+  self-calibrating, so a WAV played into the jack is a valid tape source.
+  These pad OEs are the ONE intentional tri-state besides the bus nets — the
+  map-report guard grep must not flag them (they drive pins, not internal
+  logic). The **original MONITOR asm sources** live at
+  `~/projects/other/bk/vak-opensource/bk/bk-0010-sources/` (d6.mac = tape) —
+  ground truth for MONITOR behaviour alongside BkEmu. Tape-out fidelity note:
+  a real BK mixes write bits 6+5 into a 3-level record waveform; bit 6 alone
+  is shipped (dominant component).
 - Cartridge-slot Q-bus is a **forward seam**: `src/qbus_slot.sv`, default
   `SLOT_ENABLE=0` (drives nothing, slot pins stay reserved-tristated). The full
   slot pin map lives commented in `ocbk_common.qsf`. Real BK hardware needs an

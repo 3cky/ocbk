@@ -53,6 +53,7 @@ module qbus_mem #(
     input  logic        reset,      // active high (= ~dclo_n)
     input  logic        init_n,     // Q-bus nINIT: peripheral-register reset
     input  logic        kbd_down,   // any-key-held level -> 177716 bit 6 (inverted)
+    input  logic        tape_in,    // CMT comparator level -> 177716 bit 5
     input  logic        sel1_n,     // CPU nSEL1: 177716/17 register select
     input  logic        sel2_n,     // CPU nSEL2: 177714/15 register select
 
@@ -111,7 +112,9 @@ module qbus_mem #(
     output logic        fetch_stb,
 
     // ---- BK speaker: bit 6 of the last 177716 write (software-owned) ------
-    output logic        spk_bit
+    output logic        spk_bit,
+    // ---- tape motor: bit 7 of the last 177716 write (1 = motor STOPPED) ---
+    output logic        mot_bit
 );
 
     import qbus_pkg::*;
@@ -137,7 +140,8 @@ module qbus_mem #(
     // push-pull via a marked local hook (a lone Z-idle OC driver feeding
     // on-chip logic degenerates to stuck-asserted on Cyclone I - the virq_n
     // trap); keep that hook on upstream re-syncs.
-    //   nSEL1 (177716, either byte): io_word = SYS_START | write-flag | kbd.
+    //   nSEL1 (177716, either byte): io_word = SYS_START | write-flag | kbd
+    //                                          | tape-in (bit 5).
     //   nSEL2 (177714, either byte): reply, read 0, writes ignored.
     // Everything ELSE is UNDECODED: no reply -> the CPU's qbto timer expires
     // (56..63 clocks) -> trap 4. That is authentic BkEmu behaviour (it times
@@ -164,7 +168,9 @@ module qbus_mem #(
     // (matches BkEmu, which never re-inits the speaker level). Power-on value
     // only; software owns it thereafter. Captured directly in the DOUT window
     // on sys_clk below - the ROM/IO wait FSM can't see the write (see there).
+    // mot_bit (bit 7, tape motor relay) has the identical contract.
     initial spk_bit = 1'b0;
+    initial mot_bit = 1'b0;
 
     // nSEL1 selects the register for BOTH its bytes, so a byte read of 177717
     // gets the full word too (the CPU extracts the byte; BkEmu semantics) -
@@ -172,7 +178,8 @@ module qbus_mem #(
     // instead of fighting it.
     wire [15:0] io_word  =
         !sel1_n ? (SYS_START | (sel1_wflag ? 16'o000004 : 16'o0)
-                             | (kbd_down   ? 16'o0 : 16'o000100)) :
+                             | (kbd_down   ? 16'o0 : 16'o000100)
+                             | (tape_in    ? 16'o000040 : 16'o0)) :
         16'o000000;
     // ROM read data rides the SDRAM datapath (u_dp drives ad_n); this FSM only
     // latches/drives I/O read data.
@@ -349,7 +356,7 @@ module qbus_mem #(
         if (!init_n) sel1_wflag <= 1'b0;
     end
 
-    // ---- BK speaker capture (177716 bit 6) ------------------------------
+    // ---- BK speaker / tape-motor capture (177716 bits 6/7) ---------------
     // The vm1 self-replies for the whole 177700-177717 block (sel177x, its own
     // pin_rply_out), so a 177716 write completes on the CPU's fast internal
     // reply and the ROM/IO wait FSM above stands down before its reply point
@@ -366,9 +373,15 @@ module qbus_mem #(
     // (BkEmu Speaker.BK0011M_ENABLE_BIT; MiSTer agrees) - when the 0011M
     // mapper lands here, gate this capture with (addr[0] | ~wdata bit 11
     // semantics) accordingly.
+    // mot_bit = bit 7, the tape motor relay: 1 = STOPPED, 0 = running (MONITOR
+    // source d6.mac: KPUSK=020 starts, KSTOP=220 stops; boot init and keyclick
+    // both hold bit 7 = 1, so the motor runs ONLY inside tape operations -
+    // that's what lets ~mot_bit double as the CMT-jack mode enable in the top).
     always_ff @(posedge sclk) begin
-        if (!sync_n && !dout_n && !sel1_n && !addr[0])
+        if (!sync_n && !dout_n && !sel1_n && !addr[0]) begin
             spk_bit <= ~ad_n[6];
+            mot_bit <= ~ad_n[7];
+        end
     end
 
     // ---- Q-bus drivers (inverted; open-collector rply) -------------------

@@ -41,6 +41,10 @@ package qbus_pkg;
    // which steers the 1801ВМ1 reset micro-sequence to the 100000 ROM vector.
    // Bits 15:8 are the startup address; bit 2 is the write-flag (set on any
    // write to the register, cleared after a read) - BkEmu semantics.
+   // Read bit 6 = keyboard key-down (active low), read bit 5 = tape input
+   // (the CMT comparator level). Write bit 6 = speaker/tape-out, write bit 7 =
+   // tape motor relay (1 = stopped) - MONITOR tape-driver (d6.mac) semantics;
+   // both write bits are software-owned latches captured in qbus_mem.
    localparam logic [15:0] REG_SYS   = 16'o177716;
    localparam logic [15:0] SYS_START = 16'o100000;
 
