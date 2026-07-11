@@ -56,6 +56,8 @@ module qbus_mem #(
     input  logic        tape_in,    // CMT comparator level -> 177716 bit 5
     input  logic        sel1_n,     // CPU nSEL1: 177716/17 register select
     input  logic        sel2_n,     // CPU nSEL2: 177714/15 register select
+    input  logic        model_bk11, // DIP-1 model select, latched during DCLO
+                                    // hold (quasi-static): 1 = BK-0011M banking
 
     // ---- SDRAM domain ---------------------------------------------------
     input  logic        sclk,       // sys_clk (96.65 MHz)
@@ -124,8 +126,27 @@ module qbus_mem #(
     always_ff @(negedge sync_n) addr <= ~ad_n;
     assign bus_addr = addr;
 
-    wire sel_ram = !sync_n && (addr <  RAM_TOP);
-    wire sel_rom = !sync_n && (addr >= RAM_TOP) && (addr < IO_BASE);
+    // ---- Phase-7 memory mapper: (addr, map registers) -> (kind, phys) ------
+    // In BK-0010 mode the translate is bit-identical to the old inline decode
+    // (RAM/ROM at phys = addr[15:1]); in BK-0011M mode it implements the
+    // Bk11MemoryManager banking (see mem_mapper.sv). bank_wr flags a 177716
+    // word write with bit 11 set - the banking/peripheral mutual exclusion.
+    logic [1:0]           mkind;
+    logic [ADDR_BITS-1:0] mphys;
+    logic                 bank_wr;
+    mem_mapper #(.ADDR_BITS(ADDR_BITS)) u_map (
+        .sclk(sclk), .rst(reset), .model_bk11(model_bk11),
+        .sync_n(sync_n), .dout_n(dout_n), .wtbt_n(wtbt_n), .sel1_n(sel1_n),
+        .ad_true(~ad_n), .addr0(addr[0]), .bank_wr(bank_wr),
+        .addr(addr), .kind(mkind), .phys(mphys)
+    );
+
+    wire sel_ram = !sync_n && (mkind == MK_RAM037);
+    wire sel_rom = !sync_n && (mkind == MK_ROM);
+    // MK_EXT (BK-0011M window-1 banked RAM): FSM-owned RPLY, read AND write
+    // through the SDRAM datapath - the 037 decodes RAM as ~A[15], so it never
+    // replies above 100000. Empty in BK-0010 mode.
+    wire sel_ext = !sync_n && (mkind == MK_EXT);
     // ---- I/O decode: the CPU's own nSEL1/nSEL2 register-select pins --------
     // The only I/O the CPU delegates to us is its nSEL pair: nSEL1 = 177716/17
     // (system register), nSEL2 = 177714/15 (programmable parallel port -
@@ -202,7 +223,8 @@ module qbus_mem #(
     cpu_sdram_dp #(.ADDR_BITS(ADDR_BITS), .DQ_BITS(DQ_BITS)) u_dp (
         .clk(sclk), .rst_n(~reset),
         .sync_n(sync_n), .din_n(din_n), .dout_n(dout_n), .wtbt_n(wtbt_n),
-        .sel_ram(sel_ram), .sel_romr(sel_romx), .addr(addr), .ad_true(~ad_n),
+        .sel_ram(sel_ram), .sel_romr(sel_romx), .sel_ext(sel_ext),
+        .addr(addr), .phys(mphys), .ad_true(~ad_n),
         .rdata(ram_rdata), .rdata_oe(ram_rdata_oe), .mem_ready(mem_ready),
         .req(dp_req), .we(dp_we), .addr_o(dp_addr), .wdata_o(dp_wdata), .be_o(dp_be),
         .gnt(dp_gnt), .rvalid(dp_rvalid), .rdata_i(arb_rdata)
@@ -276,7 +298,7 @@ module qbus_mem #(
     logic        dbg_romgate;   // diagnostic: an external-ROM read RPLY was extended
                                 // past the fixed N_ROM count (sim observability only)
 
-    wire selected = sel_rom | sel_io;
+    wire selected = sel_rom | sel_ext | sel_io;
     wire is_read  = !din_n;
     wire is_write = !dout_n;
 
@@ -301,7 +323,10 @@ module qbus_mem #(
                         // Sel1RegisterSystemBits semantics.
                         if (is_write && !sel1_n)
                             sel1_wflag <= 1'b1;
-                        wcnt  <= 3'(N_ROM-2);
+                        // MK_EXT gets its own fixed count (a PLACEHOLDER until
+                        // 0011M cycle accuracy - see qbus_pkg). The 3-bit wcnt
+                        // caps any N at 9.
+                        wcnt  <= sel_ext ? 3'(N_EXT-2) : 3'(N_ROM-2);
                         state <= S_WAIT;
                     end
                 end
@@ -323,11 +348,18 @@ module qbus_mem #(
                             // data. Should never happen at BK clock rates; the
                             // ROM-region golden diff catches it if it does.
                             dbg_romgate <= 1'b1;
+                        end else if (sel_ext && !mem_ready) begin
+                            // EXT done-gate, reads AND writes: hold RPLY until
+                            // the SDRAM access completed (the same interlock
+                            // va_037_sync applies to RAM). No dbg flag - for a
+                            // contended EXT write this is the interlock working,
+                            // not an anomaly.
                         end else begin
                             reply <= 1'b1;
                             if (is_read) begin
                                 rdata      <= rd_romio;
-                                drive_data <= !sel_romx;   // SDRAM ROM data: u_dp drives
+                                // SDRAM data (ROM and EXT): u_dp drives
+                                drive_data <= !sel_romx && !sel_ext;
                                 fetch_stb  <= 1'b1;
                             end
                             // 177716 write-flag: cleared after read (rdata
@@ -368,17 +400,21 @@ module qbus_mem #(
     // write must NOT touch it). Never runtime-reset (software-owned latch;
     // survives nINIT and warm reset). Bit 6 only = the BkEmu Speaker contract
     // for a BK-0010 (MiSTer's extra spk_out bits are its tape-monitor mixing,
-    // not register semantics). PHASE-7 (BK-0011M) CONTRACT: word writes with
-    // bit 11 SET are memory-BANKING writes and must NOT update the speaker
-    // (BkEmu Speaker.BK0011M_ENABLE_BIT; MiSTer agrees) - when the 0011M
-    // mapper lands here, gate this capture with (addr[0] | ~wdata bit 11
-    // semantics) accordingly.
+    // not register semantics). PHASE-7 (BK-0011M) CONTRACT: a WORD write with
+    // bit 11 SET is a memory-BANKING write and must NOT update the speaker or
+    // motor (BkEmu Speaker.BK0011M_ENABLE_BIT; MiSTer agrees) - that is the
+    // !bank_wr gate below (mem_mapper's mutual-exclusion flag). Byte writes
+    // can never carry bit 11, so they are ALWAYS peripheral writes; and in
+    // BK-0010 mode bank_wr is forced low, so a bk10 word write with bit 11
+    // set still captures - pinned by spk_capture_tb's 0o177677 and 0o004100
+    // cases. Note sel1_wflag (bit 2) is deliberately still set by banking
+    // writes: BkEmu's Sel1RegisterSystemBits flags ANY write to the register.
     // mot_bit = bit 7, the tape motor relay: 1 = STOPPED, 0 = running (MONITOR
     // source d6.mac: KPUSK=020 starts, KSTOP=220 stops; boot init and keyclick
     // both hold bit 7 = 1, so the motor runs ONLY inside tape operations -
     // that's what lets ~mot_bit double as the CMT-jack mode enable in the top).
     always_ff @(posedge sclk) begin
-        if (!sync_n && !dout_n && !sel1_n && !addr[0]) begin
+        if (!sync_n && !dout_n && !sel1_n && !addr[0] && !bank_wr) begin
             spk_bit <= ~ad_n[6];
             mot_bit <= ~ad_n[7];
         end

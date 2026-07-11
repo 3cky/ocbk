@@ -547,6 +547,8 @@ module ocbk_top (
         .tape_in  (tape_sr[1]),     // 177716 bit 5 (CMT comparator level)
         .sel1_n   (sel_n[1]),       // CPU register selects (push-pull, see the
         .sel2_n   (sel_n[2]),       //   vm1.v local hook): 177716 / 177714
+        .model_bk11(model_bk11),    // DIP-1 model select (latched during DCLO
+                                    //   hold above -> quasi-static here)
         .boot_active(boot_active),
         .bw_req   (bw_req),
         .bw_addr  (bw_addr),

@@ -222,6 +222,7 @@ module ref037_soc_video_tb;
         .tape_in  (1'b0),            // no tape signal in this oracle
         .sel1_n   (sel[1]),          // CPU nSEL1/nSEL2 register selects
         .sel2_n   (sel[2]),
+        .model_bk11(1'b0),           // BK-0010 mode: mapper = bit-identical pass-through
         .boot_active(1'b0),          // loader path gated in ref037_soc_tb
         .bw_req   (1'b0),
         .bw_addr  ({AB{1'b0}}),
@@ -371,7 +372,7 @@ module ref037_soc_video_tb;
         prog['h2D] = 16'o012702; prog['h2E] = 16'o001234;
         prog['h2F] = 16'o000777;                 // self-loop
 
-        for (ii = 0; ii < (1<<17); ii = ii + 1) u_mem.mem[ii] = 16'o000000;
+        for (ii = 0; ii < (1<<18); ii = ii + 1) u_mem.mem[ii] = 16'o000000;
         if ($test$plusargs("romprog")) begin
             u_mem.mem[16'h4000] = 16'o000137;    // JMP @#101000 (from SDRAM ROM)
             u_mem.mem[16'h4001] = 16'o101000;

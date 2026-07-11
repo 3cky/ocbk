@@ -140,6 +140,7 @@ module ref014_irq_soc_tb;
         .tape_in  (1'b0),            // no tape signal in this oracle
         .sel1_n   (sel[1]),          // CPU nSEL1/nSEL2 register selects
         .sel2_n   (sel[2]),
+        .model_bk11(1'b0),           // BK-0010 mode: mapper = bit-identical pass-through
         .boot_active(1'b0),
         .bw_req   (1'b0),
         .bw_addr  ({AB{1'b0}}),
@@ -263,7 +264,7 @@ module ref014_irq_soc_tb;
         pa = 2'b11; sp = 1'b1; dmgi = 1'b1; irq = 3'b111;
         dclo = 1'b0; aclo = 1'b0;
 
-        for (ii = 0; ii < (1<<17); ii = ii + 1) u_mem.mem[ii] = 16'o000000;
+        for (ii = 0; ii < (1<<18); ii = ii + 1) u_mem.mem[ii] = 16'o000000;
         $readmemh("kbd_ram.hex", u_mem.mem, 0, 16383);          // BK RAM
         $readmemh("kbd_rom.hex", u_mem.mem, 'h4000, 'h7F7F);    // ROM region
 

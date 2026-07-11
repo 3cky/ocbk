@@ -31,6 +31,7 @@ module spk_capture_tb;
     logic sel1_n = 1'b1, sel2_n = 1'b1;
     logic reset  = 1'b1;   // = ~dclo_n; held at power-on to init the wait FSM
     logic init_n  = 1'b1;  // Q-bus nINIT (pulsed by the RESET-instruction test)
+    logic model_bk11 = 1'b0;  // flipped by the Phase-7 banking-gate cases
     logic tape_in = 1'b0;  // CMT comparator level -> 177716 read bit 5
     wire        spk_bit;
     wire        mot_bit;
@@ -48,6 +49,7 @@ module spk_capture_tb;
         .tape_in   (tape_in),
         .sel1_n    (sel1_n),
         .sel2_n    (sel2_n),
+        .model_bk11(model_bk11),
         .sclk      (sclk),
         .srst_n    (1'b1),
         .init_done (),
@@ -71,6 +73,10 @@ module spk_capture_tb;
     );
 
     // One DATO (write) bus cycle: SYNC latches `a`, DOUT presents `d`.
+    // NOTE: keeps WTBT asserted through the DOUT window - a BYTE-op signature
+    // (dual-purpose WTBT: write at SYNC time, byte at DOUT time). The original
+    // Phase-6 cases below all use it, which pins that the spk/mot capture
+    // ignores the byte/word distinction in BK-0010 mode.
     task bus_write(input [15:0] a, input [15:0] d);
         begin
             ad_oe = 1'b1; ad_drive = ~a;       // address onto the (inverted) bus
@@ -84,6 +90,46 @@ module spk_capture_tb;
             dout_n = 1'b1; #6 sync_n = 1'b1; wtbt_n = 1'b1; ad_oe = 1'b0;
             sel1_n = 1'b1; sel2_n = 1'b1;
             repeat (2) @(posedge sclk);
+        end
+    endtask
+
+    // Phase-7 byte/word-explicit DATO cycles: the mem_mapper banking decode
+    // keys on WTBT at DOUT time (word write = WTBT RELEASED in the DOUT
+    // window; byte write = asserted), exactly what these two model.
+    // Unlike the legacy task these hold the DOUT window across two cpu_clk
+    // edges (so the ROM/IO wait FSM deterministically observes the write and
+    // sets the bit-2 write-flag - the legacy short window only sometimes
+    // lands on a cclk edge) and drain the FSM back to idle before returning.
+    task bus_write_word(input [15:0] a, input [15:0] d);
+        begin
+            ad_oe = 1'b1; ad_drive = ~a;
+            sel1_n = !(a[15:1] == (16'o177716 >> 1));
+            sel2_n = !(a[15:1] == (16'o177714 >> 1));
+            wtbt_n = 1'b0;                      // write flag at SYNC time
+            #6  sync_n = 1'b0;
+            #6  ad_drive = ~d;
+            #4  wtbt_n = 1'b1;                  // released at DOUT = WORD op
+                dout_n = 1'b1; #1 dout_n = 1'b0;
+            repeat (2) @(posedge cclk);         // FSM detection + sclk capture
+            #2 dout_n = 1'b1; #6 sync_n = 1'b1; ad_oe = 1'b0;
+            sel1_n = 1'b1; sel2_n = 1'b1;
+            repeat (2) @(posedge cclk);         // let the FSM drain to idle
+        end
+    endtask
+
+    task bus_write_byte(input [15:0] a, input [15:0] d);
+        begin
+            ad_oe = 1'b1; ad_drive = ~a;
+            sel1_n = !(a[15:1] == (16'o177716 >> 1));
+            sel2_n = !(a[15:1] == (16'o177714 >> 1));
+            wtbt_n = 1'b0;                      // write flag at SYNC time...
+            #6  sync_n = 1'b0;
+            #6  ad_drive = ~d;
+            #4  dout_n = 1'b1; #1 dout_n = 1'b0; // ...and still asserted = BYTE op
+            repeat (2) @(posedge cclk);
+            #2 dout_n = 1'b1; #6 sync_n = 1'b1; wtbt_n = 1'b1; ad_oe = 1'b0;
+            sel1_n = 1'b1; sel2_n = 1'b1;
+            repeat (2) @(posedge cclk);
         end
     endtask
 
@@ -179,6 +225,45 @@ module spk_capture_tb;
         expect_spk(1'b1, "nINIT keeps spk");
         expect_mot(1'b1, "nINIT keeps mot");
         bus_read(16'o177716, 16'o100100, "read: nINIT cleared wflag");
+
+        // ==== Phase-7: BK-0011M banking vs the speaker/motor capture =======
+        // bk10 regression pin FIRST: on a BK-0010 bit 11 means nothing - a
+        // word write with bit 11 set is still a peripheral write and captures
+        // (state here: spk=1, mot=1; data bit7=0 flips mot).
+        bus_write_word(16'o177716, 16'o004100);
+        expect_spk(1'b1, "bk10 word w/ bit11: captures spk");
+        expect_mot(1'b0, "bk10 word w/ bit11: captures mot");
+
+        model_bk11 = 1'b1;
+        // word writes with bit 11 SET are BANKING: spk/mot must not move
+        // (data bits 6/7 = 0/0 then 1/1 - either capture polarity would show)
+        bus_write_word(16'o177716, 16'o004000);
+        expect_spk(1'b1, "bk11 banking (bits 0/0) leaves spk");
+        expect_mot(1'b0, "bk11 banking (bits 0/0) leaves mot");
+        bus_write_word(16'o177716, 16'o004300);
+        expect_spk(1'b1, "bk11 banking (bits 1/1) leaves spk");
+        expect_mot(1'b0, "bk11 banking (bits 1/1) leaves mot");
+        // a word write with bit 11 CLEAR is a peripheral write, captures
+        bus_write_word(16'o177716, 16'o000200);
+        expect_spk(1'b0, "bk11 word w/o bit11 captures spk");
+        expect_mot(1'b1, "bk11 word w/o bit11 captures mot");
+        // byte writes can never carry bit 11 -> ALWAYS peripheral
+        bus_write_byte(16'o177716, 16'o000100);
+        expect_spk(1'b1, "bk11 byte write captures spk");
+        expect_mot(1'b0, "bk11 byte write captures mot");
+        bus_write_byte(16'o177716, 16'o004000);   // data bit 11 set, but BYTE
+        expect_spk(1'b0, "bk11 byte w/ bit-11 data still captures spk");
+        expect_mot(1'b0, "bk11 byte w/ bit-11 data still captures mot");
+        // the 177717 odd byte is neither banking nor a low-byte capture
+        bus_write_byte(16'o177717, 16'o000300);
+        expect_spk(1'b0, "bk11 177717 byte: no spk effect");
+        expect_mot(1'b0, "bk11 177717 byte: no mot effect");
+        // write-only register + banking-sets-wflag pin: a DATI read after a
+        // banking write returns SYS_START | wflag | kbd - never the map bits
+        bus_read(16'o177716, 16'o100104, "bk11: clear pending wflag");
+        bus_read(16'o177716, 16'o100100, "bk11: wflag now clear");
+        bus_write_word(16'o177716, 16'o004000);   // banking write...
+        bus_read(16'o177716, 16'o100104, "bk11: banking sets wflag, map not readable");
 
         if (errors == 0) $display("COSIM PASS");
         else             $display("COSIM FAIL (%0d errors)", errors);

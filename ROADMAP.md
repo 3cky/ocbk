@@ -362,6 +362,32 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   items consume. The CPU=CLKIN/2 phase lock with the 037 holds only in /32
   mode — /24 walks a deterministic 48-sys_clk pattern; 0011M cycle-accuracy
   is the open point below.
+- **Status (2026-07-11): second increment done (sim)** — the **`mem_mapper`
+  sub-module** of `qbus_mem` implements the BK-0011M banking semantics
+  (BkEmu `Bk11MemoryManager` = the canonical contract): 177716 word writes
+  with bit 11 = banking (window-0 page in bits 14:12; the & 0o033 ROM field
+  decoded ONLY as the exact single-bit codes 001/002/010/020 → window-1 ROM
+  banks, everything else falls through to the bits-10:8 RAM page — the BkEmu
+  quirk, replicated), fixed page 6 low, fixed top ROM, write-only register,
+  banking/speaker mutual exclusion, **DCLO-only map reset** (see below).
+  Window-1 banked RAM is the new **`MK_EXT` region kind**: FSM-owned RPLY at
+  a fixed `N_EXT` (**placeholder = N_RAM**; recalibrate reference-tb-first —
+  0011M cycle accuracy is still the open point), done-gated on `mem_ready`
+  for reads AND writes, read+write through the `cpu_sdram_dp` port-0 path
+  (physical word now comes from the mapper; BK-0010 mode is a bit-identical
+  pass-through — all `golden_037*`/`golden_kbd` oracles unchanged). Layout:
+  8 RAM pages at SDRAM words 0x20000+, 4 window-1 ROM banks at 0x30000+, top
+  ROM at 0x38000+. Oracles: `sim/run_mapper.sh` (unit: full 64K bk10 sweep +
+  the banking contract) and `sim/bk11/run.sh` (SoC functional program at the
+  /24 rate: fill/verify all pages through both windows, page-6 aliasing, RMW
+  in EXT, ROM overlay + write-ignore, 033 quirk, RESET-preserves-map,
+  write-only register). **DIP1-ON hardware is deliberately non-booting for
+  now** — window 1 comes up as uninitialized RAM page 0 (no 0011M ROM blob
+  yet, SYS_START still 0o100000 in both modes).
+  **Deferred follow-ups:** bit-12 СТОП-enable; 177662 write side (screen
+  page/palette select) + video fetch base; the 0011M ROM blob in the EPCS
+  loader + SYS_START 140000; `N_EXT` recalibration and 0011M cycle-accuracy
+  vs a reference (reference-tb-first with golden regeneration).
 
 **Memory model & banking — design notes** (BkEmu remains the authoritative
 register/behaviour reference for the exact bit fields):
@@ -370,14 +396,20 @@ register/behaviour reference for the exact bit fields):
   `000000–037777` is a fixed RAM page and `140000–177777` is fixed top ROM + I/O.
   The two banked windows share the same 8 RAM pages; the *second* window can map
   either a RAM page or one of the ROM pages.
-- Banking is driven by the **177716 (SEL1)** register — a write reconfigures the
-  map only when its ENABLE bit is set (bit 11), and the reset default re-inits
-  the map (INIT-keyed, like every peripheral register). The displayed **video
+- Banking is driven by the **177716 (SEL1)** register — a WORD write
+  reconfigures the map only when its ENABLE bit is set (bit 11). The map
+  resets to config 0 on **DCLO ONLY** (BkEmu `Bk11MemoryManager`: a hardware
+  reset re-inits the map; the RESET instruction / nINIT **preserves** it — a
+  RESET executed from a banked window must not swap the page under the
+  running code). This is a documented exception to the "peripherals reset on
+  nINIT" rule, like the software-owned `spk_bit` latch. The displayed **video
   page + palette live on a separate register (177662)**, not 177716.
-  **Speaker interaction:** a write with bit 11 SET is a banking write and must
-  NOT update `spk_bit` (BkEmu `Speaker.BK0011M_ENABLE_BIT`; MiSTer gates its
-  `spk_out` the same way) — gate the `qbus_mem` DOUT-window speaker capture
-  when the 0011M mapper lands (contract comment is at the capture site).
+  **Speaker interaction (done):** a word write with bit 11 SET is a banking
+  write and does NOT update `spk_bit`/`mot_bit` (BkEmu
+  `Speaker.BK0011M_ENABLE_BIT`; MiSTer gates its `spk_out` the same way) —
+  the `qbus_mem` DOUT-window capture is gated by the mapper's `bank_wr`
+  (byte writes can never carry bit 11 and always capture; bk10 mode ignores
+  bit 11 entirely — pinned by `spk_capture_tb`).
 - **Capacity is a non-issue:** the SDRAM dwarfs everything the design uses (the
   BK-0010 RAM + ROM + two framebuffers occupy a fraction of a percent). Phase 7
   is not about finding room — it is about **address translation**.
@@ -401,9 +433,13 @@ register/behaviour reference for the exact bit fields):
   ownership a selectable source now (0011M banker vs. a later extension) keeps
   Phase 8 a layer-in rather than a rewrite of the translate stage.
 - **Open points to settle reference-tb-first** (per the verification discipline):
-  - *RPLY ownership becomes dynamic* — the `100000–137777` window is RAM (037
-    cycle-stolen, done-gated) in one mapping and ROM (fixed `N_ROM`, not stolen)
-    in another, so the reply source depends on the current bank selection.
+  - *RPLY ownership becomes dynamic* — the `100000–137777` window is banked RAM
+    (`MK_EXT`, FSM-owned fixed-`N_EXT` reply, done-gated) in one mapping and ROM
+    (fixed `N_ROM`, not stolen) in another. *Mechanics are in (the mapper's
+    region kind selects the owner); the open part is the TIMING*: `N_EXT` is a
+    placeholder and whether 0011M banked RAM is 037-style cycle-stolen at all
+    must be settled against a reference before the goldens can mean anything
+    for 0011M mode.
   - *Video fetch base* moves off the fixed `VRAM_BASE` onto the 177662 page
     select (synced into the video domain like `screen_mode`).
   - *0011M cycle-stealing may differ from the 037 model* — validate the banked

@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+"""Generate the Phase-7 BK-0011M banking functional oracle program.
+
+Imports the tiny PDP-11 assembler from gen_mem.py and builds the two SDRAM
+page images sim/bk11/bk11_soc_tb.v preloads (this is a DATA-checking oracle,
+not a timing golden - see sim/bk11/):
+
+  bk11_page0.hex : 8192 words = physical RAM page 0 (SDRAM 0x20000-0x21FFF).
+                   Stage 1 at BK 100000 - the reset map shows page 0 in
+                   window 1 (MK_EXT), so the very first post-reset fetches
+                   exercise the EXT path: set SP, one EXT sanity read, then
+                   JMP @#001000 into the fixed page-6 region.
+  bk11_page6.hex : 8192 words = physical RAM page 6 (SDRAM 0x2C000-0x2DFFF),
+                   the fixed 000000-037777 region: vectors (trap 4 -> the
+                   fail park - any bus timeout parks loudly) + stage 2.
+
+Stage 2 walks the whole Bk11MemoryManager contract: page fill/verify through
+window 0, EXT verify through window 1, page-6 aliasing both directions, RMW
+(DATIO) in EXT - the CLAUDE.md RMW-coverage rule; this is the one bus path
+with no bk10 coverage - ROM overlay codes with write-ignore, the 033-quirk
+fall-through, the fixed top ROM, nINIT preserve (RESET instruction), and the
+write-only map register. Pattern offsets are >= 0o20000 within a window so
+page-6 writes never clobber the vectors/code/stack at the bottom of page 6.
+
+Park loops (pinned, the tb keys off them):
+  success self-loop PC = 001004
+  failure self-loop PC = 001012
+The unrolled program is far longer than a branch reach, so every check uses
+BEQ-over-JMP: BEQ .+6 / JMP @#fail.
+
+ROMPAT0/ROMPAT3/TOPPAT below must match the tb's SDRAM pokes at word
+0x30000 / 0x36000 / 0x38000 (keep the two in sync).
+"""
+import sys
+
+from gen_mem import Asm, BR, BNE, BEQ
+
+PAGE_WORDS = 8192            # one 0011M RAM page = 040000 bytes
+PROG_BASE = 0o001000
+STAGE1_BASE = 0o100000
+
+BIT11 = 0o004000             # the 177716 banking-ENABLE bit
+
+W0 = 0o040000                # window 0 base (always RAM)
+W1 = 0o100000                # window 1 base (RAM page or ROM overlay)
+OFF_A = 0o20000              # pattern offsets within a window (>= 0o20000:
+OFF_B = 0o30000              #   page-6 writes stay above vectors/code/stack)
+OFF_C = 0o24000              # page-6 aliasing scratch
+
+# tb-poked ROM overlay / top-ROM markers (sim/bk11/bk11_soc_tb.v pokes these
+# at SDRAM words 0x30000 / 0x36000 / 0x38000 - keep in sync)
+ROMPAT0 = 0o123456
+ROMPAT3 = 0o165432
+TOPPAT = 0o054321
+
+ALIAS1 = 0o167321
+ALIAS2 = 0o043210
+
+
+def pat_a(p):
+    return 0o052500 + p
+
+
+def pat_b(p):
+    return 0o125200 + p
+
+
+_ok = [0]
+
+
+def expect_eq(a):
+    """After a CMP: fall through if equal, else JMP @#fail (branch-reach-proof)."""
+    n = _ok[0]
+    _ok[0] += 1
+    a.br(BEQ, f"__ok{n}")
+    a.emit(0o000137)                        # JMP @#fail
+    a.addr("fail")
+    a.label(f"__ok{n}")
+
+
+def cmp_mem_imm(a, addr, imm):
+    a.emit(0o023727, addr, imm)             # CMP @#addr,#imm
+    expect_eq(a)
+
+
+def bank_write(a, val):
+    a.emit(0o012737, val, 0o177716)         # MOV #val,@#177716 (word = banking)
+
+
+def build_stage2():
+    a = Asm(base=PROG_BASE)
+
+    # --- fixed park block (addresses hardcoded in the tb) -------------------
+    a.br(BR, "start")                       # 001000
+    a.label("success")
+    a.emit(0o005003)                        # 001002  CLR R3 (success marker)
+    a.label("sloop")
+    a.emit(0o000777)                        # 001004  BR .   <- success
+    a.label("fail")
+    a.emit(0o012704, 0o000001)              # 001006  MOV #1,R4
+    a.label("floop")
+    a.emit(0o000777)                        # 001012  BR .   <- failure
+
+    a.label("start")
+
+    # --- 1. fill: distinct patterns into every page through window 0 --------
+    for p in range(8):
+        bank_write(a, BIT11 | (p << 12))
+        a.emit(0o012737, pat_a(p), W0 + OFF_A)
+        a.emit(0o012737, pat_b(p), W0 + OFF_B)
+
+    # --- 2. verify through window 0 ------------------------------------------
+    for p in range(8):
+        bank_write(a, BIT11 | (p << 12))
+        cmp_mem_imm(a, W0 + OFF_A, pat_a(p))
+        cmp_mem_imm(a, W0 + OFF_B, pat_b(p))
+
+    # --- 3. verify through window 1 (MK_EXT reads) ---------------------------
+    for p in range(1, 8):
+        bank_write(a, BIT11 | (p << 8))
+        cmp_mem_imm(a, W1 + OFF_A, pat_a(p))
+        cmp_mem_imm(a, W1 + OFF_B, pat_b(p))
+
+    # --- 4. page-6 aliasing, both directions ---------------------------------
+    bank_write(a, BIT11 | (6 << 12))
+    a.emit(0o012737, ALIAS1, W0 + OFF_C)    # write via window 0...
+    cmp_mem_imm(a, OFF_C, ALIAS1)           # ...read via the fixed region
+    a.emit(0o012737, ALIAS2, OFF_C)         # write via the fixed region...
+    cmp_mem_imm(a, W0 + OFF_C, ALIAS2)      # ...read via window 0
+
+    # --- 5. RMW (DATIO) in EXT: the one bus path with no bk10 coverage -------
+    bank_write(a, BIT11 | (2 << 8))
+    a.emit(0o005037, W1 + OFF_A)            # CLR  -> 0
+    a.emit(0o005237, W1 + OFF_A)            # INC  -> 1
+    a.emit(0o006337, W1 + OFF_A)            # ASL  -> 2
+    a.emit(0o052737, 0o000025, W1 + OFF_A)  # BIS #25 -> 27
+    cmp_mem_imm(a, W1 + OFF_A, 0o000027)
+
+    # --- 6. ROM overlays: read the tb-poked markers; writes reply+ignore ------
+    bank_write(a, BIT11 | 0o001 | (1 << 8))  # bank 0 mapped, page field = 1
+    cmp_mem_imm(a, W1, ROMPAT0)
+    a.emit(0o012737, 0o123123, W1)          # junk into the ROM overlay...
+    a.emit(0o012737, 0o121212, W1 + OFF_A)  # ...and at the page-1 pattern spot
+    bank_write(a, BIT11 | (1 << 8))         # window 1 -> RAM page 1
+    cmp_mem_imm(a, W1 + OFF_A, pat_a(1))    # page-1 pattern intact
+    cmp_mem_imm(a, W1, 0)                   # page-1 word 0 untouched
+    bank_write(a, BIT11 | 0o001)
+    cmp_mem_imm(a, W1, ROMPAT0)             # ROMPAT0 intact
+    bank_write(a, BIT11 | 0o020)            # code 020 -> bank 3
+    cmp_mem_imm(a, W1, ROMPAT3)
+
+    # --- 7. the 033-quirk: 003 falls through to RAM; 005 masks to bank 0 -----
+    bank_write(a, BIT11 | (5 << 8) | 0o003)
+    cmp_mem_imm(a, W1 + OFF_A, pat_a(5))
+    bank_write(a, BIT11 | 0o005)
+    cmp_mem_imm(a, W1, ROMPAT0)
+
+    # --- 8. fixed top ROM ------------------------------------------------------
+    cmp_mem_imm(a, 0o140000, TOPPAT)
+
+    # --- 9. nINIT preserve: the RESET instruction must NOT re-init the map ----
+    bank_write(a, BIT11 | (3 << 12))
+    a.emit(0o000005)                        # RESET (pulses nINIT)
+    cmp_mem_imm(a, W0 + OFF_A, pat_a(3))    # window 0 still shows page 3
+
+    # --- 10. write-only register: reads return the system bits, never the map -
+    a.emit(0o013700, 0o177716)              # MOV @#177716,R0
+    a.emit(0o042700, 0o000144)              # BIC #144,R0 (wflag/tape/kbd volatile)
+    a.emit(0o022700, 0o100000)              # CMP #100000,R0
+    expect_eq(a)
+
+    # --- 11. success ------------------------------------------------------------
+    a.emit(0o000137)                        # JMP @#success
+    a.addr("success")
+
+    words = a.resolve()
+    return words, a.labels
+
+
+def build_stage1():
+    a = Asm(base=STAGE1_BASE)
+    a.emit(0o012706, 0o000700)              # MOV #700,SP (stack in fixed page 6)
+    a.emit(0o013700, STAGE1_BASE)           # MOV @#100000,R0 (EXT sanity read:
+    a.emit(0o022700, 0o012706)              #   our own first opcode)
+    a.br(BEQ, "go")
+    a.emit(0o000137, 0o001006)              # JMP @#fail (park in page 6)
+    a.label("go")
+    a.emit(0o000137, PROG_BASE)             # JMP @#001000 (stage 2, page 6)
+    return a.resolve()
+
+
+def main():
+    outdir = sys.argv[1] if len(sys.argv) > 1 else "."
+
+    s2, labels = build_stage2()
+
+    def word_at(label):
+        return PROG_BASE + 2 * labels[label]
+
+    # the pinned park addresses the tb keys on
+    assert word_at("sloop") == 0o001004, oct(word_at("sloop"))
+    assert word_at("floop") == 0o001012, oct(word_at("floop"))
+    # stage 2 must stay below the in-page pattern/scratch offsets
+    assert PROG_BASE + 2 * len(s2) <= OFF_A, \
+        f"stage 2 spills into the pattern area ({len(s2)} words)"
+
+    page6 = [0] * PAGE_WORDS
+    page6[0o004 >> 1] = word_at("fail")     # trap 4 (bus timeout) -> fail park
+    page6[0o006 >> 1] = 0o000340
+    for i, w in enumerate(s2):
+        page6[(PROG_BASE >> 1) + i] = w
+
+    s1 = build_stage1()
+    page0 = [0] * PAGE_WORDS
+    for i, w in enumerate(s1):
+        page0[i] = w
+
+    for name, img in (("bk11_page0.hex", page0), ("bk11_page6.hex", page6)):
+        with open(f"{outdir}/{name}", "w") as f:
+            for w in img:
+                f.write(f"{w:04x}\n")
+    print(f"wrote {outdir}/bk11_page0.hex + bk11_page6.hex "
+          f"(stage 2 {len(s2)} words at {oct(PROG_BASE)})")
+
+
+if __name__ == "__main__":
+    main()

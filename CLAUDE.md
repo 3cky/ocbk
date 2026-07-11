@@ -86,6 +86,23 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   (enables included), the /24 BK-0011M rate exact, and a retarget sweep (no
   half-period outside 12..16 sys_clk). The SoC tbs replicate the divider
   locally, so this is the only sim coverage of the real chain.
+- `sim/run_mapper.sh` — the Phase-7 `mem_mapper` unit oracle: BK-0010 mode
+  swept over **all 64K addresses** against the pre-Phase-7 inline decode
+  (before AND after banking writes — bk10 decode must be map-content-
+  independent), plus the full BK-0011M banking contract (window pages, the
+  four ROM overlay codes, the & 0o033-quirk fall-through, word-write-only
+  banking, `bank_wr` mutual exclusion, DCLO-only re-init, model_bk11 flips
+  keeping register content).
+- `sim/bk11/run.sh` — the Phase-7 BK-0011M SoC **functional** oracle
+  (data-checking, NOT a timing golden — ref037 keeps the timing-reference
+  meaning): the `mem/gen_bk11_test.py` program (pinned parks: success
+  **001004**, fail **001012**; vector 4 → fail) boots from the EXT window on
+  the real SoC stack at the /24 CPU rate under port-2 contention and walks
+  the whole Bk11MemoryManager contract: fill/verify all 8 pages through both
+  windows, page-6 aliasing both directions, **RMW in EXT** (the one bus path
+  with no bk10 coverage — the CLAUDE.md RMW rule), ROM overlays +
+  write-ignore, the 033 quirk, fixed top ROM, **RESET-instruction preserves
+  the map**, and the write-only register.
 - `sim/run_epcs_boot.sh` — the Phase-5 EPCS loader unit cosim (flash model →
   `epcs_boot` → arbiter port 0 → SDRAM): word-exact load + a corrupted-blob run
   that must end `boot_ok=0`.
@@ -254,7 +271,27 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   default-mode bootstrap JMP therefore lives in the SDRAM ROM region (word
   0x4000 → RAM program) instead of an on-chip stub — timing-identical (same
   fixed `N_ROM`), `golden_037.txt` unchanged.
-- **Video pipeline conventions (Phase 4)** — mirror these in RTL, cosims and
+- **Memory mapper (Phase 7):** `src/mem_mapper.sv` is the one translation seam
+  in `qbus_mem`: *(CPU address, map registers) → (region kind `MK_*`, physical
+  SDRAM word)*; the kind encodes the RPLY owner AND writability (see
+  `qbus_pkg`). BK-0010 mode is a **bit-identical pass-through** of the old
+  inline decode (that's what keeps every timing golden the regression
+  anchor). BK-0011M banking = BkEmu `Bk11MemoryManager`: 177716 **word**
+  writes with bit 11 (a byte write can never bank — no bit 11; the 177717
+  odd byte is never banking), ROM field `& 0o033` decoded only as the exact
+  single-bit codes (others fall through to RAM — a replicated BkEmu quirk),
+  register write-only on read. The mapper owns the map registers (bus-write
+  snoop) and exposes `bank_wr`, which gates the spk/mot capture (banking and
+  peripheral writes are mutually exclusive; banking still sets the bit-2
+  write-flag). **Map reset is DCLO-only — a deliberate exception to the
+  nINIT peripheral-reset rule** (like the software-owned `spk_bit`): the
+  RESET instruction must not swap the page under the running code (BkEmu
+  semantics; checked by the bk11 SoC oracle). Window-1 banked RAM is the
+  `MK_EXT` kind: FSM-owned fixed-`N_EXT` reply (placeholder = N_RAM;
+  recalibrate reference-tb-first), done-gated on `mem_ready` for reads AND
+  writes, riding the `cpu_sdram_dp` port-0 path (`phys` from the mapper;
+  `addr` kept for byte lanes). Phase-8 hook: window ownership is a
+  selectable source — the SMK512 layers into the mapper, not into qbus_mem.
   `gen_expected.py` alike: FB = 512 slots/line × 4-bit post-palette index ×
   256 lines, 128 words/line, slot `s` of a word at bits `[4s+3:4s]`, LSB-first in
   beam order; FB0 = SDRAM word `0x010000`, FB1 = `0x018000`, double-buffered

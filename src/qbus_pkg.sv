@@ -37,6 +37,34 @@ package qbus_pkg;
    localparam int unsigned N_KBD = 1;
    localparam int unsigned N_IAK = 1;
 
+   // ---- Phase-7 mem_mapper region kinds (BK-0011M banking) -----------------
+   // Plain localparams (no enum) - Quartus II 11.0 chokes on package enums used
+   // across module boundaries. Writability is encoded by the kind itself:
+   //   MK_NONE   : undecoded -> no reply, the CPU's qbto timer -> trap 4
+   //   MK_RAM037 : 037-owned RPLY (the arbitrated DRAM window; read+write)
+   //   MK_EXT    : FSM-owned RPLY, banked RAM behind window 1 (read+write) -
+   //               the 037 never replies here (it decodes RAM as ~A[15])
+   //   MK_ROM    : FSM-owned RPLY, read-only (writes are replied to + ignored)
+   localparam logic [1:0] MK_NONE   = 2'd0;
+   localparam logic [1:0] MK_RAM037 = 2'd1;
+   localparam logic [1:0] MK_EXT    = 2'd2;
+   localparam logic [1:0] MK_ROM    = 2'd3;
+
+   // MK_EXT fixed reply count. PLACEHOLDER: 0011M cycle-accuracy is a later
+   // Phase-7 item - recalibrate reference-testbench-first (like N_ROM was)
+   // before trusting it, and note the wait FSM's 3-bit wcnt caps any N at 9.
+   localparam int unsigned N_EXT = N_RAM;
+
+   // BK-0011M physical SDRAM layout (word addresses). The BK-0010 image
+   // (RAM 0x0000-0x3FFF, ROM 0x4000-0x7F7F, FB0/FB1 up to 0x1FFFF) is
+   // untouched; the 0011M banked space starts above the framebuffers.
+   // Page/bank bases are power-of-two aligned so the mapper's physical
+   // translation is pure concatenation - no adders.
+   localparam logic [23:0] BK11_RAM_BASE    = 24'h020000; // 8 RAM pages x 0x2000
+   localparam logic [23:0] BK11_WROM_BASE   = 24'h030000; // 4 window-1 ROM banks
+   localparam logic [23:0] BK11_TOPROM_BASE = 24'h038000; // fixed 140000-177577 ROM
+                                                          // (tops out at 0x39FBF)
+
    // System start-up register: reading 177716 returns 100000 (boot from ROM),
    // which steers the 1801ВМ1 reset micro-sequence to the 100000 ROM vector.
    // Bits 15:8 are the startup address; bit 2 is the write-flag (set on any

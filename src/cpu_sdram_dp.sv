@@ -26,6 +26,18 @@
 // framebuffers. ROM is read-only here: a ROM write (or the DOUT phase of a ROM
 // DATIO) is never issued to the SDRAM - the qbus_mem front-end replies and
 // ignores it, so nothing in this FSM changes for it.
+//
+// Phase 7: the physical word address now comes from mem_mapper as `phys` (in
+// BK-0010 mode it IS addr[15:1], so nothing moves); `addr` stays connected for
+// the addr[0] byte-lane select. MK_EXT (sel_ext, the BK-0011M window-1 banked
+// RAM) is readable AND writable here, with qbus_mem's wait FSM owning RPLY:
+//   * the DATIO RMW note above applies verbatim - the strobes-idle D_DONE exit
+//     is what lets an EXT INC/BIS/... issue its write phase;
+//   * an EXT write is a posted write (D_WR_REQ -> D_DONE on gnt) with
+//     mem_ready as the FSM's write done-gate - the same interlock va_037_sync
+//     uses for RAM writes; gnt means the arbiter consumed the command, and
+//     port 0 is in-order single-outstanding, so a posted-write-then-RPLY can
+//     never be overtaken or reordered.
 module cpu_sdram_dp #(
     parameter int ADDR_BITS = 24,
     parameter int DQ_BITS   = 16
@@ -40,7 +52,10 @@ module cpu_sdram_dp #(
     input  logic                 wtbt_n,
     input  logic                 sel_ram,   // this access targets RAM (SYNC-framed)
     input  logic                 sel_romr,  // targets SDRAM-backed ROM (read-only)
-    input  logic [15:0]          addr,      // latched RAM word address (true)
+    input  logic                 sel_ext,   // targets 0011M banked RAM (read+write,
+                                            // FSM-owned RPLY - see header)
+    input  logic [15:0]          addr,      // latched bus address (true; byte lanes)
+    input  logic [ADDR_BITS-1:0] phys,      // mapped physical SDRAM word address
     input  logic [15:0]          ad_true,   // current bus data (true = ~ad_n), for writes
 
     // ---- read-data drive + done-gate ----------------------------------------
@@ -66,8 +81,8 @@ module cpu_sdram_dp #(
 
     logic [15:0] rd_hold;
 
-    wire is_read  = (sel_ram || sel_romr) && !din_n;
-    wire is_write = sel_ram && !dout_n;       // ROM writes never reach the SDRAM
+    wire is_read  = (sel_ram || sel_romr || sel_ext) && !din_n;
+    wire is_write = (sel_ram || sel_ext) && !dout_n; // ROM writes never reach the SDRAM
     // Byte op is WTBT sampled at DOUT time (dual-purpose WTBT).
     wire byte_op  = !wtbt_n;
 
@@ -86,13 +101,13 @@ module cpu_sdram_dp #(
                     req <= 1'b0;
                     if (is_read) begin                 // prefetch the read
                         we     <= 1'b0;
-                        addr_o <= ADDR_BITS'(addr[15:1]);
+                        addr_o <= phys;
                         be_o   <= 2'b11;
                         req    <= 1'b1;
                         state  <= D_RD_REQ;
                     end else if (is_write) begin        // capture + issue the write
                         we      <= 1'b1;
-                        addr_o  <= ADDR_BITS'(addr[15:1]);
+                        addr_o  <= phys;
                         wdata_o <= ad_true;
                         be_o    <= byte_op ? (addr[0] ? 2'b10 : 2'b01) : 2'b11;
                         req     <= 1'b1;
@@ -119,6 +134,6 @@ module cpu_sdram_dp #(
 
     assign mem_ready = (state == D_DONE);
     assign rdata     = rd_hold;
-    assign rdata_oe  = (state == D_DONE) && !din_n && (sel_ram || sel_romr);
+    assign rdata_oe  = (state == D_DONE) && !din_n && (sel_ram || sel_romr || sel_ext);
 
 endmodule

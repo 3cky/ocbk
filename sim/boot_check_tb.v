@@ -177,6 +177,7 @@ module boot_check_tb;
         .tape_in  (1'b0),            // no tape signal in this oracle
         .sel1_n   (sel[1]),          // CPU nSEL1/nSEL2 register selects
         .sel2_n   (sel[2]),
+        .model_bk11(1'b0),           // BK-0010 mode: mapper = bit-identical pass-through
         .boot_active(1'b0),
         .bw_req   (1'b0),
         .bw_addr  ({AB{1'b0}}),
@@ -299,7 +300,7 @@ module boot_check_tb;
         wr_seen = 0;
         tracef = $fopen("boot_trace.txt", "w");
         $readmemh("../mem/boot_blob_flash.hex", blob, 'h40000);
-        for (ii = 0; ii < (1<<17); ii = ii + 1) u_mem.mem[ii] = 16'o000000;
+        for (ii = 0; ii < (1<<18); ii = ii + 1) u_mem.mem[ii] = 16'o000000;
         for (ii = 0; ii < 16320; ii = ii + 1)
             u_mem.mem[16'h4000 + ii] =
                 {blob['h40008 + 2*ii + 1], blob['h40008 + 2*ii]};

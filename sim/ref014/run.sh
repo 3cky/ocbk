@@ -79,7 +79,7 @@ iverilog -g2012 -o "$SP/irqsoc.vvp" -s ref014_irq_soc_tb \
    "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
    "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" \
    ../../src/qbus_pkg.sv ../../src/va_037_sync.sv ../../src/cpu_sdram_dp.sv \
-   ../../src/sdram_arbiter.sv ../../src/sdram_ctrl.sv ../../src/qbus_mem.sv \
+   ../../src/sdram_arbiter.sv ../../src/sdram_ctrl.sv ../../src/mem_mapper.sv ../../src/qbus_mem.sv \
    ../../src/bk_kbd014.sv ../sdram_model.sv \
    ref014_irq_soc_tb.v 2>&1 | grep -v 'sorry:' || true
 
