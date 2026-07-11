@@ -18,9 +18,12 @@ Stage 2 walks the whole Bk11MemoryManager contract: page fill/verify through
 window 0, EXT verify through window 1, page-6 aliasing both directions, RMW
 (DATIO) in EXT - the CLAUDE.md RMW-coverage rule; this is the one bus path
 with no bk10 coverage - ROM overlay codes with write-ignore, the 033-quirk
-fall-through, the fixed top ROM, nINIT preserve (RESET instruction), and the
-write-only map register. Pattern offsets are >= 0o20000 within a window so
-page-6 writes never clobber the vectors/code/stack at the bottom of page 6.
+fall-through, the fixed top ROM, nINIT preserve (RESET instruction), the
+write-only map register, and (Phase 7) the 177662 video register: word
+writes replied + RESET-preserved (the tb checks the vid_* taps), reads
+un-replied (write-only; trap-4 detour proves the timeout). Pattern offsets
+are >= 0o20000 within a window so page-6 writes never clobber the
+vectors/code/stack at the bottom of page 6.
 
 Park loops (pinned, the tb keys off them):
   success self-loop PC = 001004
@@ -169,7 +172,30 @@ def build_stage2():
     a.emit(0o022700, 0o100000)              # CMP #100000,R0
     expect_eq(a)
 
-    # --- 11. success ------------------------------------------------------------
+    # --- 11. 177662 video register (Phase 7; MiSTer video.sv contract) --------
+    # Word writes must be REPLIED (no trap 4 = simply not parking at fail);
+    # nINIT must preserve the captured bits (DCLO-only reset, like the map);
+    # reads must NOT be replied by qbus_mem (write-only register - here, with
+    # no 014 keyboard chip in the tb stack, the read bus-times-out -> trap 4,
+    # proven via a temporary vector-4 detour). Final register state (page=1,
+    # irq2_mask=0, pal=0o12) differs from the DCLO defaults (0/1/0o17) in
+    # EVERY field - the tb checks the vid_* taps after the success park.
+    a.emit(0o012737, 0o102400, 0o177662)    # page=1, irq2 unmasked, pal=5
+    a.emit(0o012737, 0o105000, 0o177662)    # page=1, irq2 unmasked, pal=0o12
+    a.emit(0o000005)                        # RESET: must preserve the register
+    a.emit(0o012737)                        # MOV #vread_ok,@#4 (detour vector 4)
+    a.addr("vread_ok")
+    a.emit(0o000004)
+    a.emit(0o013700, 0o177662)              # MOV @#177662,R0 -> MUST time out
+    a.emit(0o000137)                        # replied?! -> fail
+    a.addr("fail")
+    a.label("vread_ok")                     # trap-4 entry (read not replied)
+    a.emit(0o062706, 0o000004)              # ADD #4,SP (drop the pushed PC/PSW)
+    a.emit(0o012737)                        # MOV #fail,@#4 (restore the vector)
+    a.addr("fail")
+    a.emit(0o000004)
+
+    # --- 12. success ------------------------------------------------------------
     a.emit(0o000137)                        # JMP @#success
     a.addr("success")
 

@@ -74,9 +74,10 @@ module video_pipe_tb;
     wire [DW-1:0] w_wdata, arb_rdata;
     wire        fb_front, fb_front_valid, err_fetch_ovr, err_fifo_ovf;
 
-    fb_video #(.ADDR_BITS(AB), .DQ_BITS(DW), .VRAM_BASE(VRAM_BASE),
+    fb_video #(.ADDR_BITS(AB), .DQ_BITS(DW),
                .FB0_BASE(FB0_BASE), .FB1_BASE(FB1_BASE)) u_fbv (
         .clk(sys_clk), .rst_n(dclo), .screen_mode(1'b1),
+        .vram_base(VRAM_BASE), .pal_idx(4'd0),    // bk10: fixed base, palette 0
         .vid_fetch(vfetch), .vid_line_en(line_en), .hgate(hgate), .vgate(vgate),
         .video_va(video_va),
         .f_req(f_req), .f_addr(f_addr), .f_gnt(f_gnt), .f_rvalid(f_rvalid),
@@ -174,14 +175,19 @@ module video_pipe_tb;
     reg [15:0] vram_img [0:8191];
     reg [15:0] fb_exp   [0:32767];
 
+    // Physical-colour decode (Phase 7, mirrors vga_out.sv): the FB nibble is
+    // {R1, B, G, R0}; red levels 0/0x23/0x30/0x3F for R0/R1 weighting.
     function automatic [17:0] clut(input [3:0] idx);   // {r,g,b}
-        case (idx)
-            4'd1:    clut = {6'h00, 6'h00, 6'h3F};
-            4'd2:    clut = {6'h00, 6'h3F, 6'h00};
-            4'd3:    clut = {6'h3F, 6'h00, 6'h00};
-            4'd15:   clut = {6'h3F, 6'h3F, 6'h3F};
-            default: clut = 18'h0;
-        endcase
+        reg [5:0] rr;
+        begin
+            case ({idx[3], idx[0]})
+                2'b11:   rr = 6'h3F;
+                2'b10:   rr = 6'h30;
+                2'b01:   rr = 6'h23;
+                default: rr = 6'h00;
+            endcase
+            clut = {rr, idx[1] ? 6'h3F : 6'h00, idx[2] ? 6'h3F : 6'h00};
+        end
     endfunction
 
     // ---- pixel compare (pipeline mirrors, sampled on negedge) ------------------------

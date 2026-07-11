@@ -118,14 +118,19 @@ module vga_out_tb;
     );
 
     // ---- expected-pixel model ---------------------------------------------------
+    // Physical-colour decode (Phase 7, mirrors vga_out.sv): the FB nibble is
+    // {R1, B, G, R0}; red levels 0/0x23/0x30/0x3F for the R0/R1 weighting.
     function automatic [17:0] clut(input [3:0] idx);   // {r,g,b}
-        case (idx)
-            4'd1:    clut = {6'h00, 6'h00, 6'h3F};
-            4'd2:    clut = {6'h00, 6'h3F, 6'h00};
-            4'd3:    clut = {6'h3F, 6'h00, 6'h00};
-            4'd15:   clut = {6'h3F, 6'h3F, 6'h3F};
-            default: clut = 18'h0;
-        endcase
+        reg [5:0] rr;
+        begin
+            case ({idx[3], idx[0]})
+                2'b11:   rr = 6'h3F;
+                2'b10:   rr = 6'h30;
+                2'b01:   rr = 6'h23;
+                default: rr = 6'h00;
+            endcase
+            clut = {rr, idx[1] ? 6'h3F : 6'h00, idx[2] ? 6'h3F : 6'h00};
+        end
     endfunction
 
     // pipeline mirrors (compare on negedge: post-edge values settled)

@@ -16,18 +16,20 @@ The retimed **1801ВП1-037** (`va_037_sync`) owns RAM RPLY and its cycle-steali
 grant timing; **BK RAM (000000–077777) and ROM (100000–177577) live in the board
 SDRAM** behind a 4-port arbiter (ROM is *not* 037-arbitrated — real mask ROM is
 never cycle-stolen — and keeps the fixed `N_ROM` reply, done-gated against a late
-SDRAM word). The 037 video fetch is decoded through the BK-0010 fixed palette
-into a **double-buffered 4-bit-index framebuffer in SDRAM** and scanned out at
-**1024×768@60** (×2H/×3V integer scale, 6-bit R-2R VGA DAC). `screen_mode`
-(colour-256 / mono-512, the physical monitor cable switch on a real BK) is
-toggled by the PS/2 **Print Screen** key (power-on default = colour-256). The
-BK ROM always runs from the loaded SDRAM image; if the flash blob fails
-validation the CPU is held in reset (no on-chip fallback). **DIP 1 selects the
-model** (OFF = BK-0010, ON = BK-0011M — Phase 7 in progress: currently it
-selects the CPU clock, 3.02 vs 4.03 MHz; latched at power-on and by the reset
-button). DIP 2 is unused.
+SDRAM word). The 037 video fetch is decoded through the 16-palette stage
+(BK-0011M `177662` palettes; BK-0010 = palette 0) into a **double-buffered
+framebuffer in SDRAM** storing the 4-bit physical colour {R1,B,G,R0} per
+pixel, and scanned out at **1024×768@60** (×2H/×3V integer scale, 6-bit R-2R
+VGA DAC). `screen_mode` (colour-256 / mono-512, the physical monitor cable
+switch on a real BK) is toggled by the PS/2 **Print Screen** key (power-on
+default = colour-256). The BK ROM always runs from the loaded SDRAM image; if
+the flash blob fails validation the CPU is held in reset (no on-chip
+fallback). **DIP 1 selects the model** (OFF = BK-0010, ON = BK-0011M — Phase
+7 in progress: the 4.03 MHz CPU clock, the 177716 banking mapper and the
+177662 screen-page/palette register are in; no 0011M ROM blob yet, so DIP 1
+ON does not boot). DIP 2 is unused.
 
-- Fits in **3931 / 12060 LEs (33%)**, **1 M4K**, **1 ASMI block**, **1 PLL**;
+- Fits in **4208 / 12060 LEs (35%)**, **1 M4K**, **1 ASMI block**, **1 PLL**;
   timing closes.
 - Cycle accuracy holds under full 4-port SDRAM contention for RAM *and* ROM
   execution: the SoC cosims reproduce both goldens (`golden_037.txt`,
@@ -54,10 +56,10 @@ src/epcs_boot.sv EPCS flash -> SDRAM boot loader (SPI via cyclone_asmiblock)
 mem/roms/       BK-0010.01 ROM set (monit10 + BASIC Vilnius, from BkEmu)
 mem/gen_boot_blob.py boot-blob builder (header/checksum + COF hex page)
 src/fb_video.sv  037 fetch -> palette -> FB writer (ports 2+3, buffer swap)
-src/palette_apply.sv BK-0010 fixed palette stage (the BK-0011M seam, Phase 7)
+src/palette_apply.sv 16-palette stage (MiSTer palette ROM; bk10 = palette 0)
 src/fb_readout.sv paced FB line prefetcher (port 1) + pixel-side CDC
 src/fb_linebuf.sv dual-clock ping-pong line buffer (1 M4K)
-src/vga_out.sv   1024x768@60 scan-out: scheduling, CLUT, x2/x3 scale
+src/vga_out.sv   1024x768@60 scan-out: scheduling, colour decode, x2/x3 scale
 src/vga_timing.sv vendored VESA timing generator (ocb-test, board-proven)
 src/qbus_sdram.sv Phase-2 RAM-in-SDRAM slave (retired from build; cosim only)
 src/qbus_slot.sv cartridge-slot bridge (forward seam, SLOT_ENABLE=0)

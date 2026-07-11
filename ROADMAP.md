@@ -384,10 +384,37 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   write-only register). **DIP1-ON hardware is deliberately non-booting for
   now** — window 1 comes up as uninitialized RAM page 0 (no 0011M ROM blob
   yet, SYS_START still 0o100000 in both modes).
-  **Deferred follow-ups:** bit-12 СТОП-enable; 177662 write side (screen
-  page/palette select) + video fetch base; the 0011M ROM blob in the EPCS
-  loader + SYS_START 140000; `N_EXT` recalibration and 0011M cycle-accuracy
-  vs a reference (reference-tb-first with golden regeneration).
+  **Deferred follow-ups:** bit-12 СТОП-enable; the 0011M ROM blob in the EPCS
+  loader + SYS_START 140000; `N_EXT`/`N_VREG` recalibration and 0011M
+  cycle-accuracy vs a reference (reference-tb-first with golden regeneration).
+- **Status (2026-07-11): third increment done (sim)** — the **177662 video
+  register** (screen page / palette select) + the physical-colour video path.
+  **MiSTer `BK0011M_MiSTer/rtl/video.sv` is the reference for this register**
+  (BkEmu's handling is simplified): write-only (662 reads stay with the 014
+  keyboard data register in both models), bk11-only (a bk10 662 write still
+  bus-times-out → trap 4), high byte only — bit 15 = displayed screen
+  (0 = RAM page 1 → SDRAM `BK11_VPAGE0`, 1 = page 7 → `BK11_VPAGE1`), bit 14
+  = frame-IRQ2 mask (captured, consumer = the timer item), bits 11:8 =
+  palette (16 palettes); immediate effect, **DCLO-only reset** (defaults =
+  MiSTer `def_reg662` 0o047400: page 0, IRQ2 masked, palette 15). `qbus_mem`
+  owns the one positive decode besides the nSEL pair (capture in the sclk
+  DOUT window next to `spk_bit`; write reply = fixed `N_VREG` placeholder in
+  the wait FSM); `bk_kbd014` is untouched. **The canonical 4-bit FB index is
+  now the physical colour nibble {R1, B, G, R0}** (2-bit red, 1-bit
+  blue/green — the machine's whole colour space): `palette_apply` looks up
+  the MiSTer `palettes[16]` ROM verbatim (`pal_idx` rides with each fetch,
+  beam-raced), `vga_out` decodes the nibble combinationally (red levels
+  0/0x23/0x30/0x3F ≈ the BkEmu 0x8E/0xC0 weights) — bk10 palette 0 =
+  {0,4,2,9} produces bit-identical RGB at the DAC, so `video_pipe_tb` passes
+  unchanged. `fb_video` gained live `vram_base`/`pal_idx` inputs (the
+  `VRAM_BASE` param is gone); `ocbk_top` muxes them on `model_bk11`
+  (all sys_clk, no CDC). Oracles: `palette_tb` sweeps all 16 palettes
+  against an independently hand-transcribed table; `fb_video_tb` frame D
+  fetches from the page-7 base with palette 11 through the real SDRAM path;
+  the bk11 SoC program writes 177662 (replied, RESET-preserved, tb-checked
+  taps) and proves the read side times out via a vector-4 detour. All bk10
+  timing goldens unchanged. Fits 4,208 LE (35%, +219 for the palette ROM +
+  decode + register), still 1 M4K, STA closes (setup +0.541 ns).
 
 **Memory model & banking — design notes** (BkEmu remains the authoritative
 register/behaviour reference for the exact bit fields):
@@ -440,8 +467,9 @@ register/behaviour reference for the exact bit fields):
     placeholder and whether 0011M banked RAM is 037-style cycle-stolen at all
     must be settled against a reference before the goldens can mean anything
     for 0011M mode.
-  - *Video fetch base* moves off the fixed `VRAM_BASE` onto the 177662 page
-    select (synced into the video domain like `screen_mode`).
+  - *Video fetch base* — DONE (third increment): `fb_video`'s `vram_base`
+    input follows the 177662 page select (same sys_clk domain, no sync
+    needed; sampled per fetch).
   - *0011M cycle-stealing may differ from the 037 model* — validate the banked
     RAM timing against a reference before trusting the current 037 for 0011M.
 

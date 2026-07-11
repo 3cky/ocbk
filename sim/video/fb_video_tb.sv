@@ -13,6 +13,9 @@
 //   B: colour, mid-frame scroll write (RA change lands mid-display, per-fetch
 //      expected model follows it exactly as the beam does)
 //   C: colour, quarter mode (M256 = 0): only 64 rows enabled, rest forced 0
+//   D: colour, BK-0011M screen page + palette (Phase 7): vram_base moved to
+//      the page-7 base (qbus_pkg BK11_VPAGE1) with palette 11 - pins the
+//      177662-driven fetch-base/palette plumbing end to end
 //
 // Also checks: scroll convention (row 0 fetches VA[13:6] = RA - 0o330), exactly
 // 32 fetches/line and 256 display lines/frame, sticky error flags stay 0.
@@ -23,6 +26,7 @@ module fb_video_tb;
     localparam int AB = 24;
     localparam int DW = 16;
     localparam [23:0] VRAM_BASE = 24'h002000;
+    localparam [23:0] VPAGE1    = 24'h02E000;     // qbus_pkg BK11_VPAGE1 (RAM page 7)
     localparam [23:0] FB0_BASE  = 24'h010000;
     localparam [23:0] FB1_BASE  = 24'h018000;
 
@@ -63,14 +67,17 @@ module fb_video_tb;
 
     // ---- DUT: fb_video ----------------------------------------------------------
     reg         screen_mode = 1'b1;               // start mono
+    reg [23:0]  vram_base   = VRAM_BASE;          // live fetch base (bk11 page select)
+    reg [3:0]   pal_idx     = 4'd0;               // live palette select
     wire        f_req, f_gnt, f_rvalid, w_req, w_gnt;
     wire [AB-1:0] f_addr, w_addr;
     wire [DW-1:0] w_wdata, arb_rdata;
     wire        fb_front, fb_front_valid, err_fetch_ovr, err_fifo_ovf;
 
-    fb_video #(.ADDR_BITS(AB), .DQ_BITS(DW), .VRAM_BASE(VRAM_BASE),
+    fb_video #(.ADDR_BITS(AB), .DQ_BITS(DW),
                .FB0_BASE(FB0_BASE), .FB1_BASE(FB1_BASE)) u_fbv (
         .clk(sys_clk), .rst_n(dclo), .screen_mode(screen_mode),
+        .vram_base(vram_base), .pal_idx(pal_idx),
         .vid_fetch(vfetch), .vid_line_en(line_en), .hgate(hgate), .vgate(vgate),
         .video_va(video_va),
         .f_req(f_req), .f_addr(f_addr), .f_gnt(f_gnt), .f_rvalid(f_rvalid),
@@ -130,12 +137,26 @@ module fb_video_tb;
     );
 
     // ---- expected-FB model (mirrors the conventions, fed by the 037 taps) -------
-    function automatic [63:0] pal_model(input [15:0] w, input le, input mono);
+    // PALROM as in palette_apply.sv (the TABLE semantics are pinned against an
+    // independent transcription in palette_tb; here we mirror the datapath).
+    localparam [255:0] PALROM = {
+        16'hF620, 16'hFB20, 16'hF6B0, 16'h6920,
+        16'h96B0, 16'h8AC0, 16'h1350, 16'hDC50,
+        16'hBA30, 16'h9810, 16'hFFF0, 16'hFD60,
+        16'hB260, 16'hD640, 16'h9BD0, 16'h9420
+    };
+
+    function automatic [63:0] pal_model(input [15:0] w, input le, input mono,
+                                        input [3:0] pal);
         integer s;
-        for (s = 0; s < 16; s = s + 1)
-            pal_model[4*s +: 4] = !le  ? 4'd0
-                                : mono ? (w[s] ? 4'd15 : 4'd0)
-                                : {2'b00, w[2*(s/2) +: 2]};
+        reg [15:0] pw;
+        begin
+            pw = PALROM[16*pal +: 16];
+            for (s = 0; s < 16; s = s + 1)
+                pal_model[4*s +: 4] = !le  ? 4'd0
+                                    : mono ? (w[s] ? 4'd15 : 4'd0)
+                                    : pw[4 * {w[2*(s/2)], w[2*(s/2)+1]} +: 4];
+        end
     endfunction
 
     reg [15:0] exp_fb [0:32767];
@@ -184,7 +205,8 @@ module fb_video_tb;
                 scroll_bad = scroll_bad + 1;
                 errors = errors + 1;
             end
-            slots = pal_model(u_mem.mem[VRAM_BASE + video_va], line_en, screen_mode);
+            slots = pal_model(u_mem.mem[vram_base + video_va], line_en, screen_mode,
+                              pal_idx);
             for (k = 0; k < 4; k = k + 1)
                 exp_fb[{t_row, t_word, k[1:0]}] = slots[16*k +: 16];
             t_word = t_word + 5'd1;
@@ -250,6 +272,9 @@ module fb_video_tb;
         // video RAM pattern + poison both FBs
         for (f = 0; f < 8192; f = f + 1)
             u_mem.mem[VRAM_BASE + f] = 16'hA5A5 ^ f[15:0] ^ {f[12:0], 3'b000};
+        // a DIFFERENT pattern in the bk11 page-7 screen (frame D fetches here)
+        for (f = 0; f < 8192; f = f + 1)
+            u_mem.mem[VPAGE1 + f] = 16'h3C69 ^ f[15:0] ^ {f[10:0], 5'b00000};
         for (f = 0; f < 32768; f = f + 1) begin
             u_mem.mem[FB0_BASE + f] = 16'hDEAD;
             u_mem.mem[FB1_BASE + f] = 16'hDEAD;
@@ -277,6 +302,17 @@ module fb_video_tb;
         wait (vgate);
         qbus_write664(16'o000330);
         @(fb_front);                              // frame C swap
+
+        // frame D (Phase 7): BK-0011M screen page + palette - full screen
+        // again, fetch base moved to the page-7 screen, palette 11; base and
+        // palette flip in vblank (no fetch in flight), exactly as a 177662
+        // write ahead of the frame would land
+        wait (vgate);
+        qbus_write664(16'o001330);
+        vram_base   = VPAGE1;
+        pal_idx     = 4'd11;
+        screen_mode = 1'b0;
+        @(fb_front);                              // frame D swap
         repeat (16) @(posedge sys_clk);           // let the compare block report
 
         if (err_fetch_ovr) begin $display("FAIL: err_fetch_ovr"); errors = errors + 1; end

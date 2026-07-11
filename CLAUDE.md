@@ -102,15 +102,22 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   windows, page-6 aliasing both directions, **RMW in EXT** (the one bus path
   with no bk10 coverage — the CLAUDE.md RMW rule), ROM overlays +
   write-ignore, the 033 quirk, fixed top ROM, **RESET-instruction preserves
-  the map**, and the write-only register.
+  the map**, the write-only map register, and the **177662 video register**
+  (word writes replied + RESET-preserved — the tb checks the `vid_*` taps
+  against the DCLO defaults and the final write — and the read side proven
+  un-replied via an in-program vector-4 detour).
 - `sim/run_epcs_boot.sh` — the Phase-5 EPCS loader unit cosim (flash model →
   `epcs_boot` → arbiter port 0 → SDRAM): word-exact load + a corrupted-blob run
   that must end `boot_ok=0`.
 - `sim/run_sdram_cosim.sh` — the Phase-2 `qbus_sdram` slave (word/byte datapath +
   deterministic RPLY). Runs the `--core-only` ROM (no picture draw — hours slow).
-- `sim/run_video.sh` — palette unit tb; `fb_video_tb` (FB words vs a tap-driven
-  expected model, mid-frame scroll, M256); `vga_out_tb` (timing geometry + pixel-
-  exact readout); `video_pipe_tb` (full chain, every active pixel at the DAC vs a
+- `sim/run_video.sh` — palette unit tb (slot/bit conventions + all 16
+  BK-0011M palettes against an independently hand-transcribed expected
+  table — a swizzle bug in the RTL cannot cancel out); `fb_video_tb` (FB
+  words vs a tap-driven expected model, mid-frame scroll, M256, and the
+  Phase-7 frame D: fetch from the page-7 `vram_base` with palette 11);
+  `vga_out_tb` (timing geometry + pixel-exact readout, physical-colour
+  decode); `video_pipe_tb` (full chain, every active pixel at the DAC vs a
   Python-rendered frame of the **shipped** picture).
 - `sim/video/run_draw_check.sh` — **slow (~10 min), not in `make sim`**: proves
   the ROM's hand-assembled PDP-11 draw code writes exactly `render_image()`.
@@ -292,16 +299,42 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   writes, riding the `cpu_sdram_dp` port-0 path (`phys` from the mapper;
   `addr` kept for byte lanes). Phase-8 hook: window ownership is a
   selectable source — the SMK512 layers into the mapper, not into qbus_mem.
-  `gen_expected.py` alike: FB = 512 slots/line × 4-bit post-palette index ×
-  256 lines, 128 words/line, slot `s` of a word at bits `[4s+3:4s]`, LSB-first in
-  beam order; FB0 = SDRAM word `0x010000`, FB1 = `0x018000`, double-buffered
-  (writer swaps at the vgate frame edge, reader latches `fb_front` at its vblank
-  line-0 request). FB *destination* comes from beam counters, fetch *address* from
-  `video_va` (else scroll breaks). Scroll: row r fetches vram line
-  `(RA − 0o330 + r) & 0xFF` (netlist-proven). CLUT (in `vga_out`): 0=black 1=blue
-  2=green 3=red 15=white — also the CRT colour-tweak hook. `screen_mode`
+- **Framebuffer conventions** (mirrored by `fb_video_tb`/`gen_expected.py`
+  alike): FB = 512 slots/line × 4-bit colour nibble × 256 lines, 128
+  words/line, slot `s` of a word at bits `[4s+3:4s]`, LSB-first in beam order;
+  FB0 = SDRAM word `0x010000`, FB1 = `0x018000`, double-buffered (writer swaps
+  at the vgate frame edge, reader latches `fb_front` at its vblank line-0
+  request). **Since Phase 7 the FB nibble IS the BK-0011M physical colour
+  {R1, B, G, R0}** (2-bit red, 1-bit blue/green — the machine's whole colour
+  space is 16 colours): `palette_apply` looks up the 16-palette ROM
+  (transcribed **verbatim** from MiSTer `BK0011M_MiSTer/rtl/video.sv` — note
+  its bit-swapped nibble select `{p[0],p[1]}`); palette 0 = {0,4,2,9} =
+  black/blue/green/red is the bk10 palette (bk10 ties `pal_idx` to 0);
+  `vga_out` decodes the nibble combinationally, red levels 0/0x23/0x30/0x3F
+  (the BkEmu 0x8E/0xC0 weights — also the CRT colour-tweak hook). bk10 RGB
+  at the DAC is bit-identical to the old fixed CLUT. FB *destination* comes
+  from beam counters, fetch *address* from `video_va` (else scroll breaks);
+  the fetch *base* is `fb_video`'s live `vram_base` input (bk10: fixed
+  `24'h002000`; bk11: the 177662-selected page). Scroll: row r fetches vram
+  line `(RA − 0o330 + r) & 0xFF` (netlist-proven). `screen_mode`
   (mono-512 / colour-256) is toggled by the PS/2 Print Screen key (power-on
-  default = colour-256), touches only `palette_apply`.
+  default = colour-256), touches only `palette_apply` (mono ignores the
+  palette, as real hardware).
+- **177662 video register (Phase 7, BK-0011M):** **MiSTer `rtl/video.sv` is
+  the reference** (BkEmu simplifies it). Write-only (662 reads belong to the
+  014 keyboard data register in BOTH models) and bk11-only (a bk10 662 write
+  keeps bus-timing-out → trap 4); high byte only: bit 15 = displayed screen
+  (0 = RAM page 1 = `BK11_VPAGE0`, 1 = page 7 = `BK11_VPAGE1`), bit 14 =
+  frame-IRQ2 mask (active high; captured now, consumer = the Phase-7 timer
+  item), bits 11:8 = palette. Immediate effect (no per-line latch — BkEmu's
+  per-scanline latch is an emulator artifact); **DCLO-only reset** (same
+  deliberate nINIT exception as the map registers), defaults = MiSTer
+  `def_reg662` 0o047400 (page 0, IRQ2 masked, palette 15). Implemented in
+  `qbus_mem`: the ONE positive decode besides the nSEL pair — sclk
+  DOUT-window capture next to `spk_bit`, write reply = fixed `N_VREG`
+  (placeholder; recalibrate reference-tb-first with 0011M cycle accuracy).
+  `bk_kbd014` is untouched. `ocbk_top` muxes `vram_base`/`pal_idx` on
+  `model_bk11` (all sys_clk — no CDC).
 - **SDRAM arbiter ports** (fixed priority, 0 highest): 0=CPU, 1=panel readout,
   2=037 video fetch, 3=FB write. There is **no fairness** — the readout MUST stay
   paced (`fb_readout` PACE ≥24 sys_clk/word); an unpaced port-1 burst starves

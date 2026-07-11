@@ -533,6 +533,8 @@ module ocbk_top (
     wire        fetch_stb;
     wire        spk_bit;       // BK speaker level (bit 6 of last 177716 write)
     wire        tape_lvl;      // CMT comparator level (sys_clk, from bk_audio)
+    wire        vid_page;      // 177662 bit 15 (bk11): displayed screen page
+    wire [3:0]  vid_pal;       // 177662 bits 11:8 (bk11): palette index
 
     // tape_lvl -> 177716 read bit 5: 2-FF resync onto the qbus_mem FSM clock
     // (cpu_clk_n). Quasi-static at tape rates (~1 kHz half-periods).
@@ -589,11 +591,16 @@ module ocbk_top (
         .bus_addr (bus_addr),
         .fetch_stb(fetch_stb),
         .spk_bit  (spk_bit),         // BK speaker: bit 6 of last 177716 write
-        .mot_bit  ()                 // tape motor: bit 7 (1 = stopped). Captured
+        .mot_bit  (),                // tape motor: bit 7 (1 = stopped). Captured
                                      // and oracle-pinned but deliberately unused:
                                      // it was the CMT-mode enable first, but real
                                      // BK software writes bit 7 = 0 outside tape
                                      // ops - cmt_mode comes from Scroll Lock now.
+        .vid_page (vid_page),        // 177662 (bk11): screen page + palette; the
+        .vid_pal  (vid_pal),         //   video-side muxes below consume them
+        .vid_irq2_mask()             // 177662 bit 14: frame-IRQ2 mask - its
+                                     // consumer is the Phase-7 timer increment
+                                     // (50 Hz EVNT/IRQ2 from vsync), not yet wired
     );
 
     // ---- Sound + CMT jack: BK 1-bit speaker -> board R-2R sound DAC ------
@@ -631,7 +638,18 @@ module ocbk_top (
     // ---- Phase-4 video pipeline ------------------------------------------
     // 037 fetch -> palette_apply -> double-buffered FB in SDRAM (fb_video,
     // arbiter ports 2+3) -> paced line prefetch (fb_readout, port 1) ->
-    // dual-clock fb_linebuf -> vga_out (1024x768@60, x2H/x3V, fixed CLUT).
+    // dual-clock fb_linebuf -> vga_out (1024x768@60, x2H/x3V, physical-colour
+    // decode - the FB nibble is {R1,B,G,R0}, see palette_apply.sv).
+    import qbus_pkg::*;   // BK11_VPAGE0/1 (body import - Quartus 11.0 gotcha)
+
+    // Phase-7 (BK-0011M) video fetch base + palette, from the 177662 register
+    // captured in u_mem (sclk = sys_clk, same domain as fb_video - no CDC;
+    // model_bk11 is DCLO-latched quasi-static). bk10 keeps the fixed BK 040000
+    // base and palette 0 (= MiSTer def_reg662 bk10 semantics).
+    wire [23:0] vram_base = !model_bk11 ? 24'h002000
+                          : vid_page    ? BK11_VPAGE1 : BK11_VPAGE0;
+    wire [3:0]  pal_idx   = model_bk11 ? vid_pal : 4'd0;
+
     wire        fb_front, fb_front_valid;
     wire        req_tgl;
     wire [7:0]  req_line;
@@ -644,6 +662,8 @@ module ocbk_top (
         .clk        (sys_clk),
         .rst_n      (vid_rst_n),       // power-on only: keeps decoding across warm resets
         .screen_mode(screen_mode),
+        .vram_base  (vram_base),
+        .pal_idx    (pal_idx),
         .vid_fetch  (vid_fetch),
         .vid_line_en(vid_line_en),
         .hgate      (hgate),

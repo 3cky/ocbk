@@ -1,4 +1,5 @@
-// vga_out - 1024x768@60 framebuffer readout, CLUT and scan-out (Phase 4).
+// vga_out - 1024x768@60 framebuffer readout, colour decode and scan-out
+// (Phase 4; physical-colour decode since Phase 7).
 //
 // Pixel-clock (64.43 MHz) side of the readout pipeline. Uses the validated
 // ocb-test mode-2 timing (H 1024/24/136/160 = 1344, V 768/3/6/29 = 806, both
@@ -18,13 +19,14 @@
 // toggle sync on the sys side.
 //
 // Output pipeline is 2 pixel clocks deep (registered line-buffer read, then
-// registered CLUT/RGB); hsync/vsync/active are delayed to match, so the image
+// registered RGB decode); hsync/vsync/active are delayed to match, so the image
 // stays aligned to the syncs. RGB is forced black outside 'active' and until
 // fb_front_valid (synced here) - hides power-on garbage before the first
 // complete BK frame lands in the framebuffer.
 //
-// The fixed CLUT is the BK-0010 palette and the CRT colour-tweak hook (e.g.
-// green-phosphor mono = make index 15 green); 6 bits/channel for the R-2R DAC.
+// The FB nibble is the BK-0011M physical colour {R1,B,G,R0} (Phase 7, see
+// palette_apply.sv), decoded combinationally into 6 bits/channel for the R-2R
+// DAC; the red-level constants below double as the CRT colour-tweak hook.
 module vga_out #(
     parameter int H_ACTIVE = 1024, parameter int H_FP = 24,
     parameter int H_SYNC   = 136,  parameter int H_BP = 160,
@@ -125,15 +127,21 @@ module vga_out #(
             hs_d1 <= hs_t;  vs_d1 <= vs_t;  act_d1 <= act_t;
             hsync <= hs_d1; vsync <= vs_d1;
             if (act_d1 && fb_valid_s) begin
-                // BK-0010 fixed palette: 0=black, 1=blue, 2=green, 3=red,
-                // 15=white (mono foreground); 4..14 reserved (BK-0011M, Phase 7)
-                case (lb_rdata)
-                    4'd1:    begin r <= 6'h00; g <= 6'h00; b <= 6'h3F; end
-                    4'd2:    begin r <= 6'h00; g <= 6'h3F; b <= 6'h00; end
-                    4'd3:    begin r <= 6'h3F; g <= 6'h00; b <= 6'h00; end
-                    4'd15:   begin r <= 6'h3F; g <= 6'h3F; b <= 6'h3F; end
-                    default: begin r <= 6'h00; g <= 6'h00; b <= 6'h00; end
+                // Phase 7: the FB nibble IS the BK-0011M physical colour
+                // {R1, B, G, R0} (see palette_apply.sv) - decode it, no CLUT.
+                // The two red bits are unequal resistor weights: R1 alone
+                // ~0xC0/0xFF, R0 alone ~0x8E/0xFF, both = saturated (the
+                // BkEmu colour-table levels; more faithful than MiSTer's
+                // equal-weight doubling). bk10 colours land on the same RGB
+                // as the old fixed CLUT (blue=4, green=2, red=9, white=15).
+                case ({lb_rdata[3], lb_rdata[0]})
+                    2'b11:   r <= 6'h3F;
+                    2'b10:   r <= 6'h30;
+                    2'b01:   r <= 6'h23;
+                    default: r <= 6'h00;
                 endcase
+                g <= lb_rdata[1] ? 6'h3F : 6'h00;
+                b <= lb_rdata[2] ? 6'h3F : 6'h00;
             end else begin
                 r <= '0; g <= '0; b <= '0;
             end

@@ -161,6 +161,7 @@ module ref037_soc_video_tb;
 
     fb_video #(.ADDR_BITS(AB), .DQ_BITS(DW)) u_fbv (
         .clk(sys_clk), .rst_n(dclo_cold), .screen_mode(1'b1),
+        .vram_base(24'h002000), .pal_idx(4'd0),   // bk10: fixed base, palette 0
         .vid_fetch(va_vfetch), .vid_line_en(va_line_en),
         .hgate(va_hgate), .vgate(va_vgate), .video_va(video_va),
         .f_req(f_req), .f_addr(f_addr), .f_gnt(f_gnt), .f_rvalid(f_rvalid),

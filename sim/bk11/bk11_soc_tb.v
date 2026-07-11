@@ -13,6 +13,12 @@
 // through both windows, aliases page 6, RMWs in EXT, checks the ROM overlay
 // codes + write-ignore + the 033 quirk + the fixed top ROM, executes RESET
 // (nINIT must PRESERVE the map) and verifies the register is write-only.
+// Phase-7 177662 phase: word writes to the video register must be replied
+// (qbus_mem's bk11-only write decode), survive RESET, and reads must bus-
+// time-out (write-only; proven in-program via a vector-4 detour). This tb
+// checks the vid_page/vid_irq2_mask/vid_pal taps: the DCLO defaults
+// (0 / 1 / 0o17 = MiSTer def_reg662 0o047400) right after reset release,
+// and the program's final write (1 / 0 / 0o12) after the success park.
 //
 // The local divider replica runs the CPU clock at the 0011M /24 rate
 // (4.03 MHz) - which also smokes the SDRAM CDC margins at that rate - with
@@ -125,6 +131,8 @@ module bk11_soc_tb;
     wire [15:0] bus_addr;
     wire        fetch_stb;
     wire [DW-1:0] v_rdata_nc;
+    wire        vid_page, vid_irq2m;
+    wire [3:0]  vid_pal;
 
     qbus_mem u_ms (
         .cpu_clk  (~clk),            // as ocbk_top: FSM on the inverted CPU clock
@@ -166,7 +174,10 @@ module bk11_soc_tb;
         .s_cke(s_cke), .s_cs_n(s_cs_n), .s_ras_n(s_ras_n), .s_cas_n(s_cas_n),
         .s_we_n(s_we_n), .s_ba(s_ba), .s_addr(s_addr), .s_dqm(s_dqm), .s_dq(s_dq),
         .bus_addr (bus_addr),
-        .fetch_stb(fetch_stb)
+        .fetch_stb(fetch_stb),
+        .vid_page (vid_page),
+        .vid_irq2_mask(vid_irq2m),
+        .vid_pal  (vid_pal)
     );
 
     sdram_model u_mem (
@@ -181,7 +192,15 @@ module bk11_soc_tb;
             if (addr == 16'o001004) begin
                 scnt = scnt + 1;
                 if (scnt == 3) begin
-                    $display("COSIM PASS");
+                    // 177662 taps must show the program's final write
+                    // (0o105000: page=1, irq2 unmasked, pal=0o12)
+                    if (vid_page !== 1'b1 || vid_irq2m !== 1'b0
+                        || vid_pal !== 4'o12) begin
+                        $display("BK11-ERROR: 177662 taps page=%b m=%b pal=%o",
+                                 vid_page, vid_irq2m, vid_pal);
+                        $display("COSIM FAIL");
+                    end else
+                        $display("COSIM PASS");
                     $finish;
                 end
             end else begin
@@ -217,6 +236,16 @@ module bk11_soc_tb;
         @(negedge clk);
         repeat (8) @(negedge clk); dclo = 1'b1; dclo_cold = 1'b1;
         repeat (4) @(negedge clk); aclo = 1'b1;
+
+        // 177662 DCLO defaults (MiSTer def_reg662 0o047400) - checked well
+        // before the program can reach its 662 writes
+        repeat (4) @(negedge clk);
+        if (vid_page !== 1'b0 || vid_irq2m !== 1'b1 || vid_pal !== 4'o17) begin
+            $display("BK11-ERROR: 177662 defaults page=%b m=%b pal=%o",
+                     vid_page, vid_irq2m, vid_pal);
+            $display("COSIM FAIL");
+            $finish;
+        end
 
         #50_000_000;
         $display("BK11-ERROR: watchdog timeout (last addr %o)", addr);

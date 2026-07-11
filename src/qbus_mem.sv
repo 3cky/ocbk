@@ -33,6 +33,9 @@
 //   177714 = reply, read 0, writes ignored (Covox/joystick/AY not modelled).
 // nSEL covers BOTH bytes of its register (the CPU decodes addr[3:1]), so odd-
 // byte accesses (177715/177717) are served with the full register word too.
+// Phase-7 exception: in BK-0011M mode a WRITE to 177662 (video page/palette
+// register, MiSTer video.sv reference) gets a positive decode + fixed-N_VREG
+// reply here; reads there stay with the 014 keyboard chip in both models.
 //
 // Domains: the ROM/IO wait-state FSM runs on cpu_clk (fixed N_ROM, as the validated
 // qbus_sdram FSM); the datapath/arbiter/controller run on sclk (sys_clk). Bus
@@ -116,7 +119,12 @@ module qbus_mem #(
     // ---- BK speaker: bit 6 of the last 177716 write (software-owned) ------
     output logic        spk_bit,
     // ---- tape motor: bit 7 of the last 177716 write (1 = motor STOPPED) ---
-    output logic        mot_bit
+    output logic        mot_bit,
+
+    // ---- BK-0011M 177662 video register taps (sclk domain) ----------------
+    output logic        vid_page,      // bit 15: displayed screen (0 = RAM page 1, 1 = page 7)
+    output logic        vid_irq2_mask, // bit 14: frame-IRQ2 mask (1 = masked)
+    output logic [3:0]  vid_pal        // bits 11:8: palette index
 );
 
     import qbus_pkg::*;
@@ -178,6 +186,16 @@ module qbus_mem #(
     // OUTSIDE this page, INSIDE the ROM window - they get their own positive
     // decode carved out of sel_rom there, not here (no SEL pin involved).
     wire sel_io  = !sync_n && (!sel1_n || !sel2_n);
+
+    // ---- 177662: BK-0011M video page/palette register (Phase 7) -----------
+    // The ONE positive decode besides the nSEL pair: on a BK-0011M a WRITE to
+    // 177662/3 must be replied to (the wait FSM below serves it, fixed N_VREG)
+    // and captured (the sclk block next to spk_bit). Write-only: reads stay
+    // with the 014 keyboard data register, so this select never starts the
+    // FSM for DIN. In BK-0010 mode the decode is dead and a 662 write keeps
+    // bus-timing-out -> trap 4, exactly as before (bk10 goldens unchanged).
+    wire sel_vreg = model_bk11 && !sync_n
+                    && (addr[15:1] == 15'(16'o177662 >> 1));
 
     // ROM reads are always served from SDRAM through cpu_sdram_dp (port 0).
     wire sel_romx = sel_rom;
@@ -312,7 +330,8 @@ module qbus_mem #(
                 S_IDLE: begin
                     drive_data <= 1'b0;
                     reply      <= 1'b0;
-                    if (!sync_n && selected && (is_read || is_write)) begin
+                    if (!sync_n && ((selected && (is_read || is_write))
+                                    || (sel_vreg && is_write))) begin
                         // 177716 bit-2 write-flag: set at THIS detection edge,
                         // not the reply point - the vm1 self-replies every
                         // write in the 177700-177717 block, so the DOUT window
@@ -323,10 +342,12 @@ module qbus_mem #(
                         // Sel1RegisterSystemBits semantics.
                         if (is_write && !sel1_n)
                             sel1_wflag <= 1'b1;
-                        // MK_EXT gets its own fixed count (a PLACEHOLDER until
-                        // 0011M cycle accuracy - see qbus_pkg). The 3-bit wcnt
-                        // caps any N at 9.
-                        wcnt  <= sel_ext ? 3'(N_EXT-2) : 3'(N_ROM-2);
+                        // MK_EXT and the 177662 write get their own fixed
+                        // counts (PLACEHOLDERs until 0011M cycle accuracy -
+                        // see qbus_pkg). The 3-bit wcnt caps any N at 9.
+                        wcnt  <= sel_ext  ? 3'(N_EXT-2)
+                               : sel_vreg ? 3'(N_VREG-2)
+                               : 3'(N_ROM-2);
                         state <= S_WAIT;
                     end
                 end
@@ -417,6 +438,33 @@ module qbus_mem #(
         if (!sync_n && !dout_n && !sel1_n && !addr[0] && !bank_wr) begin
             spk_bit <= ~ad_n[6];
             mot_bit <= ~ad_n[7];
+        end
+    end
+
+    // ---- BK-0011M 177662 video register capture (Phase 7) ----------------
+    // MiSTer rtl/video.sv is the reference (BkEmu simplifies this register).
+    // High byte only - the low byte is never stored: bit 15 = displayed
+    // screen (0 = RAM page 1, 1 = page 7), bit 14 = frame-IRQ2 mask (active
+    // high; irq_en = ~bit14 - its consumer lands with the Phase-7 timer
+    // increment), bits 11:8 = palette index. Captured in the DOUT window on
+    // sclk like spk_bit above, idempotent across the window; ANY write, word
+    // or byte, latches the high lanes (MiSTer semantics; only word writes
+    // are oracle-pinned - byte-write fidelity is an open question). Takes
+    // effect immediately, no per-line latch (BkEmu's per-scanline latch is
+    // an emulator artifact). Reset is DCLO-ONLY - the same deliberate nINIT
+    // exception as the mapper's map registers: the RESET instruction must
+    // not blank the screen page under the running code. Defaults = MiSTer
+    // def_reg662 0o047400: page 0, IRQ2 masked, palette 15.
+    always_ff @(posedge sclk) begin
+        if (reset) begin
+            vid_page      <= 1'b0;
+            vid_irq2_mask <= 1'b1;
+            vid_pal       <= 4'hF;
+        end else if (model_bk11 && !sync_n && !dout_n
+                     && addr[15:1] == 15'(16'o177662 >> 1)) begin
+            vid_page      <= ~ad_n[15];
+            vid_irq2_mask <= ~ad_n[14];
+            vid_pal       <= ~ad_n[11:8];
         end
     end
 

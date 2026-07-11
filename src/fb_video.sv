@@ -26,13 +26,20 @@
 module fb_video #(
     parameter int ADDR_BITS = 24,
     parameter int DQ_BITS   = 16,
-    parameter logic [23:0] VRAM_BASE = 24'h002000,  // BK 040000 (word address)
     parameter logic [23:0] FB0_BASE  = 24'h010000,
     parameter logic [23:0] FB1_BASE  = 24'h018000
 ) (
     input  logic                 clk,        // sys_clk
     input  logic                 rst_n,
     input  logic                 screen_mode, // 1 = mono-512, 0 = colour-256 (static)
+    // Video fetch base (word address): bk10 = 24'h002000 (BK 040000, fixed);
+    // bk11 = the 177662-selected screen page (BK11_VPAGE0/1). Sampled per
+    // fetch - a page flip takes effect at the next fetched word, as on the
+    // real hardware (MiSTer applies screen_bank combinationally).
+    input  logic [23:0]          vram_base,
+    // BK-0011M palette select (177662 bits 11:8); bk10 ties it to 0. Rides
+    // with each fetch (dest_pal below), so it is beam-raced like line_en.
+    input  logic [3:0]           pal_idx,
 
     // ---- va_037_sync Phase-4 taps (sys_clk domain) -----------------------
     input  logic                 vid_fetch,
@@ -104,6 +111,7 @@ module fb_video #(
     logic [7:0] dest_row;
     logic [4:0] dest_word;
     logic       dest_len;         // vid_line_en latched with the fetch
+    logic [3:0] dest_pal;         // pal_idx latched with the fetch
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -113,16 +121,18 @@ module fb_video #(
             dest_row      <= '0;
             dest_word     <= '0;
             dest_len      <= 1'b0;
+            dest_pal      <= '0;
             err_fetch_ovr <= 1'b0;
         end else begin
             if (vid_fetch && fstate != F_IDLE)
                 err_fetch_ovr <= 1'b1;          // slot overrun: previous fetch alive
             case (fstate)
                 F_IDLE: if (vid_fetch) begin
-                    f_addr    <= VRAM_BASE + ADDR_BITS'(video_va);
+                    f_addr    <= vram_base + ADDR_BITS'(video_va);
                     dest_row  <= row;
                     dest_word <= word_idx;
                     dest_len  <= vid_line_en;
+                    dest_pal  <= pal_idx;
                     f_req     <= 1'b1;
                     fstate    <= F_REQ;
                 end
@@ -140,6 +150,7 @@ module fb_video #(
     palette_apply u_pal (
         .screen_mode (screen_mode),
         .line_en     (dest_len),
+        .pal_idx     (dest_pal),
         .word        (rdata_i),
         .slots       (pal_slots)
     );
