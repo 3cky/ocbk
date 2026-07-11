@@ -445,11 +445,12 @@ module qbus_mem #(
     // MiSTer rtl/video.sv is the reference (BkEmu simplifies this register).
     // High byte only - the low byte is never stored: bit 15 = displayed
     // screen (0 = RAM page 1, 1 = page 7), bit 14 = frame-IRQ2 mask (active
-    // high; irq_en = ~bit14 - its consumer lands with the Phase-7 timer
-    // increment), bits 11:8 = palette index. Captured in the DOUT window on
-    // sclk like spk_bit above, idempotent across the window; ANY write, word
-    // or byte, latches the high lanes (MiSTer semantics; only word writes
-    // are oracle-pinned - byte-write fidelity is an open question). Takes
+    // high; irq_en = ~bit14 - consumed by the 50 Hz EVNT/IRQ2 frame-
+    // interrupt gate in ocbk_top), bits 11:8 = palette index. Captured in
+    // the DOUT window on sclk like spk_bit above, idempotent across the
+    // window; ANY write, word or byte, latches the high lanes (MiSTer
+    // semantics; only word writes are oracle-pinned - byte-write fidelity
+    // is an open question). Takes
     // effect immediately, no per-line latch (BkEmu's per-scanline latch is
     // an emulator artifact). Reset is DCLO-ONLY - the same deliberate nINIT
     // exception as the mapper's map registers: the RESET instruction must

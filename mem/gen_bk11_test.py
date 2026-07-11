@@ -21,7 +21,9 @@ with no bk10 coverage - ROM overlay codes with write-ignore, the 033-quirk
 fall-through, the fixed top ROM, nINIT preserve (RESET instruction), the
 write-only map register, and (Phase 7) the 177662 video register: word
 writes replied + RESET-preserved (the tb checks the vid_* taps), reads
-un-replied (write-only; trap-4 detour proves the timeout). Pattern offsets
+un-replied (write-only; trap-4 detour proves the timeout), plus the
+EVNT/IRQ2 frame interrupt (section 12: bit-14 mask gates the asserted
+vgate level, one vector-0100 fire per blanking window). Pattern offsets
 are >= 0o20000 within a window so page-6 writes never clobber the
 vectors/code/stack at the bottom of page 6.
 
@@ -58,6 +60,11 @@ TOPPAT = 0o054321
 
 ALIAS1 = 0o167321
 ALIAS2 = 0o043210
+
+# section-12 fixed delays (masked window / double-fire grace): ~64 SOB
+# iterations, comfortably longer than the write->capture->2-FF-resync
+# propagation of the IRQ2 level, far shorter than a blanking window
+DELAY12 = 0o100
 
 
 def pat_a(p):
@@ -195,9 +202,65 @@ def build_stage2():
     a.addr("fail")
     a.emit(0o000004)
 
-    # --- 12. success ------------------------------------------------------------
+    # --- 12. EVNT/IRQ2 (Phase 7): the 50 Hz frame interrupt -------------------
+    # Entry state: 662 = 0o105000 (page=1, IRQ2 UNMASKED, pal=0o12) from
+    # section 11, PSW = 340 (the trap-4 detour's vector PSW kept priority 7,
+    # so the already-asserted level never fired). The tb wires nIRQ2 through
+    # the ocbk_top replica (~mask & vgate, 2-FF onto cpu_clk).
+    # RASTER-PHASE ASSUMPTION: the 037 free-runs from reset with VGATE high
+    # for the first 64 lines (~4.1 ms) and stage 2 reaches this point well
+    # inside that window, so the level INPUT is already high here: the
+    # masked-negative check is a real gating test and the post-unmask fire is
+    # immediate. If stage 2 ever outgrows the first blanking window, the spin
+    # below just rides to the next frame (slower sim, still correct - the
+    # tb's vgate-at-assert guard keeps the window phase pinned).
+    a.emit(0o012737)                        # MOV #isr2,@#0100 (frame vector)
+    a.addr("isr2")
+    a.emit(0o000100)
+    a.emit(0o012737, 0o000340, 0o000102)    # MOV #340,@#0102 (ISR at prio 7)
+    a.emit(0o005002)                        # CLR R2 (ISR progress record)
+    a.emit(0o012737, 0o145000, 0o177662)    # re-mask: page=1, m=1, pal=0o12
+    # drop PSW 340 -> 0 via RTI (VM1 has no MTPS; the gen_kbd_test idiom)
+    a.emit(0o005046)                        # CLR -(SP) (new PSW = 0)
+    a.emit(0o012746)                        # MOV #prio0,-(SP) (new PC)
+    a.addr("prio0")
+    a.emit(0o000002)                        # RTI
+    a.label("prio0")
+    # masked window: the vgate level is high, bit 14 alone must gate it
+    a.emit(0o012703, DELAY12)               # MOV #DELAY12,R3
+    a.label("d12a")
+    a.sob(3, "d12a")                        # fixed-count delay
+    a.emit(0o020227, 0o000000)              # CMP R2,#0 (no IRQ2 while masked)
+    expect_eq(a)
+    a.emit(0o012737, 0o105000, 0o177662)    # unmask (= the final 662 state the
+                                            #   tb checks after the park)
+    # spin until the ISR ran - race-immune (the fire may land between any
+    # two instructions); never fires -> the tb watchdog parks the run
+    a.label("w12")
+    a.emit(0o020227, 0o000000)              # CMP R2,#0
+    a.br(BEQ, "w12")
+    a.emit(0o020227, 0o000001)              # CMP R2,#1 (exactly one fire)
+    expect_eq(a)
+    a.emit(0o012703, DELAY12)               # grace: a double fire would bump R2
+    a.label("d12b")
+    a.sob(3, "d12b")
+    a.emit(0o020227, 0o000001)              # CMP R2,#1 (still exactly one)
+    expect_eq(a)
+    # restore PSW 340: the success park must not take next-frame IRQ2s
+    a.emit(0o012746, 0o000340)              # MOV #340,-(SP)
+    a.emit(0o012746)                        # MOV #prio7,-(SP)
+    a.addr("prio7")
+    a.emit(0o000002)                        # RTI
+    a.label("prio7")
+
+    # --- 13. success ------------------------------------------------------------
     a.emit(0o000137)                        # JMP @#success
     a.addr("success")
+
+    # frame-IRQ2 ISR (vector 0100; runs at priority 7, never falls through)
+    a.label("isr2")
+    a.emit(0o005202)                        # INC R2
+    a.emit(0o000002)                        # RTI
 
     words = a.resolve()
     return words, a.labels

@@ -415,6 +415,35 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   taps) and proves the read side times out via a vector-4 detour. All bk10
   timing goldens unchanged. Fits 4,208 LE (35%, +219 for the palette ROM +
   decode + register), still 1 M4K, STA closes (setup +0.541 ns).
+- **Status (2026-07-11): fourth increment done (sim)** — the **EVNT/IRQ2
+  frame interrupt** (the 50 Hz system timer), completing the 177662 bit-14
+  consumer. **MiSTer `rtl/video.sv` is the model** (user-confirmed: BK
+  software races IRQ2 for CRT-effect timing and the corpus is proven against
+  MiSTer): the nIRQ2 level = the vertical blanking window — in our raster
+  exactly the 037 netlist's `vgate` (lines 256..319; MiSTer's `irq` sets at
+  vc==256, clears at vc==0) — gated `model_bk11 & ~vid_irq2_mask`,
+  registered on sys_clk, 2-FF onto posedge cpu_clk in `ocbk_top` (pin-sync
+  rule), into the vm1's arm/fire edge detector → one vector-0100 interrupt
+  per frame; mask defaults to 1 on DCLO, and BK-0010 mode has **no IRQ2
+  source at all** (BkEmu + MiSTer agree), so every bk10 timing golden is
+  untouched by construction. Oracle: `sim/bk11` section 12 (mask gates the
+  already-asserted level; one fire per window + double-fire grace; PSW
+  340↔0 via the RTI idiom) + two tb assertion guards (every nIRQ2 assert
+  inside the vgate window AND never while masked — the CPU-side checks alone
+  can't catch a broken gate: with the pin stuck asserted the vm1 detector
+  never arms, so the first fire just slides to the next frame and passes).
+  **Deferred fidelity item (schematic-traced, `doc/bk0011m-sch.pdf`):** the
+  real 0011M has no vgate pin — an external detector asserts IRQ2 a few
+  *lines into* blanking: WTI (D19/037 pin 31, pulsing only on active lines)
+  holds the D28 СТ2 counter reset; in blanking it counts line-rate SYNCO
+  edges (via the D6:C NOR) until its tap arms D3:B (ТМ2, clocked by SYNCO)
+  → the PRT̄ net (also on the XT3.2 expansion connector) → D11 (К555ТМ9, on
+  CLC — the same retimer as RPLY/VIRQ) → the CPU IRQ2 pin; the 662-write
+  register bits (D35/D26) gate the counter resets and D3:B's reset.
+  Modelling that assert-instant offset goes **reference-tb-first** with the
+  0011M cycle-accuracy item (same posture as the D8:B RPLY retimer) — it
+  matters for beam-racing software, and is unverifiable until a 0011M
+  timing reference exists.
 
 **Memory model & banking — design notes** (BkEmu remains the authoritative
 register/behaviour reference for the exact bit fields):
@@ -548,8 +577,9 @@ speaker are **confirmed on hardware 2026-07-07** (typing + keyclick; PS/2 →
 1801ВП1-014 equivalent, netlist-golden-validated incl. interrupt latency and
 the СТОП trap-4 path). Phase-6 tape **works on hardware 2026-07-10** (the CMT
 jack on the right sound channel, Scroll-Lock-gated after the motor-bit
-experiment broke right audio; oracle-tested). Next: the 50 Hz EVNT/IRQ2
-wiring.*
+experiment broke right audio; oracle-tested). The Phase-7 50 Hz EVNT/IRQ2
+frame interrupt is wired (sim-proven, bk11-only). Next: the 0011M ROM blob +
+SYS_START 140000 boot.*
 *See also the project memory notes `bk-on-1chipmsx-feasibility` (bring-up history),
 `bk-video-pipeline-decision` (Phase 3/4 design) and `bkemu-reference-and-roms`
 (BkEmu is the canonical BK reference; ROMs committed in-tree).*

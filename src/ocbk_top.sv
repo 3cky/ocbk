@@ -492,6 +492,27 @@ module ocbk_top (
     end
     wire stop_pulse = (stop_cnt != 0);
 
+    // EVNT/IRQ2 (Phase 7, BK-0011M): the 50 Hz frame interrupt. MiSTer
+    // rtl/video.sv model (the BK software corpus is proven against it): the
+    // level is the vertical blanking window - in our raster exactly the 037's
+    // vgate (lines 256..319) - gated by model_bk11 & ~vid_irq2_mask (both
+    // sys_clk-domain / quasi-static; the 662 mask resets to 1 on DCLO, so the
+    // line is silent until software unmasks). Registered on sys_clk first
+    // (glitch-free synchronizer input), then 2-FF onto posedge cpu_clk: the
+    // pin-sync rule, and authentic - the real board re-times IRQ2 through
+    // D11 (К555ТМ9) on CLC. The vm1's own arm/fire edge detector turns the
+    // level into one interrupt per frame (vector 0100). BK-0010 has no IRQ2
+    // source at all (BkEmu and MiSTer agree) - in bk10 mode the level is a
+    // constant 0. Real-HW fidelity note: the actual 0011M board asserts a few
+    // lines INTO blanking (the external WTI missing-pulse counter D28 + the
+    // SYNCO-clocked D3:B -> the PRT net; see doc/bk0011m-sch.pdf) - modelling
+    // that goes reference-tb-first with the 0011M cycle-accuracy item.
+    logic       vid_irq2_mask;  // 177662 bit 14 (1 = masked), captured in u_mem
+    logic       irq2_lvl;
+    always_ff @(posedge sys_clk) irq2_lvl <= model_bk11 & ~vid_irq2_mask & vgate;
+    logic [1:0] irq2_sr;
+    always_ff @(posedge cpu_clk) irq2_sr <= {irq2_sr[0], irq2_lvl};
+
     // ---- vm1 core (1801ВМ1) ---------------------------------------------
     vm1 u_cpu (
         .pin_clk_p (cpu_clk),
@@ -502,7 +523,8 @@ module ocbk_top (
         .pin_init_n(init_n),
         .pin_dclo_n(dclo_n),
         .pin_aclo_n(aclo_n),
-        .pin_irq_n ({2'b11, ~stop_pulse}),  // nIRQ1 = СТОП one-shot
+        .pin_irq_n ({1'b1, ~irq2_sr[1], ~stop_pulse}),  // nIRQ1 = СТОП one-shot,
+                                            // nIRQ2 = 50 Hz frame EVNT (bk11)
         .pin_virq_n(virq_n),        // vectored interrupt: keyboard (bk_kbd014)
         .pin_ad_n  (ad_n),
         .pin_dout_n(dout_n),
@@ -598,9 +620,8 @@ module ocbk_top (
                                      // ops - cmt_mode comes from Scroll Lock now.
         .vid_page (vid_page),        // 177662 (bk11): screen page + palette; the
         .vid_pal  (vid_pal),         //   video-side muxes below consume them
-        .vid_irq2_mask()             // 177662 bit 14: frame-IRQ2 mask - its
-                                     // consumer is the Phase-7 timer increment
-                                     // (50 Hz EVNT/IRQ2 from vsync), not yet wired
+        .vid_irq2_mask(vid_irq2_mask)// 177662 bit 14: frame-IRQ2 mask -> the
+                                     // EVNT/IRQ2 gate above the CPU instance
     );
 
     // ---- Sound + CMT jack: BK 1-bit speaker -> board R-2R sound DAC ------

@@ -19,6 +19,11 @@
 // checks the vid_page/vid_irq2_mask/vid_pal taps: the DCLO defaults
 // (0 / 1 / 0o17 = MiSTer def_reg662 0o047400) right after reset release,
 // and the program's final write (1 / 0 / 0o12) after the success park.
+// Phase-7 EVNT/IRQ2 leg: nIRQ2 is wired through the ocbk_top replica below
+// (level = ~mask & vgate, sys_clk reg + 2-FF cpu_clk); the program's
+// section 12 proves the mask gates the asserted level, one fire per
+// blanking window (vector 0100), and two tb guards pin every assertion
+// inside the vgate-high window and never-while-masked.
 //
 // The local divider replica runs the CPU clock at the 0011M /24 rate
 // (4.03 MHz) - which also smokes the SDRAM CDC margins at that rate - with
@@ -76,6 +81,7 @@ module bk11_soc_tb;
     initial srst_sr = 2'b00;
     always @(posedge sys_clk) srst_sr <= {srst_sr[0], 1'b1};
     reg  [3:1]  irq;   reg virq, dmgi, sp;   reg [1:0] pa;
+    wire        n_irq2;    // EVNT/IRQ2 replica (assigned below qbus_mem)
     wire        dmgo;  tri1 init, dmr, sack, iako;   wire [2:1] sel;   wire bsy;
 
     // ---- tb-side address latch (for the park monitor) -----------------------
@@ -87,7 +93,7 @@ module bk11_soc_tb;
         .pin_clk_p(clk), .pin_clk_n(~clk), .pin_ena(1'b1),
         .pin_pa_n(pa), .pin_sp_n(sp),
         .pin_init_n(init), .pin_dclo_n(dclo), .pin_aclo_n(aclo),
-        .pin_irq_n(irq), .pin_virq_n(virq),
+        .pin_irq_n({irq[3], n_irq2, irq[1]}), .pin_virq_n(virq),
         .pin_ad_n(ad), .pin_dout_n(dout), .pin_din_n(din),
         .pin_wtbt_n(wtbt), .pin_sync_n(sync), .pin_rply_n(rply),
         .pin_dmr_n(dmr), .pin_sack_n(sack), .pin_dmgi_n(dmgi),
@@ -184,6 +190,38 @@ module bk11_soc_tb;
         .clk(sys_clk), .cke(s_cke), .cs_n(s_cs_n), .ras_n(s_ras_n), .cas_n(s_cas_n),
         .we_n(s_we_n), .ba(s_ba), .addr(s_addr), .dqm(s_dqm), .dq(s_dq)
     );
+
+    // ---- EVNT/IRQ2: replica of the ocbk_top wiring (model_bk11 = 1 here) -----
+    // level = ~mask & the 037's vgate, registered on sys_clk, 2-FF onto
+    // posedge cpu_clk (the pin-sync rule); the vm1's internal arm/fire edge
+    // detector makes it one interrupt (vector 0100) per frame.
+    reg       irq2_lvl;
+    reg [1:0] irq2_sr;
+    initial begin irq2_lvl = 1'b0; irq2_sr = 2'b00; end
+    always @(posedge sys_clk) irq2_lvl <= ~vid_irq2m & va_vgate;
+    always @(posedge clk)     irq2_sr  <= {irq2_sr[0], irq2_lvl};
+    assign n_irq2 = ~irq2_sr[1];
+
+    // assertion guards, pinning what the program-side checks can't:
+    //  - window phase: every nIRQ2 assertion must land inside the 037's
+    //    vertical blanking window (an inverted level would still fire and
+    //    pass the program checks, just at active-area start);
+    //  - mask gating: nIRQ2 must never assert while 662 bit 14 is set (with
+    //    the gate broken the vm1's arm/fire edge detector - the pin never
+    //    deasserts, so it never arms - would quietly defer the first fire
+    //    to the SECOND frame and still pass the program checks).
+    always @(negedge n_irq2) begin
+        if (va_vgate !== 1'b1) begin
+            $display("BK11-ERROR: IRQ2 asserted outside the vgate blanking window");
+            $display("COSIM FAIL");
+            $finish;
+        end
+        if (vid_irq2m !== 1'b0) begin
+            $display("BK11-ERROR: IRQ2 asserted while 662 bit 14 masks it");
+            $display("COSIM FAIL");
+            $finish;
+        end
+    end
 
     // ---- pass/fail: the pinned park loops (gen_bk11_test.py) ------------------
     integer scnt = 0;

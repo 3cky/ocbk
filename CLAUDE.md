@@ -102,10 +102,16 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   windows, page-6 aliasing both directions, **RMW in EXT** (the one bus path
   with no bk10 coverage — the CLAUDE.md RMW rule), ROM overlays +
   write-ignore, the 033 quirk, fixed top ROM, **RESET-instruction preserves
-  the map**, the write-only map register, and the **177662 video register**
+  the map**, the write-only map register, the **177662 video register**
   (word writes replied + RESET-preserved — the tb checks the `vid_*` taps
   against the DCLO defaults and the final write — and the read side proven
-  un-replied via an in-program vector-4 detour).
+  un-replied via an in-program vector-4 detour), and the **EVNT/IRQ2 frame
+  interrupt** (section 12: the 662 bit-14 mask gates the already-asserted
+  vgate level, then one vector-0100 fire per blanking window + a double-fire
+  grace check; two tb assertion guards pin every nIRQ2 assert inside the
+  vgate window AND never-while-masked — the program alone can't catch a
+  broken gate: the vm1 arm/fire detector never sees a deassert then, so the
+  first fire just slides to the second frame and all CPU-side checks pass).
 - `sim/run_epcs_boot.sh` — the Phase-5 EPCS loader unit cosim (flash model →
   `epcs_boot` → arbiter port 0 → SDRAM): word-exact load + a corrupted-blob run
   that must end `boot_ok=0`.
@@ -325,16 +331,35 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   014 keyboard data register in BOTH models) and bk11-only (a bk10 662 write
   keeps bus-timing-out → trap 4); high byte only: bit 15 = displayed screen
   (0 = RAM page 1 = `BK11_VPAGE0`, 1 = page 7 = `BK11_VPAGE1`), bit 14 =
-  frame-IRQ2 mask (active high; captured now, consumer = the Phase-7 timer
-  item), bits 11:8 = palette. Immediate effect (no per-line latch — BkEmu's
-  per-scanline latch is an emulator artifact); **DCLO-only reset** (same
-  deliberate nINIT exception as the map registers), defaults = MiSTer
+  frame-IRQ2 mask (active high; irq_en = ~bit14, consumer = the EVNT/IRQ2
+  bullet below), bits 11:8 = palette. Immediate effect (no per-line latch —
+  BkEmu's per-scanline latch is an emulator artifact); **DCLO-only reset**
+  (same deliberate nINIT exception as the map registers), defaults = MiSTer
   `def_reg662` 0o047400 (page 0, IRQ2 masked, palette 15). Implemented in
   `qbus_mem`: the ONE positive decode besides the nSEL pair — sclk
   DOUT-window capture next to `spk_bit`, write reply = fixed `N_VREG`
   (placeholder; recalibrate reference-tb-first with 0011M cycle accuracy).
   `bk_kbd014` is untouched. `ocbk_top` muxes `vram_base`/`pal_idx` on
   `model_bk11` (all sys_clk — no CDC).
+- **EVNT/IRQ2 frame interrupt (Phase 7, BK-0011M):** the 50 Hz system timer,
+  **MiSTer `rtl/video.sv` model** (user-confirmed — BK software races IRQ2
+  for CRT effects and the corpus is proven against MiSTer): the nIRQ2 level
+  is the **vertical blanking window** — in our raster exactly the 037's
+  `vgate` (lines 256..319 of the 320-line frame; the line-boundary phase is
+  the vendored netlist's own, more authoritative than MiSTer's re-counted
+  hc/vc) — gated `model_bk11 & ~vid_irq2_mask` (sys_clk), registered on
+  sys_clk, then 2-FF onto **posedge cpu_clk** in `ocbk_top` (the pin-sync
+  rule; also authentic — the real board re-times IRQ2 through D11, a
+  К555ТМ9 on CLC). The vm1's internal arm/fire edge detector (arm while
+  deasserted, fire on assert) makes it exactly one vector-0100 interrupt
+  per frame; the DCLO default mask=1 keeps it silent until software
+  unmasks. **BK-0010 has no IRQ2 source at all** (BkEmu attaches
+  `SystemTimer` only for 0011M; MiSTer gates `irq_en = ~bk0010 & ...`) —
+  never wire one in bk10 mode. Deferred fidelity (schematic-traced, see
+  ROADMAP): the real 0011M asserts a few *lines into* blanking via an
+  external WTI missing-pulse counter — model it reference-tb-first with the
+  0011M cycle-accuracy work. Oracle: the `sim/bk11` section-12 leg + tb
+  assertion guards (see the sim list above).
 - **SDRAM arbiter ports** (fixed priority, 0 highest): 0=CPU, 1=panel readout,
   2=037 video fetch, 3=FB write. There is **no fairness** — the readout MUST stay
   paced (`fb_readout` PACE ≥24 sys_clk/word); an unpaced port-1 burst starves
