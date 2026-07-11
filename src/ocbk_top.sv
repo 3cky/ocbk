@@ -20,7 +20,8 @@
 //   96.65 MHz  pMemClk   altpll extclk0  - SDRAM chip clock (phase-matched, e0)
 //   64.43 MHz  pix_clk   altpll clk1     - 1024x768@60 video readout
 //   /8  -> 12.08 MHz   dot_ena (1-in-8 strobe)             (spare)
-//   /32 -> ~3.02 MHz   cpu_clk (BK-0010 rate), 50% duty
+//   /32 -> ~3.02 MHz   cpu_clk (BK-0010) or /24 -> 4.03 MHz (BK-0011M),
+//          50% duty, model-selected by DIP 1 (cpu_clkgen)
 //          cpu_clk_n = ~cpu_clk                            (anti-phase pair)
 //
 // sys_clk <-> pix_clk are same-VCO related clocks; every real crossing is a
@@ -56,8 +57,11 @@
 //
 // ROM source: always the SDRAM image (the loaded MONITOR+BASIC set). There is
 // no on-chip ROM fallback - a failed EPCS boot (boot_ok=0) holds the CPU in
-// reset. DIP 1 and DIP 2 are unused.
+// reset.
 // Naming: "DIP n" = physical switch n = pDip[n-1]; ON pulls the pin low.
+// DIP 1 = model select (OFF = BK-0010, ON = BK-0011M; Phase 7 - currently
+// selects only the CPU clock rate, 3.02 vs 4.03 MHz), latched while DCLO is
+// held (power-on and warm reset). DIP 2 is unused.
 //
 // screen_mode (mono-512 vs colour-256) models the physical monitor-cable switch
 // of a real BK-0010 -> now toggled by the PS/2 Print Screen key (each press
@@ -76,8 +80,8 @@ module ocbk_top (
     input  logic        pClk21m,   // 21.47727 MHz crystal (PIN_28)
     output logic [7:0]  pLed,      // green LEDs   (1 = on)
     output logic        pLedPwr,   // red power LED (1 = on)
-    input  logic [7:0]  pDip,      // DIP switches (ON = low); [0] = free (was
-                                    // screen_mode, now the Print Screen key),
+    input  logic [7:0]  pDip,      // DIP switches (ON = low); [0] = model
+                                    // select (OFF = BK-0010, ON = BK-0011M),
                                     // [1] = free (was force on-chip test ROM,
                                     // removed with the on-chip ROM fallback)
     input  logic        pSltRst_n, // reset button (slot RESET net; low = pressed)
@@ -128,10 +132,11 @@ module ocbk_top (
     // ---- clocks + reset -------------------------------------------------
     logic sys_clk;          // 96.65 MHz VCO output (clk0)
     logic pix_clk;          // 64.43 MHz pixel clock (clk1 = VCO / 3)
-    logic cpu_clk;          // ~3.02 MHz CPU clock     -> pin_clk_p
+    logic cpu_clk;          // 3.02 / 4.03 MHz CPU clock -> pin_clk_p
     logic cpu_clk_n;        // inverted CPU clock      -> pin_clk_n
     logic dot_ena;          // 12.08 MHz enable strobe (spare)
-    logic en_pos, en_neg;   // ÷16 037 CLKIN enables (on CPU edges; see va_037_sync)
+    logic en_pos, en_neg;   // ÷16 037 CLKIN enables (on CPU edges in /32 mode;
+                            // see va_037_sync and cpu_clkgen)
     logic dclo_n;           // CPU reset  (active low) - released first
     logic aclo_n;           // power-fail (active low) - released later
     logic locked;           // PLL locked
@@ -179,20 +184,44 @@ module ocbk_top (
     assign pix_clk = sub_wire_clk[1];
     assign pMemClk = sub_wire_extclk[0];
 
-    // --- divider chain off the 96.65 MHz VCO ----------------------------
-    logic [4:0] divc;
+    // --- model select: DIP 1 (ON = low = BK-0011M) --------------------------
+    // Latched while DCLO is held - power-on AND the reset button's warm-reset
+    // hold, so the model switches with a warm reset, no power cycle - and
+    // frozen while the CPU runs: a mid-run DIP flip never reaches the live
+    // CPU-clock divider. The divider itself retargets glitch-free during the
+    // hold (cpu_clkgen's >= wrap; the reset sequencer below just sees its
+    // cpu_clk period change between edges). dclo_n is a quasi-static
+    // cpu_clk-domain FF, 2-FF resynced here; pDip is a static switch.
+    logic [1:0] dipm_sr, dclo_sr;
+    logic       model_bk11;
     always_ff @(posedge sys_clk or negedge locked) begin
-        if (!locked) divc <= '0;
-        else         divc <= divc + 1'b1;
+        if (!locked) begin
+            dipm_sr    <= 2'b00;
+            dclo_sr    <= 2'b00;
+            model_bk11 <= 1'b0;
+        end else begin
+            dipm_sr <= {dipm_sr[0], ~pDip[0]};
+            dclo_sr <= {dclo_sr[0], dclo_n};
+            if (!dclo_sr[1]) model_bk11 <= dipm_sr[1];
+        end
     end
 
-    assign dot_ena   = (divc[2:0] == 3'b000);   // 96.65/8  = 12.08 MHz strobe
-    assign cpu_clk   =  divc[4];                 // 96.65/32 = 3.02 MHz, 50% duty
-    assign cpu_clk_n = ~divc[4];
-    // 037 CLKIN enables (÷16), phased to fire ON the CPU clock edges (CPU=CLKIN/2)
-    // so the retimed 037 matches the reference CPU:037 phase (see va_037_sync).
-    assign en_pos    = (divc[3:0] == 4'd15);     // "posedge CLKIN" (divc -> 0/16)
-    assign en_neg    = (divc[3:0] == 4'd7);      // "negedge CLKIN" (divc -> 8/24)
+    // --- divider chain off the 96.65 MHz VCO (cpu_clkgen): the fixed /16
+    //     dot/037-CLKIN enables + the model-selected /32 (BK-0010, 3.02 MHz)
+    //     or /24 (BK-0011M, 4.03 MHz) CPU clock. In /32 mode the CPU edges
+    //     fire ON the en_pos/en_neg strobes (CPU=CLKIN/2), matching the
+    //     reference CPU:037 phase (see va_037_sync); the /32 waveforms are
+    //     pinned bit-identical to the historical divc[4] tap by sim/clkgen_tb.
+    cpu_clkgen u_clkgen (
+        .sys_clk    (sys_clk),
+        .rst_n      (locked),
+        .model_bk11 (model_bk11),
+        .cpu_clk    (cpu_clk),
+        .cpu_clk_n  (cpu_clk_n),
+        .dot_ena    (dot_ena),
+        .en_pos     (en_pos),
+        .en_neg     (en_neg)
+    );
 
     // --- SDRAM-domain reset (release a couple sys_clk after PLL lock) ----
     logic srst_n_meta, srst_n;

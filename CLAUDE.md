@@ -81,6 +81,11 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   `qbus_mem`: bit-6/bit-7 DOUT-window captures, 177716 DATI reads — start
   vector / write-flag / kbd / tape bit 5 — and nINIT keeping the
   software-owned spk/mot latches).
+- `sim/run_clkgen.sh` — the Phase-7 `cpu_clkgen` unit oracle: BK-0010 (/32)
+  mode **bit-identical** to a replica of the pre-Phase-7 `divc[4]` tap
+  (enables included), the /24 BK-0011M rate exact, and a retarget sweep (no
+  half-period outside 12..16 sys_clk). The SoC tbs replicate the divider
+  locally, so this is the only sim coverage of the real chain.
 - `sim/run_epcs_boot.sh` — the Phase-5 EPCS loader unit cosim (flash model →
   `epcs_boot` → arbiter port 0 → SDRAM): word-exact load + a corrupted-blob run
   that must end `boot_ok=0`.
@@ -123,8 +128,18 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
 - Clocking: **one PLL only** (board constraint — the PIN_28 crystal feeds a single
   PLL). New clocks must be a ÷N of the ×9 VCO or a fabric clock-enable; the SDRAM
   chip clock (`pMemClk`) is the PLL's `extclk0` at the same 96.65 MHz as the
-  internal `clk0`/`sys_clk` (phase-matched, like esemsx3's c1/e0). The clock tree
-  lives in `src/ocbk_top.sv` (no separate `cpu_clk.sv`).
+  internal `clk0`/`sys_clk` (phase-matched, like esemsx3's c1/e0). The PLL and
+  resets live in `src/ocbk_top.sv`; the fabric divider chain (dot/037-CLKIN
+  enables + the CPU clock) is `src/cpu_clkgen.sv` (Phase 7): a toggle divider
+  giving **/32 = 3.02 MHz (BK-0010) or /24 = 4.03 MHz (BK-0011M)**, selected by
+  `model_bk11` = **DIP 1** (ON = 0011M), latched in `ocbk_top` while DCLO is
+  held — power-on AND warm reset, so the reset button switches the model — and
+  frozen while the CPU runs. `sim/run_clkgen.sh` pins /32 mode bit-identical
+  to the pre-Phase-7 `divc[4]` tap (the SoC tbs replicate the divider locally,
+  so that oracle is the divider's only sim coverage). In /32 mode CPU edges
+  coincide with the 037 `en_pos`/`en_neg` strobes (CPU=CLKIN/2, the reference
+  phase); in /24 they walk a deterministic 48-sys_clk pattern — 0011M
+  cycle-accuracy vs a reference is a later Phase-7 item.
 - **Soft reset (Phase 5.5):** the board's reset button (`pSltRst_n`, PIN_153 =
   the slot RESET net, external pull-up) re-enters the `ocbk_top` reset
   sequencer via `warm_rst_req` (pressed = hold, release + ~22 ms tail = the
@@ -150,13 +165,15 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   the next vblank start (the free-running 037 makes post-reset timing raster-
   phase-dependent — authentic; the vblank alignment is what keeps the replayed
   golden window steal-free and diffable). The Phase-6 keyboard reset chord ORs
-  into `warm_rst_req`. "DIP n" = physical switch n = `pDip[n-1]`; **DIP 1 is
-  now unused** — screen_mode moved off it onto the PS/2 **Print Screen** key
-  (each press toggles colour-256 ↔ mono-512; the `kbd_ps2bk` `key_scrmode`
-  radial output → the `smode_sr` 2-FF sync; power-on-only, so it survives a
-  warm reset like the real monitor-cable switch and the video pipeline). **DIP
-  2 is also now unused** — it forced the on-chip test ROM, removed 2026-07-10
-  (ROM is always the loaded SDRAM image).
+  into `warm_rst_req`. "DIP n" = physical switch n = `pDip[n-1]`; **DIP 1 =
+  model select** (OFF = BK-0010, ON = BK-0011M; Phase 7 — latched during any
+  DCLO hold, see the clocking bullet; it used to be screen_mode, which moved
+  onto the PS/2 **Print Screen** key: each press toggles colour-256 ↔
+  mono-512; the `kbd_ps2bk` `key_scrmode` radial output → the `smode_sr` 2-FF
+  sync; power-on-only, so it survives a warm reset like the real
+  monitor-cable switch and the video pipeline). **DIP 2 is unused** — it
+  forced the on-chip test ROM, removed 2026-07-10 (ROM is always the loaded
+  SDRAM image).
 - **Keyboard (Phase 6):** `ps2_rx` → `kbd_ps2bk` (translator, all on
   `cpu_clk`) → `bk_kbd014` (the 1801ВП1-014 bus equivalent at 177660–177663,
   decode = the 037's `PIN_nBS`, netlist-contract-validated — see

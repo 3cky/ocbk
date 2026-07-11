@@ -45,6 +45,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE src/fb_linebuf.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/vga_timing.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/vga_out.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/bk_audio.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/cpu_clkgen.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/ocbk_top.sv
 
 # --- Timing constraints ---------------------------------------------------

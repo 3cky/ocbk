@@ -19,6 +19,7 @@ all: compile collect
 
 # --- simulation regressions (no Quartus required) -------------------------
 sim:
+	./sim/run_clkgen.sh
 	./sim/bk10/run.sh
 	./sim/ref037/run.sh
 	./sim/ref014/run.sh

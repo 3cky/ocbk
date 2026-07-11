@@ -350,6 +350,18 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
 - System timer + interrupt wiring (50 Hz EVNT/IRQ2 from vsync).
 - Runtime model select (BK0010 ↔ BK0011M) via DIP/menu.
 - **Milestone:** BK-0011M software boots and runs.
+- **Status (2026-07-11): first increment done, confirmed on hardware** —
+  runtime model select on
+  **DIP 1** (OFF = 0010, ON = 0011M; `model_bk11`, latched in `ocbk_top`
+  during any DCLO hold, so the reset button switches models without a power
+  cycle) + the **4.03 MHz (/24) CPU clock** in the new `src/cpu_clkgen.sv`
+  divider (oracle `sim/run_clkgen.sh` pins /32 BK-0010 mode bit-identical to
+  the old `divc[4]` tap; a retarget can never runt the clock). Everything
+  else still runs the BK-0010 machine, so DIP 1 ON = that machine at the
+  0011M rate; `model_bk11` is the hook the mapper / 177662 palette / timer
+  items consume. The CPU=CLKIN/2 phase lock with the 037 holds only in /32
+  mode — /24 walks a deterministic 48-sys_clk pattern; 0011M cycle-accuracy
+  is the open point below.
 
 **Memory model & banking — design notes** (BkEmu remains the authoritative
 register/behaviour reference for the exact bit fields):

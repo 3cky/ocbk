@@ -22,10 +22,12 @@ into a **double-buffered 4-bit-index framebuffer in SDRAM** and scanned out at
 (colour-256 / mono-512, the physical monitor cable switch on a real BK) is
 toggled by the PS/2 **Print Screen** key (power-on default = colour-256). The
 BK ROM always runs from the loaded SDRAM image; if the flash blob fails
-validation the CPU is held in reset (no on-chip fallback). DIP switches 1 and 2
-are unused.
+validation the CPU is held in reset (no on-chip fallback). **DIP 1 selects the
+model** (OFF = BK-0010, ON = BK-0011M — Phase 7 in progress: currently it
+selects the CPU clock, 3.02 vs 4.03 MHz; latched at power-on and by the reset
+button). DIP 2 is unused.
 
-- Fits in **3660 / 12060 LEs (30%)**, **1 M4K**, **1 ASMI block**, **1 PLL**;
+- Fits in **3931 / 12060 LEs (33%)**, **1 M4K**, **1 ASMI block**, **1 PLL**;
   timing closes.
 - Cycle accuracy holds under full 4-port SDRAM contention for RAM *and* ROM
   execution: the SoC cosims reproduce both goldens (`golden_037.txt`,
@@ -59,9 +61,11 @@ src/vga_out.sv   1024x768@60 scan-out: scheduling, CLUT, x2/x3 scale
 src/vga_timing.sv vendored VESA timing generator (ocb-test, board-proven)
 src/qbus_sdram.sv Phase-2 RAM-in-SDRAM slave (retired from build; cosim only)
 src/qbus_slot.sv cartridge-slot bridge (forward seam, SLOT_ENABLE=0)
-src/ocbk_top.sv top level: PLL/clock tree (x9/2 = 96.65 MHz clk0 + extclk0 to
-                pMemClk, x9/3 = 64.43 MHz pixel clk1, ~3.02 MHz anti-phase CPU
-                clock) + resets (gated on SDRAM init_done) + CPU + video + LEDs
+src/ocbk_top.sv top level: PLL (x9/2 = 96.65 MHz clk0 + extclk0 to pMemClk,
+                x9/3 = 64.43 MHz pixel clk1) + resets (gated on SDRAM
+                init_done) + DIP-1 model latch + CPU + video + LEDs
+src/cpu_clkgen.sv fabric divider chain: dot/037-CLKIN enables + the anti-phase
+                CPU clock, /32 = 3.02 MHz (BK-0010) or /24 = 4.03 MHz (BK-0011M)
 mem/gen_mem.py  ROM program assembler + the test picture (render_image())
 sim/bk10/       cycle-count oracle (bk10_tb.v + golden.txt + run.sh)
 sim/ref037/     with-display oracles: reference 037, retimed 037, SoC cosim,
@@ -94,10 +98,13 @@ BK hardware-reset semantics. The display is **not** affected (as on a real BK,
 whose video controller ignores CPU DCLO/ACLO): the screen keeps showing video
 RAM while the button is held, until MONITOR's screen clear. The PS/2 **Print
 Screen** key toggles colour-256 / mono-512 decode live (it stands in for the
-monitor-cable switch of a real BK). DIP switches 1 and 2 are unused: DIP 1 was
-the old screen-mode switch (now the Print Screen key) and DIP 2 was the on-chip
-test-ROM force (removed along with the on-chip ROM fallback — the BK ROM always
-runs from the loaded SDRAM image).
+monitor-cable switch of a real BK). **DIP 1** selects the model: OFF =
+BK-0010 (3.02 MHz), ON = BK-0011M (4.03 MHz CPU clock so far — the rest of
+Phase 7 follows). It is latched while the CPU is in reset, so flip it and
+press the reset button to switch models without a power cycle; flipping it
+mid-run does nothing until the next reset. DIP 2 is unused (it was the
+on-chip test-ROM force, removed along with the on-chip ROM fallback — the BK
+ROM always runs from the loaded SDRAM image).
 
 ### LEDs
 
