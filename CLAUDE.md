@@ -111,7 +111,14 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   grace check; two tb assertion guards pin every nIRQ2 assert inside the
   vgate window AND never-while-masked — the program alone can't catch a
   broken gate: the vm1 arm/fire detector never sees a deassert then, so the
-  first fire just slides to the second frame and all CPU-side checks pass).
+  first fire just slides to the second frame and all CPU-side checks pass),
+  and the **СТОП-enable bit** (section 13: the tb pulses `key_stop` on a
+  magic scratch write into the ocbk_top replica — gated 64-clk nIRQ1
+  one-shot; enabled СТОП takes the authentic HALT-entry-timeout → trap-4
+  path even at PSW prio 7, blocked must not fire in a bounded window,
+  word/odd-byte writes reach the latch, even-byte/banking writes don't,
+  RESET preserves it; the trap-4 frame is NOT RTI-able — the aborted HALT
+  entry pushes a mid-instruction PC — so the handler continues via R0).
 - `sim/run_epcs_boot.sh` — the Phase-5 EPCS loader unit cosim (flash model →
   `epcs_boot` → arbiter port 0 → SDRAM): word-exact load + a corrupted-blob run
   that must end `boot_ok=0`.
@@ -228,7 +235,17 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
     data `ad_oe` delegates externally; everything else in the I/O page,
     177674/76 included, is undecoded and bus-times-out, exactly as a real BK);
     never "helpfully" reply there. СТОП itself is a fixed 64-cpu_clk one-shot
-    on nIRQ1;
+    on nIRQ1. **Phase 7 (BK-0011M): 177716 write bit 12 = СТОП-block**
+    (1 = blocked, write-only, `stop_block` in `qbus_mem` gating the one-shot
+    launch in `ocbk_top`) — MiSTer's lane rule, matching the real board's
+    WR1/WR2 byte-strobe registers: only a write that strobes the HIGH byte
+    (word, or the 177717 odd byte) with the bit-11 lane clear touches it;
+    low-byte writes never do (BkEmu's implicit re-enable there is a rejected
+    emulator artifact). bk11-only (bk10 has no latch), **DCLO-only reset**
+    (the map/662 exception: RESET must not re-enable СТОП). Pinned by
+    `spk_capture_tb` + `sim/bk11` section 13; that oracle also documents
+    that the aborted HALT entry pushes a mid-instruction PC — the trap-4
+    frame is NOT RTI-able (real СТОП handlers never return);
   - `N_KBD`/`N_IAK` = 1 (the async chip replies within the strobe cycle) and
     the 177660 **write** reply is combinational (`wr_fast`) — both pinned by
     `golden_kbd.txt`; vm1 slaves must hold read data past DIN release (the

@@ -24,6 +24,12 @@
 // section 12 proves the mask gates the asserted level, one fire per
 // blanking window (vector 0100), and two tb guards pin every assertion
 // inside the vgate-high window and never-while-masked.
+// Phase-7 СТОП-enable leg (section 13): the tb watches for the program's
+// magic scratch write and pulses key_stop into the ocbk_top replica below
+// (stop_block tap, 2-FF resync, gated 64-clk nIRQ1 one-shot); the program
+// proves the 177716 bit-12 latch blocks/re-enables the СТОП trap-4 path
+// (word + odd-byte writes reach it, even-byte and banking writes don't,
+// RESET preserves it).
 //
 // The local divider replica runs the CPU clock at the 0011M /24 rate
 // (4.03 MHz) - which also smokes the SDRAM CDC margins at that rate - with
@@ -82,6 +88,7 @@ module bk11_soc_tb;
     always @(posedge sys_clk) srst_sr <= {srst_sr[0], 1'b1};
     reg  [3:1]  irq;   reg virq, dmgi, sp;   reg [1:0] pa;
     wire        n_irq2;    // EVNT/IRQ2 replica (assigned below qbus_mem)
+    wire        n_irq1;    // СТОП replica (assigned below qbus_mem)
     wire        dmgo;  tri1 init, dmr, sack, iako;   wire [2:1] sel;   wire bsy;
 
     // ---- tb-side address latch (for the park monitor) -----------------------
@@ -93,7 +100,7 @@ module bk11_soc_tb;
         .pin_clk_p(clk), .pin_clk_n(~clk), .pin_ena(1'b1),
         .pin_pa_n(pa), .pin_sp_n(sp),
         .pin_init_n(init), .pin_dclo_n(dclo), .pin_aclo_n(aclo),
-        .pin_irq_n({irq[3], n_irq2, irq[1]}), .pin_virq_n(virq),
+        .pin_irq_n({irq[3], n_irq2, n_irq1}), .pin_virq_n(virq),
         .pin_ad_n(ad), .pin_dout_n(dout), .pin_din_n(din),
         .pin_wtbt_n(wtbt), .pin_sync_n(sync), .pin_rply_n(rply),
         .pin_dmr_n(dmr), .pin_sack_n(sack), .pin_dmgi_n(dmgi),
@@ -139,6 +146,7 @@ module bk11_soc_tb;
     wire [DW-1:0] v_rdata_nc;
     wire        vid_page, vid_irq2m;
     wire [3:0]  vid_pal;
+    wire        stop_block;
 
     qbus_mem u_ms (
         .cpu_clk  (~clk),            // as ocbk_top: FSM on the inverted CPU clock
@@ -183,7 +191,8 @@ module bk11_soc_tb;
         .fetch_stb(fetch_stb),
         .vid_page (vid_page),
         .vid_irq2_mask(vid_irq2m),
-        .vid_pal  (vid_pal)
+        .vid_pal  (vid_pal),
+        .stop_block(stop_block)
     );
 
     sdram_model u_mem (
@@ -201,6 +210,30 @@ module bk11_soc_tb;
     always @(posedge sys_clk) irq2_lvl <= ~vid_irq2m & va_vgate;
     always @(posedge clk)     irq2_sr  <= {irq2_sr[0], irq2_lvl};
     assign n_irq2 = ~irq2_sr[1];
+
+    // ---- СТОП: replica of the ocbk_top wiring (Phase 7) ----------------------
+    // The program can't press a key, so the tb watches for its magic scratch
+    // write (address AND value - the fill patterns can never collide) and
+    // turns each one into a 1-cpu_clk key_stop strobe, then runs the exact
+    // ocbk_top glue: stop_block (u_ms tap, sclk domain) 2-FF onto posedge
+    // cpu_clk gating the launch of the 64-clk nIRQ1 one-shot.
+    localparam [15:0] STOP_MAGIC_ADDR = 16'o000750;  // = gen_bk11_test.py
+    localparam [15:0] STOP_MAGIC_VAL  = 16'o123321;
+    reg stop_req = 1'b0;                  // toggles once per magic write
+    always @(negedge dout)
+        if (~sync && addr == STOP_MAGIC_ADDR && ~ad == STOP_MAGIC_VAL)
+            stop_req = ~stop_req;
+    reg [2:0] stop_req_sr = 3'b000;
+    always @(posedge clk) stop_req_sr <= {stop_req_sr[1:0], stop_req};
+    wire key_stop = stop_req_sr[2] ^ stop_req_sr[1];
+    reg [1:0] stop_blk_sr = 2'b00;
+    reg [6:0] stop_cnt    = 7'd0;
+    always @(posedge clk) begin
+        stop_blk_sr <= {stop_blk_sr[0], stop_block};
+        if (key_stop && !stop_blk_sr[1]) stop_cnt <= 7'd64;
+        else if (stop_cnt != 0)          stop_cnt <= stop_cnt - 1'b1;
+    end
+    assign n_irq1 = (stop_cnt == 0);
 
     // assertion guards, pinning what the program-side checks can't:
     //  - window phase: every nIRQ2 assertion must land inside the 037's

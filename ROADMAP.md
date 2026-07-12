@@ -384,7 +384,8 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   write-only register). **DIP1-ON hardware is deliberately non-booting for
   now** — window 1 comes up as uninitialized RAM page 0 (no 0011M ROM blob
   yet, SYS_START still 0o100000 in both modes).
-  **Deferred follow-ups:** bit-12 СТОП-enable; the 0011M ROM blob in the EPCS
+  **Deferred follow-ups:** bit-12 СТОП-enable (done — fifth increment
+  below); the 0011M ROM blob in the EPCS
   loader + SYS_START 140000; `N_EXT`/`N_VREG` recalibration and 0011M
   cycle-accuracy vs a reference (reference-tb-first with golden regeneration).
 - **Status (2026-07-11): third increment done (sim)** — the **177662 video
@@ -444,6 +445,36 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   0011M cycle-accuracy item (same posture as the D8:B RPLY retimer) — it
   matters for beam-racing software, and is unverifiable until a 0011M
   timing reference exists.
+- **Status (2026-07-12): fifth increment done (sim)** — the **СТОП-enable
+  bit** (177716 write bit 12, BK-0011M: 1 = СТОП blocked, write-only),
+  closing that deferred follow-up. **MiSTer `BK0011M.sv` is the model**
+  (`key_stop_block <= dout[12]` on a sysreg write with `~dout[11] &
+  wtbt[1]`); BkEmu agrees except its even-byte-write implicit re-enable —
+  rejected as an emulator artifact (the real board latches 177716 write
+  data in registers clocked by separate WR1/WR2 byte-lane strobes, so only
+  a write that strobes the HIGH byte can touch bit 12). Implementation: a
+  `stop_block` latch in `qbus_mem` (DOUT-window capture on sclk next to
+  the 662 block: word or 177717 odd-byte write, bit-11 lane clear;
+  bk11-only, **DCLO-only reset** — the map/662 exception again: RESET must
+  not re-enable СТОП under protected software), 2-FF onto cpu_clk in
+  `ocbk_top` gating the launch of the existing 64-clk СТОП nIRQ1 one-shot
+  (transparent in bk10 mode — the latch never captures — so every bk10
+  golden is untouched by construction). Oracles: `spk_capture_tb` pins the
+  capture contract (bk10 dead, word/odd-byte reach, low-byte and banking
+  excluded, lane-11 exclusion, nINIT-preserve, DCLO default); `sim/bk11`
+  section 13 proves the gate end-to-end — the tb pulses `key_stop` on a
+  magic scratch write into the ocbk_top replica, an enabled СТОП takes the
+  authentic HALT-entry-timeout → trap-4 path (at PSW prio 7: rq[14] is the
+  raw pin level, the very reason the bit exists), a blocked one must not
+  fire inside a bounded window (mutation-tested both ways). Found and
+  documented along the way: the aborted HALT entry pushes a
+  **mid-instruction PC**, so the trap-4 frame is not RTI-able — the
+  section-13 handler drops the frame and continues via R0 (authentic: real
+  СТОП handlers never return; the gen_kbd_test one parks). Fits 4,222 LE
+  (35%, +7), still 1 M4K; the netlist perturbation flipped the known
+  `sdram_ctrl` wait_cnt→cmd placement-luck path negative at SEED 2 →
+  reseeded to 3 per the ocbk.qsf note (setup +0.904 ns, hold/recovery
+  clean).
 
 **Memory model & banking — design notes** (BkEmu remains the authoritative
 register/behaviour reference for the exact bit fields):

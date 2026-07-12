@@ -35,6 +35,7 @@ module spk_capture_tb;
     logic tape_in = 1'b0;  // CMT comparator level -> 177716 read bit 5
     wire        spk_bit;
     wire        mot_bit;
+    wire        stop_block;
     wire        rply_n;
     wire [15:0] bus_addr;
     wire        s_dq_dummy;   // unused SDRAM data bus stays floating
@@ -69,7 +70,8 @@ module spk_capture_tb;
         .s_ba(), .s_addr(), .s_dqm(), .s_dq(),
         .bus_addr(bus_addr), .fetch_stb(),
         .spk_bit(spk_bit),
-        .mot_bit(mot_bit)
+        .mot_bit(mot_bit),
+        .stop_block(stop_block)
     );
 
     // One DATO (write) bus cycle: SYNC latches `a`, DOUT presents `d`.
@@ -175,6 +177,16 @@ module spk_capture_tb;
         end
     endtask
 
+    task expect_stop(input e, input [127:0] tag);
+        begin
+            if (stop_block !== e) begin
+                $display("AUDIO-ERROR %0s: stop_block exp=%b got=%b",
+                         tag, e, stop_block);
+                errors = errors + 1;
+            end
+        end
+    endtask
+
     initial begin
         // Power-on: hold reset over a few CPU clocks to init the wait FSM
         // (drive_data etc.), then release - as DCLO does on the real board.
@@ -233,6 +245,11 @@ module spk_capture_tb;
         bus_write_word(16'o177716, 16'o004100);
         expect_spk(1'b1, "bk10 word w/ bit11: captures spk");
         expect_mot(1'b0, "bk10 word w/ bit11: captures mot");
+        // ... and bit 12 means nothing either: a BK-0010 has no СТОП-enable
+        // latch at all (data bits 6/7 repeat the state, so spk/mot hold)
+        expect_stop(1'b0, "bk10: stop_block DCLO default 0");
+        bus_write_word(16'o177716, 16'o010100);
+        expect_stop(1'b0, "bk10: word w/ bit12 ignored");
 
         model_bk11 = 1'b1;
         // word writes with bit 11 SET are BANKING: spk/mot must not move
@@ -264,6 +281,49 @@ module spk_capture_tb;
         bus_read(16'o177716, 16'o100100, "bk11: wflag now clear");
         bus_write_word(16'o177716, 16'o004000);   // banking write...
         bus_read(16'o177716, 16'o100104, "bk11: banking sets wflag, map not readable");
+
+        // ==== Phase-7: СТОП-enable latch (177716 bit 12, bk11-only) =========
+        // MiSTer lane rule (user-pinned): only a write that strobes the HIGH
+        // byte (word, or the 177717 odd byte) with the bit-11 lane clear can
+        // touch the latch; low-byte writes never do (BkEmu's implicit
+        // re-enable on an even-byte write is a rejected emulator artifact).
+        expect_stop(1'b0, "bk11: stop_block still 0");
+        bus_write_word(16'o177716, 16'o010000);
+        expect_stop(1'b1, "bk11: word w/ bit12 blocks");
+        // nINIT (RESET instruction) must NOT re-enable - DCLO-only reset,
+        // the same deliberate exception as the map/662 registers
+        @(negedge cclk) init_n = 1'b0;
+        repeat (3) @(posedge cclk);
+        @(negedge cclk) init_n = 1'b1;
+        repeat (2) @(posedge cclk);
+        expect_stop(1'b1, "bk11: nINIT keeps stop_block");
+        // low-byte writes never touch the latch (the lane rule)
+        bus_write_byte(16'o177716, 16'o000000);
+        expect_stop(1'b1, "bk11: low-byte write leaves stop_block");
+        // banking writes are excluded even with the bit-12 lane clear...
+        bus_write_word(16'o177716, 16'o004000);
+        expect_stop(1'b1, "bk11: banking write w/o bit12 leaves stop_block");
+        // odd-byte writes DO reach the latch (data on AD15:8, lane 12 =
+        // data bit 4): re-enable, block, and the lane-11 exclusion
+        bus_write_byte(16'o177717, 16'o000000);
+        expect_stop(1'b0, "bk11: 177717 byte w/o bit4 re-enables");
+        bus_write_byte(16'o177717, 16'o010000);
+        expect_stop(1'b1, "bk11: 177717 byte w/ bit4 blocks");
+        bus_write_byte(16'o177717, 16'o004000);
+        expect_stop(1'b1, "bk11: 177717 byte w/ lane-11 excluded");
+        // ...and a banking write with the bit-12 lane SET must not block
+        bus_write_byte(16'o177717, 16'o000000);   // re-enable first
+        expect_stop(1'b0, "bk11: re-enabled again");
+        bus_write_word(16'o177716, 16'o014000);
+        expect_stop(1'b0, "bk11: banking write w/ bit12 leaves stop_block");
+        // DCLO (power-on / warm reset) re-enables
+        bus_write_word(16'o177716, 16'o010000);
+        expect_stop(1'b1, "bk11: blocked before DCLO");
+        @(negedge cclk) reset = 1'b1;
+        repeat (3) @(posedge cclk);
+        @(negedge cclk) reset = 1'b0;
+        repeat (2) @(posedge sclk);
+        expect_stop(1'b0, "bk11: DCLO re-enables");
 
         if (errors == 0) $display("COSIM PASS");
         else             $display("COSIM FAIL (%0d errors)", errors);

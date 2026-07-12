@@ -13,4 +13,4 @@ set_global_assignment -name LAST_QUARTUS_VERSION 11.0
 # flip closure by placement luck alone (the Phase-6 tape change did: -0.106 ns
 # at the default seed, same paths, no logic in them touched). Bump this when a
 # functionally-unrelated change breaks setup on those paths.
-set_global_assignment -name SEED 2
+set_global_assignment -name SEED 3

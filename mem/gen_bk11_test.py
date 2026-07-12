@@ -23,7 +23,10 @@ write-only map register, and (Phase 7) the 177662 video register: word
 writes replied + RESET-preserved (the tb checks the vid_* taps), reads
 un-replied (write-only; trap-4 detour proves the timeout), plus the
 EVNT/IRQ2 frame interrupt (section 12: bit-14 mask gates the asserted
-vgate level, one vector-0100 fire per blanking window). Pattern offsets
+vgate level, one vector-0100 fire per blanking window) and the СТОП-enable
+bit (section 13: 177716 bit 12 gates the tb-pulsed СТОП one-shot; the
+MiSTer lane rule - word/odd-byte writes reach the latch, even-byte and
+banking writes don't - and RESET preserves it). Pattern offsets
 are >= 0o20000 within a window so page-6 writes never clobber the
 vectors/code/stack at the bottom of page 6.
 
@@ -65,6 +68,15 @@ ALIAS2 = 0o043210
 # iterations, comfortably longer than the write->capture->2-FF-resync
 # propagation of the IRQ2 level, far shorter than a blanking window
 DELAY12 = 0o100
+
+# section-13 СТОП trigger: the tb watches for this exact word written to this
+# fixed page-6 scratch address and pulses key_stop (keep in sync with
+# sim/bk11/bk11_soc_tb.v). The no-fire delay must exceed the whole enabled
+# path (64-clk one-shot + two ~60-clk HALT-entry store timeouts + the trap):
+# ~128 SOB iterations >> ~250 cpu_clk.
+STOP_MAGIC_ADDR = 0o000750
+STOP_MAGIC_VAL = 0o123321
+DELAY13 = 0o200
 
 
 def pat_a(p):
@@ -253,13 +265,106 @@ def build_stage2():
     a.emit(0o000002)                        # RTI
     a.label("prio7")
 
-    # --- 13. success ------------------------------------------------------------
+    # --- 13. СТОП-enable (177716 bit 12; Phase 7) ------------------------------
+    # The tb pulses key_stop (one cpu_clk) on every STOP_MAGIC_VAL write to
+    # STOP_MAGIC_ADDR and runs the ocbk_top replica: stop_block 2-FF resync
+    # gating the 64-clk nIRQ1 one-shot. An enabled СТОП takes the authentic
+    # BK path (ref014-pinned shape): HALT entry, its 177676 PSW store bus-
+    # times-out, trap through vector 4 -> stop_isr bumps R5. Entry PSW is
+    # 340: СТОП must fire even at priority 7 (rq[14] is the raw pin level -
+    # the very reason the 0011M grew the bit-12 blocker); the detoured
+    # vector-4 PSW carries the HALT-mode bit 0o400 (the gen_kbd_test idiom).
+    # RESUME CONTRACT: the aborted HALT entry pushes a MID-INSTRUCTION PC
+    # (the vm1 grabs IRQ1 after the opcode fetch), so the trap frame is NOT
+    # RTI-able - authentic: real СТОП handlers never return either (the
+    # gen_kbd_test one parks). The handler therefore drops the frame and
+    # continues at the per-case continuation in R0; fire-must-not-happen
+    # cases point R0 at the fail park, so a stray fire parks loudly.
+    a.emit(0o012737)                        # MOV #stop_isr,@#4 (detour vector 4)
+    a.addr("stop_isr")
+    a.emit(0o000004)
+    a.emit(0o012737, 0o000740, 0o000006)    # trap-4 PSW: prio 7 + HALT bit
+    a.emit(0o005005)                        # CLR R5 (СТОП fire counter)
+    # (a) DCLO default = enabled (and prio 7 does not mask СТОП)
+    a.emit(0o012700)                        # MOV #c13a,R0 (continuation)
+    a.addr("c13a")
+    a.emit(0o012737, STOP_MAGIC_VAL, STOP_MAGIC_ADDR)
+    a.label("p13a")                         # park; never fires -> the tb
+    a.br(BR, "p13a")                        #   watchdog parks the run
+    a.label("c13a")
+    a.emit(0o020527, 0o000001)              # CMP R5,#1 (exactly one fire)
+    expect_eq(a)
+    # (b) word write with bit 12 (bit 11 clear - NOT banking) blocks
+    a.emit(0o012700)                        # MOV #fail,R0 (stray fire -> park)
+    a.addr("fail")
+    a.emit(0o012737, 0o010000, 0o177716)
+    a.emit(0o012737, STOP_MAGIC_VAL, STOP_MAGIC_ADDR)
+    a.emit(0o012703, DELAY13)               # bounded no-fire window
+    a.label("d13b")
+    a.sob(3, "d13b")
+    a.emit(0o020527, 0o000001)              # CMP R5,#1 (no new fire)
+    expect_eq(a)
+    # (c) the RESET instruction must NOT re-enable (DCLO-only, like the map)
+    a.emit(0o000005)                        # RESET (pulses nINIT)
+    a.emit(0o012737, STOP_MAGIC_VAL, STOP_MAGIC_ADDR)
+    a.emit(0o012703, DELAY13)
+    a.label("d13c")
+    a.sob(3, "d13c")
+    a.emit(0o020527, 0o000001)
+    expect_eq(a)
+    # (d) an even-address BYTE write can't touch the latch (the MiSTer lane
+    #     rule; BkEmu's implicit re-enable here is a rejected artifact)
+    a.emit(0o105037, 0o177716)              # CLRB @#177716
+    a.emit(0o012737, STOP_MAGIC_VAL, STOP_MAGIC_ADDR)
+    a.emit(0o012703, DELAY13)
+    a.label("d13d")
+    a.sob(3, "d13d")
+    a.emit(0o020527, 0o000001)
+    expect_eq(a)
+    # (e) the 177717 odd byte DOES reach it (data on AD15:8): re-enable
+    a.emit(0o105037, 0o177717)              # CLRB @#177717
+    a.emit(0o012700)                        # MOV #c13e,R0
+    a.addr("c13e")
+    a.emit(0o012737, STOP_MAGIC_VAL, STOP_MAGIC_ADDR)
+    a.label("p13e")
+    a.br(BR, "p13e")
+    a.label("c13e")
+    a.emit(0o020527, 0o000002)
+    expect_eq(a)
+    # (f) a BANKING write with the bit-12 lane set must not block (mutual
+    #     exclusion; window 0 -> page 1 as a side effect, nothing uses it)
+    a.emit(0o012737, BIT11 | (1 << 12), 0o177716)
+    a.emit(0o012700)                        # MOV #c13f,R0
+    a.addr("c13f")
+    a.emit(0o012737, STOP_MAGIC_VAL, STOP_MAGIC_ADDR)
+    a.label("p13f")
+    a.br(BR, "p13f")
+    a.label("c13f")
+    a.emit(0o020527, 0o000003)
+    expect_eq(a)
+    # restore vector 4 -> fail (a stray timeout at the park must park loudly)
+    a.emit(0o012737)                        # MOV #fail,@#4
+    a.addr("fail")
+    a.emit(0o000004)
+    a.emit(0o012737, 0o000340, 0o000006)
+
+    # --- 14. success ------------------------------------------------------------
     a.emit(0o000137)                        # JMP @#success
     a.addr("success")
 
     # frame-IRQ2 ISR (vector 0100; runs at priority 7, never falls through)
     a.label("isr2")
     a.emit(0o005202)                        # INC R2
+    a.emit(0o000002)                        # RTI
+
+    # СТОП trap-4 ISR (via the section-13 vector detour): count the fire,
+    # drop the un-RTI-able frame (mid-instruction PC, see section 13) and
+    # continue at the case's continuation (R0) at priority 7
+    a.label("stop_isr")
+    a.emit(0o005205)                        # INC R5
+    a.emit(0o062706, 0o000004)              # ADD #4,SP (drop pushed PC/PSW)
+    a.emit(0o012746, 0o000340)              # MOV #340,-(SP) (new PSW)
+    a.emit(0o010046)                        # MOV R0,-(SP)   (new PC)
     a.emit(0o000002)                        # RTI
 
     words = a.resolve()

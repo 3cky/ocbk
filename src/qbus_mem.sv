@@ -124,7 +124,10 @@ module qbus_mem #(
     // ---- BK-0011M 177662 video register taps (sclk domain) ----------------
     output logic        vid_page,      // bit 15: displayed screen (0 = RAM page 1, 1 = page 7)
     output logic        vid_irq2_mask, // bit 14: frame-IRQ2 mask (1 = masked)
-    output logic [3:0]  vid_pal        // bits 11:8: palette index
+    output logic [3:0]  vid_pal,       // bits 11:8: palette index
+
+    // ---- BK-0011M СТОП-enable: 177716 write bit 12 (1 = blocked) ----------
+    output logic        stop_block
 );
 
     import qbus_pkg::*;
@@ -467,6 +470,32 @@ module qbus_mem #(
             vid_irq2_mask <= ~ad_n[14];
             vid_pal       <= ~ad_n[11:8];
         end
+    end
+
+    // ---- BK-0011M СТОП-enable capture (Phase 7) ---------------------------
+    // 177716 write bit 12: 1 = СТОП (nIRQ1) blocked, 0 = enabled. MiSTer
+    // BK0011M.sv is the model (key_stop_block <= dout[12] on a sysreg write
+    // with ~dout[11] & wtbt[1]); BkEmu agrees except its even-byte-write
+    // implicit re-enable, an emulator artifact rejected here. The lane rule
+    // matches the real board, which latches 177716 write data in registers
+    // clocked by separate WR1/WR2 byte-lane strobes: only a write that
+    // strobes the HIGH byte (word write, wtbt_n released, or the 177717 odd
+    // byte, data on AD15:8) can touch bit 12; the bit-11 banking exclusion
+    // is applied on the lane MiSTer-literally, so it covers odd-byte writes
+    // too (can't reuse bank_wr - that flag is word-only). bk11-only: in
+    // BK-0010 mode the latch never captures and holds 0, so the ocbk_top
+    // gate is transparent (bk10 goldens untouched). Reset is DCLO-ONLY, to
+    // 0 = enabled - the same deliberate nINIT exception as the map/662
+    // registers: the RESET instruction must not re-enable СТОП under
+    // software that blocked it. Consumer: ocbk_top 2-FF syncs this level
+    // onto cpu_clk and gates the СТОП one-shot launch.
+    always_ff @(posedge sclk) begin
+        if (reset)
+            stop_block <= 1'b0;
+        else if (model_bk11 && !sync_n && !dout_n && !sel1_n
+                 && ad_n[11] /* true bit 11 clear: not banking */
+                 && (addr[0] || wtbt_n) /* high byte lane written */)
+            stop_block <= ~ad_n[12];
     end
 
     // ---- Q-bus drivers (inverted; open-collector rply) -------------------

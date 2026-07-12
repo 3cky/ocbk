@@ -484,11 +484,20 @@ module ocbk_top (
     // on the rising edge - the pin-sync rule; the same width and shape the
     // sim/ref014 interrupt oracle pinned). On a real BK-0010 with BASIC the
     // net effect is trap 4: the HALT entry's 177674/676 stores time out.
+    // Phase 7 (BK-0011M): the launch is gated by the 177716 bit-12
+    // СТОП-enable latch (stop_block, captured in u_mem on sclk - see there
+    // for the pinned contract). 2-FF resync onto cpu_clk (quasi-static: it
+    // only moves during a 177716 DOUT window); no model_bk11 term needed -
+    // in bk10 mode the latch never captures and holds 0 (DCLO reset), so the
+    // gate is transparent and bk10 behaviour is bit-identical.
+    logic       stop_block;         // sclk domain, from u_mem below
+    logic [1:0] stop_blk_sr = '0;
+    always_ff @(posedge cpu_clk) stop_blk_sr <= {stop_blk_sr[0], stop_block};
     localparam int unsigned STOP_PULSE = 64;
     logic [6:0] stop_cnt = '0;
     always_ff @(posedge cpu_clk) begin
-        if (key_stop)           stop_cnt <= 7'(STOP_PULSE);
-        else if (stop_cnt != 0) stop_cnt <= stop_cnt - 1'b1;
+        if (key_stop && !stop_blk_sr[1]) stop_cnt <= 7'(STOP_PULSE);
+        else if (stop_cnt != 0)          stop_cnt <= stop_cnt - 1'b1;
     end
     wire stop_pulse = (stop_cnt != 0);
 
@@ -620,8 +629,10 @@ module ocbk_top (
                                      // ops - cmt_mode comes from Scroll Lock now.
         .vid_page (vid_page),        // 177662 (bk11): screen page + palette; the
         .vid_pal  (vid_pal),         //   video-side muxes below consume them
-        .vid_irq2_mask(vid_irq2_mask)// 177662 bit 14: frame-IRQ2 mask -> the
+        .vid_irq2_mask(vid_irq2_mask),// 177662 bit 14: frame-IRQ2 mask -> the
                                      // EVNT/IRQ2 gate above the CPU instance
+        .stop_block(stop_block)      // 177716 bit 12 (bk11): СТОП blocked ->
+                                     // gates the nIRQ1 one-shot launch above
     );
 
     // ---- Sound + CMT jack: BK 1-bit speaker -> board R-2R sound DAC ------
