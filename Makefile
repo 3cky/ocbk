@@ -33,7 +33,7 @@ sim:
 	./sim/run_epcs_boot.sh
 
 # --- FPGA build -----------------------------------------------------------
-compile: mem/ram_test.hex mem/boot_blob.hex
+compile: mem/ram_test.hex mem/boot_blob.hex mem/boot_blob11.hex
 	@echo ">> Phase 1 - Analysis & Synthesis"
 	$(QUARTUS_MAP) $(PROJECT).qpf
 	@echo ">> Phase 2 - Fitter (Place & Route)"
@@ -56,11 +56,17 @@ compile: mem/ram_test.hex mem/boot_blob.hex
 mem/ram_test.hex: mem/gen_mem.py
 	cd mem && python3 gen_mem.py ram_test.hex
 
-# Phase-5 EPCS boot blob (BK-0010.01 MONITOR + BASIC Vilnius), appended to the
-# POF as an ocbk.cof hex_block page at flash offset 0x40000.
+# EPCS boot blobs: Phase-5 bk10 (BK-0010.01 MONITOR + BASIC Vilnius) at flash
+# offset 0x40000 + Phase-7 bk11 (BASIC/EXT window banks, BOS, MSTD) at
+# 0x48000, both appended to the POF as ocbk.cof hex_block pages. One script
+# run generates both.
 mem/boot_blob.hex: mem/gen_boot_blob.py mem/roms/monit10.rom \
-		mem/roms/basic10_1.rom mem/roms/basic10_2.rom mem/roms/basic10_3.rom
+		mem/roms/basic10_1.rom mem/roms/basic10_2.rom mem/roms/basic10_3.rom \
+		mem/roms/basic11m_0.rom mem/roms/basic11m_1.rom mem/roms/ext11m.rom \
+		mem/roms/bos11m.rom mem/roms/mstd11m.rom
 	cd mem && python3 gen_boot_blob.py
+
+mem/boot_blob11.hex: mem/boot_blob.hex ;
 
 collect:
 	mkdir -p $(PARKING)
@@ -91,8 +97,10 @@ blob-check: $(PARKING)/recovery.pof mem/boot_blob.hex
 	python3 -c "import sys; \
 	  rev = bytes(int(format(i,'08b')[::-1],2) for i in range(256)); \
 	  rpd = open('$(PARKING)/recovery.rpd','rb').read(); \
+	  ok = True; \
 	  blob = open('mem/boot_blob.bin','rb').read(); \
-	  got = rpd[0x40000:0x40000+len(blob)]; \
-	  sys.exit(0 if got == bytes(rev[b] for b in blob) \
-	           else 'blob-check: MISMATCH at 0x40000')"
-	@echo ">> blob-check: POF hex_block page holds rev(blob) = blob on flash"
+	  ok &= rpd[0x40000:0x40000+len(blob)] == bytes(rev[b] for b in blob); \
+	  blob11 = open('mem/boot_blob11.bin','rb').read(); \
+	  ok &= rpd[0x48000:0x48000+len(blob11)] == bytes(rev[b] for b in blob11); \
+	  sys.exit(0 if ok else 'blob-check: MISMATCH (0x40000 or 0x48000)')"
+	@echo ">> blob-check: POF hex_block pages hold rev(blob) = blobs on flash"

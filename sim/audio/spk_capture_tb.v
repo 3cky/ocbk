@@ -276,11 +276,12 @@ module spk_capture_tb;
         expect_spk(1'b0, "bk11 177717 byte: no spk effect");
         expect_mot(1'b0, "bk11 177717 byte: no mot effect");
         // write-only register + banking-sets-wflag pin: a DATI read after a
-        // banking write returns SYS_START | wflag | kbd - never the map bits
-        bus_read(16'o177716, 16'o100104, "bk11: clear pending wflag");
-        bus_read(16'o177716, 16'o100100, "bk11: wflag now clear");
+        // banking write returns SYS_START11 | wflag | kbd - never the map
+        // bits (Phase 7: the bk11 start vector is 140000 = BOS in top ROM)
+        bus_read(16'o177716, 16'o140104, "bk11: clear pending wflag");
+        bus_read(16'o177716, 16'o140100, "bk11: wflag now clear");
         bus_write_word(16'o177716, 16'o004000);   // banking write...
-        bus_read(16'o177716, 16'o100104, "bk11: banking sets wflag, map not readable");
+        bus_read(16'o177716, 16'o140104, "bk11: banking sets wflag, map not readable");
 
         // ==== Phase-7: СТОП-enable latch (177716 bit 12, bk11-only) =========
         // MiSTer lane rule (user-pinned): only a write that strobes the HIGH

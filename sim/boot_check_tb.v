@@ -25,6 +25,18 @@
 // second full screen-clear burst - the real MONITOR warm-reboots. Roughly
 // doubles the runtime.
 //
+// +bk11 (Phase 7): cold-boot the real BK-0011M BOS instead - model_bk11=1,
+// the /24 (4.03 MHz) CPU clock, the bk11 ROM blob (boot_blob11_flash.hex)
+// preloaded at SDRAM words 0x30000+ (window banks + top ROM), the 177662
+// taps driving the fb_video base/palette mux and the EVNT/IRQ2 replica as in
+// ocbk_top. Checks: the first 177716 read must reply the 140000 start vector
+// (bits 15:14 = 11), then BOS activity = at least one replied 177662 write
+// AND the >= VID_TARGET video-RAM writes (BOS clears its screen page through
+// window 0, so the 040000-077777 bus-address window still catches it).
+// VID_TARGET and the 60 ms bound are tunables - adjust if BOS's real startup
+// profile (e.g. a RAM test before the clear) needs it. +warmreset is
+// bk10-only for now (ignored under +bk11).
+//
 // Prints BOOTCHK-* lines; run_boot_check.sh greps for the final verdict.
 //
 `timescale 1ns / 1ps
@@ -38,16 +50,32 @@ module boot_check_tb;
     localparam integer VID_TARGET = 200;    // video-RAM writes to declare victory
     localparam integer TRACE_N    = 5000;   // bus transactions to dump
 
-    // ---- clocks (as ref037_soc_video_tb) --------------------------------------
+    // ---- model select (+bk11 = BK-0011M BOS boot) ------------------------------
+    reg model11;
+    initial model11 = $test$plusargs("bk11");
+
+    // ---- clocks (as ref037_soc_video_tb / bk11_soc_tb) --------------------------
+    // 037 CLKIN enables on the fixed /16 chain; CPU clock = cpu_clkgen replica
+    // (/32 bk10 - identical to the old divc[4] tap - or /24 bk11).
     reg       sys_clk;
-    reg [4:0] divc;
+    reg [3:0] divc;
     initial sys_clk = 1'b0;
     always #(`SYSCLK_HALF) sys_clk = ~sys_clk;
-    initial divc = 5'd0;
+    initial divc = 4'd0;
     always @(posedge sys_clk) divc <= divc + 1'b1;
-    wire en_pos = (divc[3:0] == 4'd15);
-    wire en_neg = (divc[3:0] == 4'd7);
-    wire clk    = divc[4];
+    wire en_pos = (divc == 4'd15);
+    wire en_neg = (divc == 4'd7);
+
+    reg [3:0] cdiv;
+    reg       cpu_clk_r;
+    initial begin cdiv = 4'd0; cpu_clk_r = 1'b0; end
+    always @(posedge sys_clk) begin
+        if (cdiv >= (model11 ? 4'd11 : 4'd15)) begin
+            cdiv <= 4'd0; cpu_clk_r <= ~cpu_clk_r;
+        end else
+            cdiv <= cdiv + 1'b1;
+    end
+    wire clk = cpu_clk_r;
 
     reg pix_clk = 1'b0;
     always #7.5 pix_clk = ~pix_clk;
@@ -67,6 +95,7 @@ module boot_check_tb;
     always @(posedge sys_clk) srst_sr <= {srst_sr[0], 1'b1};
     reg  [3:1]  irq;   reg dmgi, sp;   reg [1:0] pa;
     tri1        virq;  // open-collector: bk_kbd014 requests, vm1 samples
+    wire        n_irq2;  // EVNT/IRQ2 replica (assigned below; idle 1 in bk10)
     wire        dmgo;  tri1 init, dmr, sack, iako;   wire [2:1] sel;   wire bsy;
 
     reg [15:0] addr;
@@ -77,7 +106,7 @@ module boot_check_tb;
         .pin_clk_p(clk), .pin_clk_n(~clk), .pin_ena(1'b1),
         .pin_pa_n(pa), .pin_sp_n(sp),
         .pin_init_n(init), .pin_dclo_n(dclo), .pin_aclo_n(aclo),
-        .pin_irq_n(irq), .pin_virq_n(virq),
+        .pin_irq_n({irq[3], n_irq2, irq[1]}), .pin_virq_n(virq),
         .pin_ad_n(ad), .pin_dout_n(dout), .pin_din_n(din),
         .pin_wtbt_n(wtbt), .pin_sync_n(sync), .pin_rply_n(rply),
         .pin_dmr_n(dmr), .pin_sack_n(sack), .pin_dmgi_n(dmgi),
@@ -118,9 +147,16 @@ module boot_check_tb;
     wire [DW-1:0] arb_rdata;
     wire        fb_front, fb_front_valid;
 
+    // 177662 taps (qbus_mem) + the ocbk_top vram_base/pal_idx mux replica
+    wire        vid_page, vid_irq2m;
+    wire [3:0]  vid_pal;
+    localparam [23:0] VPAGE0 = 24'h022000;   // qbus_pkg BK11_VPAGE0 (RAM page 1)
+    localparam [23:0] VPAGE1 = 24'h02E000;   // qbus_pkg BK11_VPAGE1 (RAM page 7)
+
     fb_video #(.ADDR_BITS(AB), .DQ_BITS(DW)) u_fbv (
         .clk(sys_clk), .rst_n(dclo_cold), .screen_mode(1'b1),
-        .vram_base(24'h002000), .pal_idx(4'd0),   // bk10: fixed base, palette 0
+        .vram_base(model11 ? (vid_page ? VPAGE1 : VPAGE0) : 24'h002000),
+        .pal_idx(model11 ? vid_pal : 4'd0),
         .vid_fetch(va_vfetch), .vid_line_en(va_line_en),
         .hgate(va_hgate), .vgate(va_vgate), .video_va(video_va),
         .f_req(f_req), .f_addr(f_addr), .f_gnt(f_gnt), .f_rvalid(f_rvalid),
@@ -178,7 +214,7 @@ module boot_check_tb;
         .tape_in  (1'b0),            // no tape signal in this oracle
         .sel1_n   (sel[1]),          // CPU nSEL1/nSEL2 register selects
         .sel2_n   (sel[2]),
-        .model_bk11(1'b0),           // BK-0010 mode: mapper = bit-identical pass-through
+        .model_bk11(model11),        // bk10 pass-through, or +bk11 banking
         .boot_active(1'b0),
         .bw_req   (1'b0),
         .bw_addr  ({AB{1'b0}}),
@@ -201,8 +237,19 @@ module boot_check_tb;
         .s_cke(s_cke), .s_cs_n(s_cs_n), .s_ras_n(s_ras_n), .s_cas_n(s_cas_n),
         .s_we_n(s_we_n), .s_ba(s_ba), .s_addr(s_addr), .s_dqm(s_dqm), .s_dq(s_dq),
         .bus_addr (),
-        .fetch_stb()
+        .fetch_stb(),
+        .vid_page (vid_page),
+        .vid_irq2_mask(vid_irq2m),
+        .vid_pal  (vid_pal)
     );
+
+    // ---- EVNT/IRQ2: ocbk_top wiring replica (as bk11_soc_tb; idle in bk10) ----
+    reg       irq2_lvl;
+    reg [1:0] irq2_sr;
+    initial begin irq2_lvl = 1'b0; irq2_sr = 2'b00; end
+    always @(posedge sys_clk) irq2_lvl <= model11 & ~vid_irq2m & va_vgate;
+    always @(posedge clk)     irq2_sr  <= {irq2_sr[0], irq2_lvl};
+    assign n_irq2 = ~irq2_sr[1];
 
     sdram_model u_mem (
         .clk(sys_clk), .cke(s_cke), .cs_n(s_cs_n), .ras_n(s_ras_n), .cas_n(s_cas_n),
@@ -230,6 +277,7 @@ module boot_check_tb;
     integer trace_cnt  = 0;
     integer tracef;
     reg     wr_seen;
+    reg     saw_662w = 0;       // +bk11: BOS must write the 177662 video register
     always @(negedge rply) if (aclo === 1'b1) begin
         if (!dout && !wr_seen) begin
             wr_seen = 1;
@@ -238,6 +286,10 @@ module boot_check_tb;
                 if (vid_writes <= 4 || vid_writes == VID_TARGET)
                     $display("BOOTCHK: video-RAM write #%0d: [%06o] <= %06o t=%0t",
                              vid_writes, addr, ~ad, $time);
+            end
+            if (addr == 16'o177662 && !saw_662w) begin
+                saw_662w = 1;
+                $display("BOOTCHK: 177662 write: %06o t=%0t", ~ad, $time);
             end
             if (trace_cnt < TRACE_N) begin
                 $fdisplay(tracef, "W %06o %06o", addr, ~ad);
@@ -250,6 +302,21 @@ module boot_check_tb;
         end
     end
     always @(posedge dout) wr_seen = 0;
+
+    // ---- +bk11 check: the first 177716 read must reply the 140000 vector -------
+    // Sampled at DIN release: slaves hold read data past it (the pinned vm1
+    // hold rule) - at RPLY-assert the qbus_mem I/O data enable may not have
+    // caught up yet and only the 037's AD15 assist shows on the bus.
+    reg vec_checked = 0;
+    always @(posedge din) if (aclo === 1'b1 && addr == 16'o177716
+                              && !vec_checked) begin
+        vec_checked = 1;
+        if (model11 && (~ad & 16'o140000) !== 16'o140000) begin
+            $display("BOOTCHK-VEC-ERROR: 177716 read = %06o, no 140000 vector", ~ad);
+            xerrs = xerrs + 1;
+        end else if (model11)
+            $display("BOOTCHK: 177716 start-vector read = %06o", ~ad);
+    end
 
     // ---- +warmreset: reboot mid-screen-clear, MONITOR must come back ----------
     // warm_phase: 0 = cold run, 1 = warm pulse in progress, 2 = warm reboot run
@@ -275,9 +342,11 @@ module boot_check_tb;
         $display("BOOTCHK: CPU re-released, MONITOR warm reboot...");
     end
 
-    // finish as soon as the screen clear is well underway (twice in +warmreset)
-    always @(vid_writes) begin
-        if (vid_writes >= VID_TARGET && warm_phase != 1) begin
+    // finish as soon as the screen clear is well underway (twice in +warmreset;
+    // +bk11 additionally requires the 177662 write to have been seen)
+    always @(vid_writes or saw_662w) begin
+        if (vid_writes >= VID_TARGET && warm_phase != 1
+            && (!model11 || saw_662w)) begin
             if (warmreset && warm_phase == 0) begin
                 warm_phase = 1;
                 -> do_warm;
@@ -305,15 +374,22 @@ module boot_check_tb;
         for (ii = 0; ii < 16320; ii = ii + 1)
             u_mem.mem[16'h4000 + ii] =
                 {blob['h40008 + 2*ii + 1], blob['h40008 + 2*ii]};
+        if (model11) begin                   // +bk11: window-ROM banks + top ROM
+            $readmemh("../mem/boot_blob11_flash.hex", blob, 'h48000);
+            for (ii = 0; ii < 40960; ii = ii + 1)
+                u_mem.mem['h30000 + ii] =
+                    {blob['h48008 + 2*ii + 1], blob['h48008 + 2*ii]};
+        end
 
-        warmreset = $test$plusargs("warmreset");
+        warmreset = $test$plusargs("warmreset") && !model11;  // bk10-only
         pa=2'b11; sp=1'b1; dmgi=1'b1; irq=3'b111;
         dclo=1'b0; aclo=1'b0; dclo_cold=1'b0;
 
         wait (init_done); @(negedge clk);
         repeat (8) @(negedge clk); dclo = 1'b1; dclo_cold = 1'b1;
         repeat (4) @(negedge clk); aclo = 1'b1;
-        $display("BOOTCHK: CPU released, MONITOR cold boot from SDRAM ROM...");
+        $display("BOOTCHK: CPU released, %0s cold boot from SDRAM ROM...",
+                 model11 ? "BOS (BK-0011M)" : "MONITOR");
     end
 
     initial begin

@@ -119,9 +119,13 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   word/odd-byte writes reach the latch, even-byte/banking writes don't,
   RESET preserves it; the trap-4 frame is NOT RTI-able — the aborted HALT
   entry pushes a mid-instruction PC — so the handler continues via R0).
-- `sim/run_epcs_boot.sh` — the Phase-5 EPCS loader unit cosim (flash model →
-  `epcs_boot` → arbiter port 0 → SDRAM): word-exact load + a corrupted-blob run
-  that must end `boot_ok=0`.
+- `sim/run_epcs_boot.sh` — the EPCS loader unit cosim (flash model →
+  `epcs_boot` → arbiter port 0 → SDRAM), **three legs**: the clean run loads
+  BOTH blobs (Phase-5 bk10 at flash 0x40000 → SDRAM words 0x4000+, Phase-7
+  bk11 at 0x48000 → 0x30000+) and word-exact-verifies both regions;
+  `+corrupt` (first blob) and `+corrupt2` (second) each must end
+  `boot_ok=0` — `+corrupt2` also re-checks the bk10 region is intact
+  (two-pass independence).
 - `sim/run_sdram_cosim.sh` — the Phase-2 `qbus_sdram` slave (word/byte datapath +
   deterministic RPLY). Runs the `--core-only` ROM (no picture draw — hours slow).
 - `sim/run_video.sh` — palette unit tb (slot/bit conventions + all 16
@@ -141,7 +145,13 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   diffing against a BkEmu-side trace when debugging boot problems. With
   `+warmreset` (~14 min) it also re-pulses DCLO/ACLO mid-screen-clear and
   requires a second 177716 start-vector read + a second screen-clear burst —
-  run it when touching reset/DCLO plumbing.
+  run it when touching reset/DCLO plumbing. **`+bk11`** (Phase 7) instead
+  cold-boots the real BK-0011M BOS (model_bk11=1, /24 CPU clock, the bk11
+  blob preloaded at SDRAM 0x30000+, the 177662→fb-base/palette + EVNT/IRQ2
+  ocbk_top mux replica): the first 177716 read must reply the 140000 start
+  vector, then BOS activity = a 177662 write + the screen-clear burst, no X
+  (`+warmreset` is bk10-only). `VID_TARGET`/the 60 ms bound are noted
+  tunables if BOS's real startup profile needs them.
 
 Any change touching the core, the Q-bus, memory, video, or clocking must keep all
 of it passing. When tuning bus/RPLY timing, trace the **reference** waveform first
@@ -294,6 +304,17 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   (real BK would bus-timeout → trap 4; fidelity deferred to Phase 9). Boot:
   `src/epcs_boot.sv` copies the blob from EPCS offset 0x40000 through the
   boot-writer mux onto port 0 during reset-hold (DCLO held until `boot_done`).
+  **Phase 7: two-pass loader.** After the bk10 blob (pass 0, → words 0x4000+),
+  the same FSM re-runs for the **bk11 ROM set** — flash 0x48000 → SDRAM words
+  0x30000–0x39FFF (the mapper's window-ROM banks + fixed top ROM; a per-pass
+  flash/base/cap mux + an inter-pass nCS-high `B_GAP`, ~77 ms total). BOTH
+  blobs load **unconditionally** regardless of DIP-1: `epcs_boot` runs once
+  per power-on but the model latch re-samples at every warm reset, so both
+  images must always be resident. `boot_ok` = every pass header-valid +
+  checksum-good; a failure holds the CPU in reset (no fallback). SYS_START
+  is **model-muxed**: 177716 reads reply 0o100000 in bk10, `SYS_START11 =
+  0o140000` (BOS) in bk11 (`qbus_pkg`/`qbus_mem`; BkEmu `Computer.java:267`
+  — bit 15 still agrees with the 037 AD15 assist, bit 14 is qbus_mem-only).
   ROM is **always** the loaded SDRAM image — the on-chip 256-word test-ROM
   fallback and its **DIP2** force were removed (2026-07-10) to free resources.
   A failed EPCS boot (`boot_ok=0`) now **holds the CPU in reset** (the reset
@@ -492,16 +513,21 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   `ocbk_top.sv` and `qbus_sdram_tb.sv`) — they must never move; new code goes
   after the `start` label. After changing the draw code or picture, run
   `sim/video/run_draw_check.sh`.
-- `mem/boot_blob.{bin,hex}` + `boot_blob_flash.hex` are **generated** by
-  `mem/gen_boot_blob.py` from the committed `mem/roms/*.rom` (gitignored,
-  `make` regenerates). **EPCS bit-order (hardware-verified, subtle):** the COF
-  Intel HEX carries **true bytes**. `quartus_cpf` bit-reverses `hex_block`
-  bytes into the POF/RPD — but the RPD is in **RBF/LSB-first bit order, not
-  physical-flash order** (its Page_0 equals the `.rbf` verbatim) — and
-  `quartus_pgm -m AS` reverses **again** onto the chip, so the two cancel and
-  an MSB-first SPI READ returns the HEX bytes verbatim. Do NOT pre-reverse
-  (that was tried; on the board the loader read rev(blob) and fell back).
-  `make blob-check` verifies the RPD page = rev(blob).
+- `mem/boot_blob{,11}.{bin,hex}` + `boot_blob{,11}_flash.hex` are **generated**
+  by `mem/gen_boot_blob.py` from the committed `mem/roms/*.rom` (gitignored,
+  `make` regenerates). **Two blobs** (Phase 7): the bk10 set at EPCS flash
+  0x40000 and the bk11 set (`basic11m_0`/`basic11m_1`+`ext11m`/zero-filled
+  empty banks/`bos11m`/`mstd11m`, layout in the script header) at 0x48000 —
+  both appended to the POF as `ocbk.cof` `hex_block` pages (`quartus_cpf`
+  accepts multiple blocks; the map file lists both). **EPCS bit-order
+  (hardware-verified, subtle):** the COF Intel HEX carries **true bytes**.
+  `quartus_cpf` bit-reverses `hex_block` bytes into the POF/RPD — but the RPD
+  is in **RBF/LSB-first bit order, not physical-flash order** (its Page_0
+  equals the `.rbf` verbatim) — and `quartus_pgm -m AS` reverses **again**
+  onto the chip, so the two cancel and an MSB-first SPI READ returns the HEX
+  bytes verbatim. Do NOT pre-reverse (that was tried; on the board the loader
+  read rev(blob) and fell back). `make blob-check` verifies the RPD pages =
+  rev(blob) at BOTH 0x40000 and 0x48000.
 
 ## Temp files
 

@@ -76,8 +76,9 @@ package qbus_pkg;
    localparam logic [23:0] BK11_VPAGE0 = BK11_RAM_BASE + 24'h002000; // page 1
    localparam logic [23:0] BK11_VPAGE1 = BK11_RAM_BASE + 24'h00E000; // page 7
 
-   // System start-up register: reading 177716 returns 100000 (boot from ROM),
-   // which steers the 1801ВМ1 reset micro-sequence to the 100000 ROM vector.
+   // System start-up register: reading 177716 returns the start vector
+   // (100000 = MONITOR on BK-0010, 140000 = BOS on BK-0011M), which steers
+   // the 1801ВМ1 reset micro-sequence to that ROM vector.
    // Bits 15:8 are the startup address; bit 2 is the write-flag (set on any
    // write to the register, cleared after a read) - BkEmu semantics.
    // Read bit 6 = keyboard key-down (active low), read bit 5 = tape input
@@ -86,5 +87,10 @@ package qbus_pkg;
    // both write bits are software-owned latches captured in qbus_mem.
    localparam logic [15:0] REG_SYS   = 16'o177716;
    localparam logic [15:0] SYS_START = 16'o100000;
+   // BK-0011M start vector = BOS in the fixed top ROM (BkEmu Computer.java:
+   // 0100000 for BK_0010 models, 0140000 otherwise). Bit 15 still agrees with
+   // the 037's AD15 start-vector assist; bit 14 is qbus_mem-only - the 037
+   // drives AD14:10 Z during the 177716 read, so there is no bus fight.
+   localparam logic [15:0] SYS_START11 = 16'o140000;
 
 endpackage

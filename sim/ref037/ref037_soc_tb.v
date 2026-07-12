@@ -379,6 +379,21 @@ module ref037_soc_tb;
             u_flash.flash['h40005] = csum[15:8];
             u_flash.flash['h40006] = 8'h00;
             u_flash.flash['h40007] = 8'h00;
+            // The Phase-7 two-pass loader also reads a bk11 blob at 0x48000;
+            // give it a minimal valid one (length 1, single zero data word,
+            // checksum 0) or boot_done never rises (X data never matches the
+            // header checks, so the loader streams forever - X-hang, not a
+            // clean fail). Keeps the pass fast and the golden unchanged.
+            u_flash.flash['h48000] = 8'h42;      // magic "BK"
+            u_flash.flash['h48001] = 8'h4B;
+            u_flash.flash['h48002] = 8'h01;      // length = 1 word
+            u_flash.flash['h48003] = 8'h00;
+            u_flash.flash['h48004] = 8'h00;      // checksum = 0
+            u_flash.flash['h48005] = 8'h00;
+            u_flash.flash['h48006] = 8'h00;
+            u_flash.flash['h48007] = 8'h00;
+            u_flash.flash['h48008] = 8'h00;      // one zero data word
+            u_flash.flash['h48009] = 8'h00;
         end else if ($test$plusargs("romprog")) begin
             u_mem.mem[16'h4000] = 16'o000137;    // JMP @#101000 (from SDRAM ROM)
             u_mem.mem[16'h4001] = 16'o101000;

@@ -1,9 +1,14 @@
-// epcs_boot - Phase-5 boot-time ROM loader: EPCS config flash -> SDRAM.
+// epcs_boot - boot-time ROM loader: EPCS config flash -> SDRAM (Phase 5 + 7).
 //
-// After SDRAM init (start), reads the boot blob (built by mem/gen_boot_blob.py)
-// from the EPCS4 serial flash at FLASH_ADDR with the plain READ (0x03) command
-// and streams it as 16-bit words into the SDRAM ROM region (words ROM_BASE_W+)
-// through a generic write port. The port is muxed onto sdram_arbiter port 0
+// After SDRAM init (start), reads TWO boot blobs (built by mem/gen_boot_blob.py)
+// from the EPCS4 serial flash with the plain READ (0x03) command and streams
+// them as 16-bit words into SDRAM through a generic write port: pass 0 = the
+// BK-0010.01 ROM set (FLASH_ADDR -> words ROM_BASE_W+), pass 1 = the BK-0011M
+// set (FLASH_ADDR1 -> words BASE_W1+, the mapper's window-ROM banks + top ROM).
+// BOTH passes run unconditionally regardless of the DIP-1 model select: this
+// loader runs once per power-on, but the model latch re-samples at every warm
+// reset, so both ROM images must always be resident. boot_ok = every pass had
+// a good header AND checksum. The port is muxed onto sdram_arbiter port 0
 // externally (the "boot-writer mux" reserved in sdram_arbiter.sv) - the CPU is
 // still in DCLO while this runs, so port 0 is otherwise idle.
 //
@@ -19,18 +24,26 @@
 //
 // SPI: mode 0, DCLK = clk/8 (12.08 MHz at the 96.65 MHz sys_clk - EPCS4 plain
 // READ is only rated to ~20-25 MHz). MOSI advances at the DCLK fall, MISO is
-// sampled late in the DCLK-high phase. The whole 32.7 KB load takes ~22 ms.
-// The 1801ВМ1 reset stays held (Step-5 sequencer) until boot_done.
+// sampled late in the DCLK-high phase. The 32.7 KB + 82 KB load takes ~77 ms
+// total; between passes nCS is held high for 32 clk (~330 ns >> the EPCS
+// ~100 ns tSHSL minimum). The 1801ВМ1 reset stays held (Step-5 sequencer,
+// no timeout) until boot_done.
 //
-// Blob: u16 magic 0x4B42 ("BK"), u16 length (words), u16 checksum (16-bit sum
-// of data words), u16 zero, then length data words - all little-endian (low
-// byte first in the flash stream). Bad magic / length / checksum -> boot_ok=0
-// (the top level then falls back to the on-chip test ROM).
+// Blob (each pass): u16 magic 0x4B42 ("BK"), u16 length (words), u16 checksum
+// (16-bit sum of data words), u16 zero, then length data words - all
+// little-endian (low byte first in the flash stream). Bad magic / length /
+// checksum in ANY pass -> boot_ok=0 (the top level then holds the CPU in
+// reset - there is no fallback).
 module epcs_boot #(
-    parameter int          ADDR_BITS  = 24,
-    parameter logic [23:0] FLASH_ADDR = 24'h040000,  // blob offset in the EPCS
-    parameter logic [23:0] ROM_BASE_W = 24'h004000,  // SDRAM word addr of BK 100000
-    parameter int          MAX_WORDS  = 16320        // ROM window 100000-177577
+    parameter int          ADDR_BITS   = 24,
+    // pass 0: BK-0010.01 ROM set
+    parameter logic [23:0] FLASH_ADDR  = 24'h040000, // blob offset in the EPCS
+    parameter logic [23:0] ROM_BASE_W  = 24'h004000, // SDRAM word addr of BK 100000
+    parameter int          MAX_WORDS   = 16320,      // ROM window 100000-177577
+    // pass 1: BK-0011M ROM set (4 window banks + fixed top ROM, contiguous)
+    parameter logic [23:0] FLASH_ADDR1 = 24'h048000,
+    parameter logic [23:0] BASE_W1     = 24'h030000, // BK11_WROM_BASE
+    parameter int          MAX_WORDS1  = 40960       // words 0x30000-0x39FFF
 ) (
     input  logic                 clk,        // sys_clk
     input  logic                 rst_n,
@@ -57,9 +70,19 @@ module epcs_boot #(
     localparam logic [15:0] MAGIC = 16'h4B42;
 
     typedef enum logic [2:0] {
-        B_IDLE, B_CMD, B_STREAM, B_FINISH, B_DONE
+        B_IDLE, B_CMD, B_STREAM, B_FINISH, B_GAP, B_DONE
     } bstate_t;
     bstate_t state;
+
+    // two-pass sequencing: per-pass flash source / SDRAM destination / cap
+    logic        pass_idx;
+    logic        ok_acc;       // pass-0 verdict, folded into boot_ok at the end
+    wire  [23:0] cur_flash = pass_idx ? FLASH_ADDR1 : FLASH_ADDR;
+    wire  [23:0] cur_base  = pass_idx ? BASE_W1     : ROM_BASE_W;
+    // per-pass length cap (16 bits is enough for both MAX_WORDS* values)
+    localparam logic [15:0] MAXW0 = MAX_WORDS;
+    localparam logic [15:0] MAXW1 = MAX_WORDS1;
+    wire  [15:0] cur_max   = pass_idx ? MAXW1 : MAXW0;
 
     // DCLK divider: /8 -> low for div 0..3, high for div 4..7 (mode 0).
     logic [2:0]  div;
@@ -99,11 +122,14 @@ module epcs_boot #(
             byte_idx  <= '0;
             word_idx  <= '0;
             calc_sum  <= '0;
+            pass_idx  <= 1'b0;
+            ok_acc    <= 1'b0;
         end else begin
             if (bw_gnt) bw_req <= 1'b0;        // served-mask contract
 
             case (state)
                 B_IDLE: if (start) begin
+                    pass_idx <= 1'b0;
                     sh_out   <= {8'h03, FLASH_ADDR};
                     out_left <= 6'd32;
                     spi_ncs  <= 1'b0;
@@ -149,13 +175,13 @@ module epcs_boot #(
                                     17'd0: if (w != MAGIC) hdr_bad <= 1'b1;
                                     17'd1: begin
                                         blob_len <= w;
-                                        if (w == 0 || w > MAX_WORDS) hdr_bad <= 1'b1;
+                                        if (w == 0 || w > cur_max) hdr_bad <= 1'b1;
                                     end
                                     17'd2: blob_sum <= w;
                                     17'd3: ;                        // spare
                                     default: begin                  // data word
                                         if (!hdr_bad) begin
-                                            bw_addr  <= ROM_BASE_W + word_idx;
+                                            bw_addr  <= cur_base + word_idx;
                                             bw_wdata <= w;
                                             bw_req   <= 1'b1;
                                             calc_sum <= calc_sum + w;
@@ -171,14 +197,40 @@ module epcs_boot #(
                     end
                 end
 
-                // wait for the last write grant, then verdict
+                // wait for the last write grant, then per-pass verdict
                 B_FINISH: begin
                     spi_dclk <= 1'b0;
                     spi_ncs  <= 1'b1;
                     if (!bw_req) begin
-                        boot_ok   <= !hdr_bad && (calc_sum == blob_sum);
-                        boot_done <= 1'b1;
-                        state     <= B_DONE;
+                        if (pass_idx) begin     // last pass: fold both verdicts
+                            boot_ok   <= ok_acc && !hdr_bad
+                                         && (calc_sum == blob_sum);
+                            boot_done <= 1'b1;
+                            state     <= B_DONE;
+                        end else begin          // next pass: clear per-pass state
+                            ok_acc   <= !hdr_bad && (calc_sum == blob_sum);
+                            hdr_bad  <= 1'b0;
+                            have_lo  <= 1'b0;
+                            in_bits  <= '0;
+                            byte_idx <= '0;
+                            word_idx <= '0;
+                            calc_sum <= '0;
+                            pass_idx <= 1'b1;
+                            out_left <= 6'd32;  // reused as the nCS-high count
+                            state    <= B_GAP;
+                        end
+                    end
+                end
+
+                // inter-pass nCS-high gap: 32 clk (~330 ns) >> EPCS tSHSL
+                B_GAP: begin
+                    out_left <= out_left - 1'b1;
+                    if (out_left == 0) begin
+                        sh_out   <= {8'h03, cur_flash};
+                        out_left <= 6'd32;
+                        spi_ncs  <= 1'b0;
+                        div      <= '0;
+                        state    <= B_CMD;
                     end
                 end
 

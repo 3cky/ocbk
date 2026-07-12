@@ -13,6 +13,11 @@
 # 177716 start-vector read + a second screen-clear burst, no X throughout
 # (Phase-5.5 soft reset; roughly doubles the runtime).
 #
+# ./run_boot_check.sh +bk11 (Phase 7) cold-boots the real BK-0011M BOS
+# instead: model_bk11=1, /24 CPU clock, the bk11 blob at SDRAM 0x30000+;
+# requires the 140000 start-vector reply, a 177662 write and the screen
+# clear, no X throughout (+warmreset is bk10-only, ignored here).
+#
 set -euo pipefail
 cd "$(dirname "$0")"
 

@@ -8,8 +8,10 @@
 //   saturator for contention.
 //
 // The mem/gen_bk11_test.py program runs the whole Bk11MemoryManager contract
-// (see there): stage 1 boots FROM the EXT window (reset map: window 1 = RAM
-// page 0), stage 2 in the fixed page-6 region fills/verifies all 8 pages
+// (see there): boot = 177716 read (start vector 140000 = SYS_START11) -> a
+// stage-0 stub in the fixed top ROM JMPs into stage 1 in the EXT window
+// (reset map: window 1 = RAM page 0), stage 2 in the fixed page-6 region
+// fills/verifies all 8 pages
 // through both windows, aliases page 6, RMWs in EXT, checks the ROM overlay
 // codes + write-ignore + the 033 quirk + the fixed top ROM, executes RESET
 // (nINIT must PRESERVE the map) and verifies the register is write-only.
@@ -292,10 +294,15 @@ module bk11_soc_tb;
         // physical page 0 (stage 1) and page 6 (vectors + stage 2)
         $readmemh("bk11_page0.hex", u_mem.mem, 'h20000, 'h21FFF);
         $readmemh("bk11_page6.hex", u_mem.mem, 'h2C000, 'h2DFFF);
-        // ROM overlay bank 0 / bank 3 / fixed top-ROM markers (word 0 of each)
+        // ROM overlay bank 0 / bank 3 markers (word 0 of each)
         u_mem.mem['h30000] = ROMPAT0;
         u_mem.mem['h36000] = ROMPAT3;
-        u_mem.mem['h38000] = TOPPAT;
+        // fixed top ROM: the bk11 start vector is 140000 (SYS_START11), so
+        // the first post-reset fetch lands here - a stage-0 stub jumps into
+        // stage 1 in the EXT window; the TOPPAT marker moves to BK 140004
+        u_mem.mem['h38000] = 16'o000137;    // JMP @#100000 (stage 1, EXT)
+        u_mem.mem['h38001] = 16'o100000;
+        u_mem.mem['h38002] = TOPPAT;
     end
 
     // ---- reset (wait SDRAM init) + watchdog -------------------------------------

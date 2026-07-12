@@ -219,7 +219,8 @@ module qbus_mem #(
     // and its driven-low bit 15 agrees with the 037's start-vector AD15 assist
     // instead of fighting it.
     wire [15:0] io_word  =
-        !sel1_n ? (SYS_START | (sel1_wflag ? 16'o000004 : 16'o0)
+        !sel1_n ? ((model_bk11 ? SYS_START11 : SYS_START)
+                             | (sel1_wflag ? 16'o000004 : 16'o0)
                              | (kbd_down   ? 16'o0 : 16'o000100)
                              | (tape_in    ? 16'o000040 : 16'o0)) :
         16'o000000;

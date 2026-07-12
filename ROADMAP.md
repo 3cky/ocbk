@@ -381,13 +381,11 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   the banking contract) and `sim/bk11/run.sh` (SoC functional program at the
   /24 rate: fill/verify all pages through both windows, page-6 aliasing, RMW
   in EXT, ROM overlay + write-ignore, 033 quirk, RESET-preserves-map,
-  write-only register). **DIP1-ON hardware is deliberately non-booting for
-  now** — window 1 comes up as uninitialized RAM page 0 (no 0011M ROM blob
-  yet, SYS_START still 0o100000 in both modes).
-  **Deferred follow-ups:** bit-12 СТОП-enable (done — fifth increment
-  below); the 0011M ROM blob in the EPCS
-  loader + SYS_START 140000; `N_EXT`/`N_VREG` recalibration and 0011M
-  cycle-accuracy vs a reference (reference-tb-first with golden regeneration).
+  write-only register).
+  **Deferred follow-ups:** bit-12 СТОП-enable (done — fifth increment below);
+  the 0011M ROM blob in the EPCS loader + SYS_START 140000 (done — sixth
+  increment below); `N_EXT`/`N_VREG` recalibration and 0011M cycle-accuracy
+  vs a reference (reference-tb-first with golden regeneration).
 - **Status (2026-07-11): third increment done (sim)** — the **177662 video
   register** (screen page / palette select) + the physical-colour video path.
   **MiSTer `BK0011M_MiSTer/rtl/video.sv` is the reference for this register**
@@ -475,6 +473,32 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   `sdram_ctrl` wait_cnt→cmd placement-luck path negative at SEED 2 →
   reseeded to 3 per the ocbk.qsf note (setup +0.904 ns, hold/recovery
   clean).
+- **Status (2026-07-12): sixth increment done (sim)** — the **BK-0011M ROM
+  blob in the EPCS + SYS_START 140000**, so DIP1-ON now boots BOS. The BK
+  ROM set (`basic11m_0/basic11m_1/ext11m/bos11m/mstd11m`, from BkEmu, per its
+  `Computer.configure()` 0011M arm) is committed to `mem/roms/` and packed by
+  `gen_boot_blob.py` into a **second same-format blob** at EPCS flash 0x48000
+  → SDRAM words 0x30000–0x39FFF (40960 words, contiguous: bank-0 BASIC at
+  0x30000, bank-1 basic11m_1+ext11m at 0x32000, the two unpopulated
+  window-ROM sockets zero-filled at 0x34000/0x36000, BOS at 0x38000, MSTD at
+  0x39000). `epcs_boot` is now a **two-pass loader** (a per-pass
+  flash/base/cap mux + an inter-pass nCS-high `B_GAP`, ~77 ms total); it
+  loads **both** blobs unconditionally (the DIP-1 model latch re-samples at
+  every warm reset, so both images must always be resident) and
+  `boot_ok` = every pass header-valid + checksum-good. `SYS_START11 =
+  0o140000` (BkEmu `Computer.java:267`) muxes the 177716 read on
+  `model_bk11` — bit 15 still agrees with the 037 AD15 assist, bit 14 is
+  qbus_mem-only. `ocbk.cof` gains a second `hex_block` (`quartus_cpf`
+  accepts both; the map file + `make blob-check` confirm rev(blob) at BOTH
+  0x40000 and 0x48000). Oracles: `run_epcs_boot.sh` now three legs (clean
+  loads both regions word-exact, `+corrupt`/`+corrupt2` each end boot_ok=0);
+  the ref037 `+bootload` leg gets a minimal valid second blob (goldens
+  unchanged — a longer boot can't shift the clk-aligned DCLO release); the
+  bk11 oracle boots through a top-ROM stage-0 stub (177716→140000 fetch→JMP
+  100000 into the EXT window; TOPPAT marker moved to 140004); and
+  `run_boot_check.sh +bk11` cold-boots the real BOS on the full SoC (/24
+  clock, both blobs preloaded, 177662+fb mux replica) — 140000 vector reply,
+  a 177662 write, screen clear, no bus X.
 
 **Memory model & banking — design notes** (BkEmu remains the authoritative
 register/behaviour reference for the exact bit fields):
@@ -609,8 +633,10 @@ speaker are **confirmed on hardware 2026-07-07** (typing + keyclick; PS/2 →
 the СТОП trap-4 path). Phase-6 tape **works on hardware 2026-07-10** (the CMT
 jack on the right sound channel, Scroll-Lock-gated after the motor-bit
 experiment broke right audio; oracle-tested). The Phase-7 50 Hz EVNT/IRQ2
-frame interrupt is wired (sim-proven, bk11-only). Next: the 0011M ROM blob +
-SYS_START 140000 boot.*
+frame interrupt is wired (sim-proven, bk11-only), and the BK-0011M ROM set now
+rides a second EPCS blob with SYS_START 140000, so DIP1-ON boots BOS (sim-
+proven; pending hardware confirmation). Next: `N_EXT`/`N_VREG` recalibration
+and 0011M cycle-accuracy vs a reference.*
 *See also the project memory notes `bk-on-1chipmsx-feasibility` (bring-up history),
 `bk-video-pipeline-decision` (Phase 3/4 design) and `bkemu-reference-and-roms`
 (BkEmu is the canonical BK reference; ROMs committed in-tree).*

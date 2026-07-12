@@ -6,10 +6,13 @@ page images sim/bk11/bk11_soc_tb.v preloads (this is a DATA-checking oracle,
 not a timing golden - see sim/bk11/):
 
   bk11_page0.hex : 8192 words = physical RAM page 0 (SDRAM 0x20000-0x21FFF).
-                   Stage 1 at BK 100000 - the reset map shows page 0 in
-                   window 1 (MK_EXT), so the very first post-reset fetches
-                   exercise the EXT path: set SP, one EXT sanity read, then
-                   JMP @#001000 into the fixed page-6 region.
+                   Stage 1 at BK 100000. Boot (Phase 7): the 177716 read
+                   returns SYS_START11 = 140000, so the first post-reset
+                   fetch hits the tb's stage-0 stub in the fixed top ROM
+                   (JMP @#100000); the reset map shows page 0 in window 1
+                   (MK_EXT), so stage 1's fetches exercise the EXT path:
+                   set SP, one EXT sanity read, then JMP @#001000 into the
+                   fixed page-6 region.
   bk11_page6.hex : 8192 words = physical RAM page 6 (SDRAM 0x2C000-0x2DFFF),
                    the fixed 000000-037777 region: vectors (trap 4 -> the
                    fail park - any bus timeout parks loudly) + stage 2.
@@ -37,7 +40,8 @@ The unrolled program is far longer than a branch reach, so every check uses
 BEQ-over-JMP: BEQ .+6 / JMP @#fail.
 
 ROMPAT0/ROMPAT3/TOPPAT below must match the tb's SDRAM pokes at word
-0x30000 / 0x36000 / 0x38000 (keep the two in sync).
+0x30000 / 0x36000 / 0x38002 (TOPPAT sits after the stage-0 boot stub at
+0x38000/0x38001 - keep the two in sync).
 """
 import sys
 
@@ -177,8 +181,10 @@ def build_stage2():
     bank_write(a, BIT11 | 0o005)
     cmp_mem_imm(a, W1, ROMPAT0)
 
-    # --- 8. fixed top ROM ------------------------------------------------------
-    cmp_mem_imm(a, 0o140000, TOPPAT)
+    # --- 8. fixed top ROM: the stage-0 boot stub (already executed through
+    #        the start vector) + the marker word after it ----------------------
+    cmp_mem_imm(a, 0o140000, 0o000137)      # stub JMP opcode, via MK_ROM DATI
+    cmp_mem_imm(a, 0o140004, TOPPAT)
 
     # --- 9. nINIT preserve: the RESET instruction must NOT re-init the map ----
     bank_write(a, BIT11 | (3 << 12))
@@ -188,7 +194,8 @@ def build_stage2():
     # --- 10. write-only register: reads return the system bits, never the map -
     a.emit(0o013700, 0o177716)              # MOV @#177716,R0
     a.emit(0o042700, 0o000144)              # BIC #144,R0 (wflag/tape/kbd volatile)
-    a.emit(0o022700, 0o100000)              # CMP #100000,R0
+    a.emit(0o022700, 0o140000)              # CMP #140000,R0 (SYS_START11 - the
+                                            #   in-program bk11 start-vector pin)
     expect_eq(a)
 
     # --- 11. 177662 video register (Phase 7; MiSTer video.sv contract) --------

@@ -36,6 +36,9 @@ mem/__pycache__/
 mem/boot_blob.bin
 mem/boot_blob.hex
 mem/boot_blob_flash.hex
+mem/boot_blob11.bin
+mem/boot_blob11.hex
+mem/boot_blob11_flash.hex
 
 # Generated cosim vectors (sim/video/gen_expected.py, run_draw_check.sh)
 sim/video/video_ram.hex
