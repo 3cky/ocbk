@@ -525,6 +525,27 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   `run_boot_check.sh +bk11` cold-boots the real BOS on the full SoC (/24
   clock, both blobs preloaded, 177662+fb mux replica) — 140000 vector reply,
   a 177662 write, screen clear, no bus X.
+- **Status (2026-07-12): hardware boot regression fixed (sdram_ctrl retimed).**
+  The sixth increment (bk11 ROM blob) built and simmed clean but **did not boot
+  on hardware in either model** — power LED solid, no start. Root cause was NOT
+  the loader: the added netlist tipped the long-documented placement-marginal
+  `sdram_ctrl` `wait_cnt → s_dqm/dq_out/s_addr` paths into an **outright setup
+  violation** at SEED 3 (STA-invisible before because it was merely *marginal*),
+  corrupting the SDRAM ROM as it was written so the CPU came out of reset on
+  garbage. `boot_ok` is a flash checksum, not a SDRAM read-back, so it still read
+  1 (LED solid). A user experiment (forcing the `epcs_boot` reset state) masked
+  it by placement luck — proven inert by sim (identical two-pass run, boot_ok=1),
+  i.e. it only perturbed P&R. **Real fix (`src/sdram_ctrl.sv`):** the one 15-bit
+  `wait_cnt` served both the 200 µs power-up wait (compare gates a state only)
+  and every short runtime wait (compare fans into the SDRAM output I/O regs) —
+  a ~15-input comparator on an output-setup path. Split into a wide `init_cnt`
+  (ST_INIT_WAIT only) + a narrow **3-bit** `wait_cnt` (all runtime waits).
+  Cycle-identical (same load values/decrements); `make sim` green,
+  `run_epcs_boot.sh` word-exact on the real controller. STA: worst setup
+  −0.068 → **+0.674**, the critical path leaves `sdram_ctrl` entirely, its worst
+  internal path now +1.62 ns; 4,253 LE. `SEED 3` kept for bitstream repro but no
+  longer load-bearing (ocbk.qsf comment updated). **CONFIRMED ON HARDWARE
+  2026-07-12** — `make`/`make flash` boots both BK-0010 and BK-0011M.
 
 **Memory model & banking — design notes** (BkEmu remains the authoritative
 register/behaviour reference for the exact bit fields):

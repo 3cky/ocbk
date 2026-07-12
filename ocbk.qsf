@@ -8,9 +8,16 @@ source ocbk_common.qsf
 
 set_global_assignment -name LAST_QUARTUS_VERSION 11.0
 
-# Fitter seed: the design sits close to the sys_clk (96.65 MHz) budget on the
-# vendored sdram_ctrl wait_cnt -> s_dqm/dq_out paths, and a netlist change can
-# flip closure by placement luck alone (the Phase-6 tape change did: -0.106 ns
-# at the default seed, same paths, no logic in them touched). Bump this when a
-# functionally-unrelated change breaks setup on those paths.
+# Fitter seed. History: the design used to sit right on the sys_clk (96.65 MHz)
+# budget on the sdram_ctrl wait_cnt -> s_dqm/dq_out/s_addr paths, where a netlist
+# change could flip closure by placement luck alone (the Phase-6 tape change did:
+# -0.106 ns, same paths, no logic touched; the Phase-7 bk11 ROM blob later tipped
+# them into an outright setup violation on hardware -> corrupted ROM load -> no
+# boot). That fragility is FIXED at the source: sdram_ctrl now splits the wide
+# 200 us init wait (init_cnt, gates a state only) from a narrow 3-bit runtime
+# wait_cnt, so no ~15-bit compare feeds an SDRAM output register. The worst path
+# is no longer in sdram_ctrl, and its worst internal path has ~1.6 ns slack.
+# SEED 3 is kept only for reproducibility of the shipped bitstream; it is no
+# longer load-bearing for those paths. Re-check STA (not just make sim) on any
+# change to the SDRAM datapath or the sys_clk budget.
 set_global_assignment -name SEED 3
