@@ -338,11 +338,24 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   nINIT peripheral-reset rule** (like the software-owned `spk_bit`): the
   RESET instruction must not swap the page under the running code (BkEmu
   semantics; checked by the bk11 SoC oracle). Window-1 banked RAM is the
-  `MK_EXT` kind: FSM-owned fixed-`N_EXT` reply (placeholder = N_RAM;
-  recalibrate reference-tb-first), done-gated on `mem_ready` for reads AND
-  writes, riding the `cpu_sdram_dp` port-0 path (`phys` from the mapper;
-  `addr` kept for byte lanes). Phase-8 hook: window ownership is a
-  selectable source — the SMK512 layers into the mapper, not into qbus_mem.
+  `MK_EXT` kind: FSM-owned fixed-`N_EXT` reply (placeholder = N_RAM),
+  done-gated on `mem_ready` for reads AND writes, riding the `cpu_sdram_dp`
+  port-0 path (`phys` from the mapper; `addr` kept for byte lanes).
+  **`MK_EXT`/`N_EXT` is a placeholder, NOT the real 0011M model**
+  (correction 2026-07-12): on real hardware the 037 fronts **all** internal
+  RAM — window 1 included — because its A15 decode is driven by the banking
+  circuitry, not the CPU's A15, so a window-1 RAM access is a normal
+  037-arbitrated + cycle-stolen + 037-RPLY cycle, identical to the low 32K
+  (no fixed latency). `MK_EXT` exists only because `va_037_sync` gates its
+  ownership on the raw latched CPU `A[15]` (va_037_sync.sv:238/:144) and is
+  blind to A15=1. The faithful fix (deferred, reference-tb-first with golden
+  regen — see ROADMAP): **synthesize the 037's A15** (`a15_037` = raw A15
+  forced low for window-1 banked RAM) so it collapses into `MK_RAM037`; a
+  fixed `N_EXT` is then correct **only** for the Phase-8 SMK512 (its own
+  external controller → a genuine fixed reply). Leave the AD15 start-vector
+  assist (va_037_sync.sv:109) alone — it drives only the 177716 DIN read.
+  Phase-8 hook: window ownership is a selectable source — the SMK512 layers
+  into the mapper, not into qbus_mem.
 - **Framebuffer conventions** (mirrored by `fb_video_tb`/`gen_expected.py`
   alike): FB = 512 slots/line × 4-bit colour nibble × 256 lines, 128
   words/line, slot `s` of a word at bits `[4s+3:4s]`, LSB-first in beam order;

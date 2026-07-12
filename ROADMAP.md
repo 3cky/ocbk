@@ -371,11 +371,34 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   quirk, replicated), fixed page 6 low, fixed top ROM, write-only register,
   banking/speaker mutual exclusion, **DCLO-only map reset** (see below).
   Window-1 banked RAM is the new **`MK_EXT` region kind**: FSM-owned RPLY at
-  a fixed `N_EXT` (**placeholder = N_RAM**; recalibrate reference-tb-first —
-  0011M cycle accuracy is still the open point), done-gated on `mem_ready`
+  a fixed `N_EXT` (**placeholder = N_RAM**), done-gated on `mem_ready`
   for reads AND writes, read+write through the `cpu_sdram_dp` port-0 path
   (physical word now comes from the mapper; BK-0010 mode is a bit-identical
-  pass-through — all `golden_037*`/`golden_kbd` oracles unchanged). Layout:
+  pass-through — all `golden_037*`/`golden_kbd` oracles unchanged).
+  **`MK_EXT`/`N_EXT` is a placeholder architecture, not the real 0011M
+  model** (correction 2026-07-12, user/hardware): on a real BK-0011M the 037
+  fronts **all** internal RAM, the second banked window included — its A15
+  decode input is **not** the CPU's A15 but is driven by the banking
+  circuitry, so a window-1 RAM access is presented to the 037 as an ordinary
+  RAM cycle and gets full 037 arbitration + video cycle-steal + RPLY,
+  identical timing to the low 32K, with **no** separate fixed latency. Our
+  `va_037_sync` gates its ownership on the raw latched CPU `A[15]`
+  (`RASEL`/`cpu_grant`/`TRPLY`, va_037_sync.sv:238/:144), so it is blind to
+  window 1 (A15=1) — which is the *only* reason `MK_EXT` exists. The faithful
+  fix is to **synthesize the 037's A15** (`a15_037` = raw A15 forced low when
+  the mapper reports window-1 banked RAM) and feed that into those terms;
+  window-1 RAM then collapses into `MK_RAM037` and `MK_EXT`/`N_EXT` leave the
+  internal-RAM path entirely. A fixed `N_EXT` is only correct for the
+  **Phase-8 SMK512**, which genuinely has its own external controller and
+  reply. Functionally the placeholder is fine today (correct unified-SDRAM
+  word, coherent with the port-2 video fetch through the arbiter — bk11
+  oracle + BOS-in-sim pass); the gap is timing fidelity (window-1 RAM is not
+  cycle-stolen) + a fake latency, inside the deferred 0011M cycle-accuracy
+  envelope. The `a15_037` rework goes reference-tb-first with golden
+  regeneration (leave the AD15 start-vector assist at va_037_sync.sv:109
+  untouched — it drives only during the 177716 DIN read, disjoint from
+  window-1 DATI/DATO; the 033-quirk RAM fall-through rides the same new
+  path; trace the exact A15-driver in `doc/bk0011m-sch.pdf`). Layout:
   8 RAM pages at SDRAM words 0x20000+, 4 window-1 ROM banks at 0x30000+, top
   ROM at 0x38000+. Oracles: `sim/run_mapper.sh` (unit: full 64K bk10 sweep +
   the banking contract) and `sim/bk11/run.sh` (SoC functional program at the
@@ -384,8 +407,11 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   write-only register).
   **Deferred follow-ups:** bit-12 СТОП-enable (done — fifth increment below);
   the 0011M ROM blob in the EPCS loader + SYS_START 140000 (done — sixth
-  increment below); `N_EXT`/`N_VREG` recalibration and 0011M cycle-accuracy
-  vs a reference (reference-tb-first with golden regeneration).
+  increment below); **route window-1 RAM through the 037 via a synthesized
+  A15** (the `a15_037` rework above — this replaces the old "`N_EXT`
+  recalibration" item; `N_EXT` becomes SMK512-only), `N_VREG` recalibration,
+  and 0011M cycle-accuracy vs a reference (all reference-tb-first with golden
+  regeneration).
 - **Status (2026-07-11): third increment done (sim)** — the **177662 video
   register** (screen page / palette select) + the physical-colour video path.
   **MiSTer `BK0011M_MiSTer/rtl/video.sv` is the reference for this register**
@@ -545,12 +571,19 @@ register/behaviour reference for the exact bit fields):
   Phase 8 a layer-in rather than a rewrite of the translate stage.
 - **Open points to settle reference-tb-first** (per the verification discipline):
   - *RPLY ownership becomes dynamic* — the `100000–137777` window is banked RAM
-    (`MK_EXT`, FSM-owned fixed-`N_EXT` reply, done-gated) in one mapping and ROM
-    (fixed `N_ROM`, not stolen) in another. *Mechanics are in (the mapper's
-    region kind selects the owner); the open part is the TIMING*: `N_EXT` is a
-    placeholder and whether 0011M banked RAM is 037-style cycle-stolen at all
-    must be settled against a reference before the goldens can mean anything
-    for 0011M mode.
+    in one mapping and ROM (fixed `N_ROM`, not stolen) in another. *Mechanics
+    are in (the mapper's region kind selects the owner); the open part is the
+    TIMING.* **Resolved-in-principle 2026-07-12 (user/hardware):** 0011M
+    banked RAM **is** 037-style cycle-stolen — the real 037 fronts all
+    internal RAM including window 1, its A15 decode fed by the banking
+    circuitry, not the CPU. So the answer is NOT to recalibrate `N_EXT` but
+    to **route window-1 RAM through the 037 via a synthesized `a15_037`**
+    (forced low for MK_EXT accesses), collapsing it into `MK_RAM037`;
+    `MK_EXT`/`N_EXT` (the current FSM-owned fixed reply) is a placeholder
+    that survives only as the **SMK512** external-RAM path (its own
+    controller → a genuine fixed reply). Still reference-tb-first (needs a
+    0011M timing reference + golden regeneration). See the mem_mapper status
+    bullet above for the full detail.
   - *Video fetch base* — DONE (third increment): `fb_video`'s `vram_base`
     input follows the 177662 page select (same sys_clk domain, no sync
     needed; sampled per fetch).
@@ -635,8 +668,10 @@ jack on the right sound channel, Scroll-Lock-gated after the motor-bit
 experiment broke right audio; oracle-tested). The Phase-7 50 Hz EVNT/IRQ2
 frame interrupt is wired (sim-proven, bk11-only), and the BK-0011M ROM set now
 rides a second EPCS blob with SYS_START 140000, so DIP1-ON boots BOS (sim-
-proven; pending hardware confirmation). Next: `N_EXT`/`N_VREG` recalibration
-and 0011M cycle-accuracy vs a reference.*
+proven; pending hardware confirmation). Next: route window-1 RAM through the
+037 via a synthesized A15 (the placeholder `MK_EXT`/`N_EXT` is not the real
+0011M model — the 037 fronts all internal RAM; `N_EXT` becomes SMK512-only),
+`N_VREG`, and 0011M cycle-accuracy vs a reference.*
 *See also the project memory notes `bk-on-1chipmsx-feasibility` (bring-up history),
 `bk-video-pipeline-decision` (Phase 3/4 design) and `bkemu-reference-and-roms`
 (BkEmu is the canonical BK reference; ROMs committed in-tree).*
