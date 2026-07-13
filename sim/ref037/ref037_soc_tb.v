@@ -112,7 +112,7 @@ module ref037_soc_tb;
     wire        mem_ready;
     wire        va_vfetch, va_line_en, va_hgate, va_vgate;
     va_037_sync pr037 (
-        .clk(sys_clk), .en_pos(en_pos), .en_neg(en_neg), .mem_ready(mem_ready),
+        .clk(sys_clk), .en_pos(en_pos), .en_neg(en_neg), .mem_ready(mem_ready), .ext_ram(1'b0),
         .PIN_R(~dclo_cold), .PIN_C(1'b0),
         .PIN_nAD(ad), .PIN_nSYNC(sync), .PIN_nDIN(din), .PIN_nDOUT(dout),
         .PIN_nWTBT(wtbt), .PIN_nRPLY(rply037_n),

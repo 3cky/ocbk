@@ -337,25 +337,29 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   write-flag). **Map reset is DCLO-only — a deliberate exception to the
   nINIT peripheral-reset rule** (like the software-owned `spk_bit`): the
   RESET instruction must not swap the page under the running code (BkEmu
-  semantics; checked by the bk11 SoC oracle). Window-1 banked RAM is the
-  `MK_EXT` kind: FSM-owned fixed-`N_EXT` reply (placeholder = N_RAM),
-  done-gated on `mem_ready` for reads AND writes, riding the `cpu_sdram_dp`
-  port-0 path (`phys` from the mapper; `addr` kept for byte lanes).
-  **`MK_EXT`/`N_EXT` is a placeholder, NOT the real 0011M model**
-  (correction 2026-07-12): on real hardware the 037 fronts **all** internal
-  RAM — window 1 included — because its A15 decode is driven by the banking
-  circuitry, not the CPU's A15, so a window-1 RAM access is a normal
-  037-arbitrated + cycle-stolen + 037-RPLY cycle, identical to the low 32K
-  (no fixed latency). `MK_EXT` exists only because `va_037_sync` gates its
-  ownership on the raw latched CPU `A[15]` (va_037_sync.sv:238/:144) and is
-  blind to A15=1. The faithful fix (deferred, reference-tb-first with golden
-  regen — see ROADMAP): **synthesize the 037's A15** (`a15_037` = raw A15
-  forced low for window-1 banked RAM) so it collapses into `MK_RAM037`; a
-  fixed `N_EXT` is then correct **only** for the Phase-8 SMK512 (its own
-  external controller → a genuine fixed reply). Leave the AD15 start-vector
-  assist (va_037_sync.sv:109) alone — it drives only the 177716 DIN read.
-  Phase-8 hook: window ownership is a selectable source — the SMK512 layers
-  into the mapper, not into qbus_mem.
+  semantics; checked by the bk11 SoC oracle). **Window-1 banked RAM is a
+  normal `MK_RAM037` access — 037-owned RPLY, cycle-stolen, done-gated on
+  `mem_ready`, riding the `cpu_sdram_dp` port-0 path** (`phys` from the mapper
+  = the win1 RAM page; `addr` kept for byte lanes), identical to the low 32K.
+  This matches the real hardware: **the 037 fronts ALL internal RAM, window 1
+  included** — schematic-confirmed 2026-07-13 (`doc/bk0011m.sch`): the 037
+  (D19) is the *sole* DRAM controller (all 16 565РУ5 RAS/CAS from it; the RAM
+  reply is its own RPLY), and its AD15 pin is NOT the CPU A15 wire — it is
+  driven by a banking OC-NAND (D10) so that, **accounting for the active-low
+  Q-bus** (physical AD15 = 1 across 000000–077777), its internal A15 =
+  `A15_true & ~(window-1-is-RAM)` = true A15 **forced low for window-1 RAM**.
+  The vendored `va_037` gates ownership on the raw latched `A[15]`
+  (va_037_sync.sv:238/:144) — a BK-0010 simplification (upper 32K is always
+  ROM/IO there) — so we reproduce the hardware force: `qbus_mem` exports
+  `ext_ram` (= a window-1 `MK_RAM037` access, i.e. `sel_ram && addr[15]`; 0 in
+  bk10) and `va_037_sync` uses `a15_037 = A[15] & ~ext_ram` in the RASEL /
+  cpu_grant terms. bk10 stays bit-identical (`ext_ram`≡0 → `a15_037`≡`A[15]`,
+  all ref037 goldens invariant). Leave the AD15 start-vector assist
+  (va_037_sync.sv:109) alone — it drives only the 177716 DIN read. **`MK_EXT` /
+  `N_EXT` are now RESERVED for the Phase-8 SMK512** (external controller → a
+  genuine fixed reply), no longer used by internal RAM. Phase-8 hook: window
+  ownership is a selectable source — the SMK512 layers into the mapper, not
+  into qbus_mem.
 - **Framebuffer conventions** (mirrored by `fb_video_tb`/`gen_expected.py`
   alike): FB = 512 slots/line × 4-bit colour nibble × 256 lines, 128
   words/line, slot `s` of a word at bits `[4s+3:4s]`, LSB-first in beam order;

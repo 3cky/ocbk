@@ -29,15 +29,13 @@
 //
 // Phase 7: the physical word address now comes from mem_mapper as `phys` (in
 // BK-0010 mode it IS addr[15:1], so nothing moves); `addr` stays connected for
-// the addr[0] byte-lane select. MK_EXT (sel_ext, the BK-0011M window-1 banked
-// RAM) is readable AND writable here, with qbus_mem's wait FSM owning RPLY:
-//   * the DATIO RMW note above applies verbatim - the strobes-idle D_DONE exit
-//     is what lets an EXT INC/BIS/... issue its write phase;
-//   * an EXT write is a posted write (D_WR_REQ -> D_DONE on gnt) with
-//     mem_ready as the FSM's write done-gate - the same interlock va_037_sync
-//     uses for RAM writes; gnt means the arbiter consumed the command, and
-//     port 0 is in-order single-outstanding, so a posted-write-then-RPLY can
-//     never be overtaken or reordered.
+// the addr[0] byte-lane select. BK-0011M window-1 banked RAM is a normal
+// MK_RAM037 access (sel_ram) - it reads AND writes through this same datapath
+// with `phys` pointing at the win1 RAM page, and the 037 owns its RPLY (a15_037
+// forced low), done-gated on mem_ready exactly like the low 32K. The DATIO RMW
+// note above applies verbatim (the strobes-idle D_DONE exit lets a window-1
+// INC/BIS/... issue its write phase); a window-1 write is a posted write
+// (D_WR_REQ -> D_DONE on gnt) with mem_ready as the write done-gate.
 module cpu_sdram_dp #(
     parameter int ADDR_BITS = 24,
     parameter int DQ_BITS   = 16
@@ -50,10 +48,9 @@ module cpu_sdram_dp #(
     input  logic                 din_n,
     input  logic                 dout_n,
     input  logic                 wtbt_n,
-    input  logic                 sel_ram,   // this access targets RAM (SYNC-framed)
+    input  logic                 sel_ram,   // this access targets RAM (SYNC-framed;
+                                            // incl. 0011M window-1 banked RAM)
     input  logic                 sel_romr,  // targets SDRAM-backed ROM (read-only)
-    input  logic                 sel_ext,   // targets 0011M banked RAM (read+write,
-                                            // FSM-owned RPLY - see header)
     input  logic [15:0]          addr,      // latched bus address (true; byte lanes)
     input  logic [ADDR_BITS-1:0] phys,      // mapped physical SDRAM word address
     input  logic [15:0]          ad_true,   // current bus data (true = ~ad_n), for writes
@@ -81,8 +78,8 @@ module cpu_sdram_dp #(
 
     logic [15:0] rd_hold;
 
-    wire is_read  = (sel_ram || sel_romr || sel_ext) && !din_n;
-    wire is_write = (sel_ram || sel_ext) && !dout_n; // ROM writes never reach the SDRAM
+    wire is_read  = (sel_ram || sel_romr) && !din_n;
+    wire is_write = sel_ram && !dout_n; // ROM writes never reach the SDRAM
     // Byte op is WTBT sampled at DOUT time (dual-purpose WTBT).
     wire byte_op  = !wtbt_n;
 
@@ -134,6 +131,6 @@ module cpu_sdram_dp #(
 
     assign mem_ready = (state == D_DONE);
     assign rdata     = rd_hold;
-    assign rdata_oe  = (state == D_DONE) && !din_n && (sel_ram || sel_romr || sel_ext);
+    assign rdata_oe  = (state == D_DONE) && !din_n && (sel_ram || sel_romr);
 
 endmodule

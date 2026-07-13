@@ -11,9 +11,12 @@
 // BK-0011M semantics (canonical reference: BkEmu Bk11MemoryManager.java):
 //   000000-037777  fixed RAM page 6            (037-owned, MK_RAM037)
 //   040000-077777  window 0: RAM page 0-7      (037-owned, MK_RAM037)
-//   100000-137777  window 1: RAM page 0-7 (MK_EXT, FSM-owned RPLY - the 037
-//                  decodes RAM as ~A[15] so it never replies here) OR one of
-//                  4 ROM overlay banks (MK_ROM)
+//   100000-137777  window 1: RAM page 0-7 (MK_RAM037 - 037-owned RPLY, same as
+//                  the low 32K: on real HW the 037 fronts ALL internal RAM, its
+//                  AD15 forced low by the banking network for a window-1 RAM
+//                  access; qbus_mem exports ext_ram so va_037_sync forces A15
+//                  low - see the a15_037 note there) OR one of 4 ROM overlay
+//                  banks (MK_ROM)
 //   140000-177577  fixed top ROM               (MK_ROM)
 //   177600-177777  I/O page - undecoded here   (MK_NONE; the SEL-pin registers
 //                  are decoded in qbus_mem, orthogonal to the mapper)
@@ -144,7 +147,12 @@ module mem_mapper #(
                         phys = ADDR_BITS'(BK11_WROM_BASE)
                              | ADDR_BITS'({win1_rom_bank, addr[13:1]});
                     end else begin
-                        kind = MK_EXT;
+                        // Window-1 RAM: 037-owned (MK_RAM037), NOT a fixed reply.
+                        // On real HW the 037 fronts this too (its AD15 is forced
+                        // low by the banking network); qbus_mem derives ext_ram
+                        // from (this MK_RAM037 access having A15=1) and feeds it
+                        // to va_037_sync's a15_037. phys is the win1 RAM page.
+                        kind = MK_RAM037;
                         phys = ADDR_BITS'(BK11_RAM_BASE)
                              | ADDR_BITS'({win1_page, addr[13:1]});
                     end

@@ -388,6 +388,7 @@ module ocbk_top (
     // here so it wire-ANDs onto the shared rply_n. mem_ready is the RAM SDRAM done-gate.
     wire        rply037_n;
     wire        mem_ready;
+    wire        mem_ext_ram;   // qbus_mem: BK-0011M window-1 banked RAM -> 037 a15 force
     assign rply_n = (rply037_n === 1'b0) ? 1'b0 : 1'bZ;
 
     // 037 video-side taps consumed by the Phase-4 pipeline below
@@ -399,6 +400,7 @@ module ocbk_top (
         .en_pos    (en_pos),
         .en_neg    (en_neg),
         .mem_ready (mem_ready),
+        .ext_ram   (mem_ext_ram),      // BK-0011M window-1 banked RAM -> force A15 low
         .PIN_R     (~vid_rst_n),       // power-on reset only: free-runs across warm resets
         .PIN_C     (1'b0),
         .PIN_nAD   (ad_n),
@@ -597,6 +599,7 @@ module ocbk_top (
         .wtbt_n   (wtbt_n),
         .rply_n   (rply_n),
         .mem_ready(mem_ready),
+        .ext_ram  (mem_ext_ram),
         .v1_req   (ro_req),         // Phase-4 video clients -> arbiter ports 1/2/3
         .v1_addr  (ro_addr),
         .v1_gnt   (ro_gnt),

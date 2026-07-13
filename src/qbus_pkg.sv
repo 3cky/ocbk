@@ -41,18 +41,23 @@ package qbus_pkg;
    // Plain localparams (no enum) - Quartus II 11.0 chokes on package enums used
    // across module boundaries. Writability is encoded by the kind itself:
    //   MK_NONE   : undecoded -> no reply, the CPU's qbto timer -> trap 4
-   //   MK_RAM037 : 037-owned RPLY (the arbitrated DRAM window; read+write)
-   //   MK_EXT    : FSM-owned RPLY, banked RAM behind window 1 (read+write) -
-   //               the 037 never replies here (it decodes RAM as ~A[15])
+   //   MK_RAM037 : 037-owned RPLY (the arbitrated DRAM window; read+write) -
+   //               ALL internal RAM, incl. BK-0011M window-1 banked RAM (the
+   //               real 037 fronts it too: qbus_mem exports ext_ram so
+   //               va_037_sync forces A15 low - see the a15_037 note there)
+   //   MK_EXT    : RESERVED for the Phase-8 SMK512 external RAM (its own
+   //               controller -> a genuine fixed-latency FSM reply). No longer
+   //               used by internal RAM - window 1 is MK_RAM037.
    //   MK_ROM    : FSM-owned RPLY, read-only (writes are replied to + ignored)
    localparam logic [1:0] MK_NONE   = 2'd0;
    localparam logic [1:0] MK_RAM037 = 2'd1;
    localparam logic [1:0] MK_EXT    = 2'd2;
    localparam logic [1:0] MK_ROM    = 2'd3;
 
-   // MK_EXT fixed reply count. PLACEHOLDER: 0011M cycle-accuracy is a later
-   // Phase-7 item - recalibrate reference-testbench-first (like N_ROM was)
-   // before trusting it, and note the wait FSM's 3-bit wcnt caps any N at 9.
+   // MK_EXT fixed reply count. RESERVED for the Phase-8 SMK512 (its external
+   // controller gives a genuine fixed latency); no longer used by internal RAM
+   // (window 1 is 037-owned MK_RAM037 now). Recalibrate reference-tb-first when
+   // the SMK512 lands; the wait FSM's 3-bit wcnt caps any N at 9.
    localparam int unsigned N_EXT = N_RAM;
 
    // 177662 write register (BK-0011M only; MiSTer rtl/video.sv is the

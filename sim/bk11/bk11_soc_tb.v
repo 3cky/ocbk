@@ -114,9 +114,11 @@ module bk11_soc_tb;
     wire       va_ras, va_we, va_ne, va_nbs, va_wti, va_wtd, va_vsync, va_grant;
     wire [13:1] video_va;
     wire        mem_ready;
+    wire        mem_ext_ram;   // window-1 banked RAM -> 037 a15 force (from u_ms)
     wire        va_vfetch, va_line_en, va_hgate, va_vgate;
     va_037_sync pr037 (
         .clk(sys_clk), .en_pos(en_pos), .en_neg(en_neg), .mem_ready(mem_ready),
+        .ext_ram(mem_ext_ram),
         .PIN_R(~dclo_cold), .PIN_C(1'b0),
         .PIN_nAD(ad), .PIN_nSYNC(sync), .PIN_nDIN(din), .PIN_nDOUT(dout),
         .PIN_nWTBT(wtbt), .PIN_nRPLY(rply037_n),
@@ -174,6 +176,7 @@ module bk11_soc_tb;
         .wtbt_n   (wtbt),
         .rply_n   (rply),
         .mem_ready(mem_ready),
+        .ext_ram  (mem_ext_ram),
         .v1_req   (1'b0),
         .v1_addr  ({AB{1'b0}}),
         .v1_gnt   (),

@@ -75,6 +75,9 @@ module qbus_mem #(
     input  logic        wtbt_n,
     output wire         rply_n,     // open-collector; ROM/IO only (RAM = va_037_sync)
     output logic        mem_ready,  // RAM SDRAM access complete -> 037 done-gate
+    output wire         ext_ram,    // this cycle is BK-0011M window-1 banked RAM
+                                    // (A15=1 RAM037) -> va_037_sync forces A15 low
+                                    // so the 037 fronts it (a15_037); 0 in bk10
 
     // ---- boot-writer mux onto arbiter port 0 (sclk domain) ----------------
     // While boot_active the EPCS loader owns port 0 (the CPU is still in DCLO,
@@ -154,10 +157,13 @@ module qbus_mem #(
 
     wire sel_ram = !sync_n && (mkind == MK_RAM037);
     wire sel_rom = !sync_n && (mkind == MK_ROM);
-    // MK_EXT (BK-0011M window-1 banked RAM): FSM-owned RPLY, read AND write
-    // through the SDRAM datapath - the 037 decodes RAM as ~A[15], so it never
-    // replies above 100000. Empty in BK-0010 mode.
-    wire sel_ext = !sync_n && (mkind == MK_EXT);
+    // BK-0011M window-1 banked RAM is a normal MK_RAM037 access (037-owned RPLY,
+    // done-gated on mem_ready, riding the cpu_sdram_dp port-0 path exactly like
+    // the low 32K - the real 037 fronts all internal RAM). The only A15=1
+    // MK_RAM037 access is window 1 (page6/win0 are A15=0; top ROM is MK_ROM;
+    // bk10 RAM037 is always A15=0), so this flags it for va_037_sync's a15_037
+    // force. 0 in BK-0010 mode -> a15_037 == A[15], goldens invariant.
+    assign ext_ram = sel_ram && addr[15];
     // ---- I/O decode: the CPU's own nSEL1/nSEL2 register-select pins --------
     // The only I/O the CPU delegates to us is its nSEL pair: nSEL1 = 177716/17
     // (system register), nSEL2 = 177714/15 (programmable parallel port -
@@ -245,7 +251,7 @@ module qbus_mem #(
     cpu_sdram_dp #(.ADDR_BITS(ADDR_BITS), .DQ_BITS(DQ_BITS)) u_dp (
         .clk(sclk), .rst_n(~reset),
         .sync_n(sync_n), .din_n(din_n), .dout_n(dout_n), .wtbt_n(wtbt_n),
-        .sel_ram(sel_ram), .sel_romr(sel_romx), .sel_ext(sel_ext),
+        .sel_ram(sel_ram), .sel_romr(sel_romx),
         .addr(addr), .phys(mphys), .ad_true(~ad_n),
         .rdata(ram_rdata), .rdata_oe(ram_rdata_oe), .mem_ready(mem_ready),
         .req(dp_req), .we(dp_we), .addr_o(dp_addr), .wdata_o(dp_wdata), .be_o(dp_be),
@@ -320,7 +326,7 @@ module qbus_mem #(
     logic        dbg_romgate;   // diagnostic: an external-ROM read RPLY was extended
                                 // past the fixed N_ROM count (sim observability only)
 
-    wire selected = sel_rom | sel_ext | sel_io;
+    wire selected = sel_rom | sel_io;
     wire is_read  = !din_n;
     wire is_write = !dout_n;
 
@@ -346,11 +352,11 @@ module qbus_mem #(
                         // Sel1RegisterSystemBits semantics.
                         if (is_write && !sel1_n)
                             sel1_wflag <= 1'b1;
-                        // MK_EXT and the 177662 write get their own fixed
-                        // counts (PLACEHOLDERs until 0011M cycle accuracy -
-                        // see qbus_pkg). The 3-bit wcnt caps any N at 9.
-                        wcnt  <= sel_ext  ? 3'(N_EXT-2)
-                               : sel_vreg ? 3'(N_VREG-2)
+                        // The 177662 write gets its own fixed count (PLACEHOLDER
+                        // until 0011M cycle accuracy - see qbus_pkg). The 3-bit
+                        // wcnt caps any N at 9. (Window-1 RAM no longer lands here
+                        // - it is MK_RAM037, 037-owned, done-gated on mem_ready.)
+                        wcnt  <= sel_vreg ? 3'(N_VREG-2)
                                : 3'(N_ROM-2);
                         state <= S_WAIT;
                     end
@@ -373,18 +379,12 @@ module qbus_mem #(
                             // data. Should never happen at BK clock rates; the
                             // ROM-region golden diff catches it if it does.
                             dbg_romgate <= 1'b1;
-                        end else if (sel_ext && !mem_ready) begin
-                            // EXT done-gate, reads AND writes: hold RPLY until
-                            // the SDRAM access completed (the same interlock
-                            // va_037_sync applies to RAM). No dbg flag - for a
-                            // contended EXT write this is the interlock working,
-                            // not an anomaly.
                         end else begin
                             reply <= 1'b1;
                             if (is_read) begin
                                 rdata      <= rd_romio;
-                                // SDRAM data (ROM and EXT): u_dp drives
-                                drive_data <= !sel_romx && !sel_ext;
+                                // SDRAM ROM data: u_dp drives; I/O data: this FSM
+                                drive_data <= !sel_romx;
                                 fetch_stb  <= 1'b1;
                             end
                             // 177716 write-flag: cleared after read (rdata

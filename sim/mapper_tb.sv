@@ -116,8 +116,8 @@ module mapper_tb;
         check(16'o037776, MK_RAM037, ram_page(3'd6, 16'o037776), "cfg0 page6 hi");
         check(16'o040000, MK_RAM037, ram_page(3'd0, 16'o040000), "cfg0 win0 lo");
         check(16'o077776, MK_RAM037, ram_page(3'd0, 16'o077776), "cfg0 win0 hi");
-        check(16'o100000, MK_EXT,    ram_page(3'd0, 16'o100000), "cfg0 win1 lo");
-        check(16'o137776, MK_EXT,    ram_page(3'd0, 16'o137776), "cfg0 win1 hi");
+        check(16'o100000, MK_RAM037,    ram_page(3'd0, 16'o100000), "cfg0 win1 lo");
+        check(16'o137776, MK_RAM037,    ram_page(3'd0, 16'o137776), "cfg0 win1 hi");
         check(16'o140000, MK_ROM,    BK11_TOPROM_BASE,           "cfg0 toprom lo");
         check(16'o177576, MK_ROM,    BK11_TOPROM_BASE | 24'h1FBF, "cfg0 toprom hi");
         check(16'o177600, MK_NONE,   '0,                         "cfg0 io lo");
@@ -130,14 +130,14 @@ module mapper_tb;
             check(16'o077776, MK_RAM037, ram_page(p[2:0], 16'o077776), "win0 page hi");
             // fixed page-6 region and window 1 unaffected by the win0 field
             check(16'o020000, MK_RAM037, ram_page(3'd6, 16'o020000), "page6 fixed");
-            check(16'o100000, MK_EXT,    ram_page(3'd0, 16'o100000), "win1 fixed");
+            check(16'o100000, MK_RAM037,    ram_page(3'd0, 16'o100000), "win1 fixed");
         end
 
-        // ---- 4. window-1 RAM pages 0..7 -> MK_EXT ---------------------------
+        // ---- 4. window-1 RAM pages 0..7 -> MK_RAM037 ---------------------------
         for (p = 0; p < 8; p = p + 1) begin
             map_write(16'o004000 | (p[2:0] << 8), 1'b0, 1'b0, 1'b1, "win1 page write");
-            check(16'o100000, MK_EXT, ram_page(p[2:0], 16'o100000), "win1 page lo");
-            check(16'o137776, MK_EXT, ram_page(p[2:0], 16'o137776), "win1 page hi");
+            check(16'o100000, MK_RAM037, ram_page(p[2:0], 16'o100000), "win1 page lo");
+            check(16'o137776, MK_RAM037, ram_page(p[2:0], 16'o137776), "win1 page hi");
         end
 
         // ---- 5. the four ROM codes (combined with a win0 field) -------------
@@ -154,17 +154,17 @@ module mapper_tb;
 
         // ---- 6. 033-quirk: non-single-bit codes fall through to RAM ---------
         map_write(16'o004000 | 16'o003 | (2 << 8), 1'b0, 1'b0, 1'b1, "quirk 003");
-        check(16'o100000, MK_EXT, ram_page(3'd2, 16'o100000), "quirk 003 -> RAM");
+        check(16'o100000, MK_RAM037, ram_page(3'd2, 16'o100000), "quirk 003 -> RAM");
         map_write(16'o004000 | 16'o011, 1'b0, 1'b0, 1'b1, "quirk 011");
-        check(16'o100000, MK_EXT, ram_page(3'd0, 16'o100000), "quirk 011 -> RAM");
+        check(16'o100000, MK_RAM037, ram_page(3'd0, 16'o100000), "quirk 011 -> RAM");
         map_write(16'o004000 | 16'o030, 1'b0, 1'b0, 1'b1, "quirk 030");
-        check(16'o100000, MK_EXT, ram_page(3'd0, 16'o100000), "quirk 030 -> RAM");
+        check(16'o100000, MK_RAM037, ram_page(3'd0, 16'o100000), "quirk 030 -> RAM");
         map_write(16'o004000 | 16'o033, 1'b0, 1'b0, 1'b1, "quirk 033");
-        check(16'o100000, MK_EXT, ram_page(3'd0, 16'o100000), "quirk 033 -> RAM");
+        check(16'o100000, MK_RAM037, ram_page(3'd0, 16'o100000), "quirk 033 -> RAM");
         map_write(16'o004000 | 16'o012, 1'b0, 1'b0, 1'b1, "quirk 012");
-        check(16'o100000, MK_EXT, ram_page(3'd0, 16'o100000), "quirk 012 -> RAM");
+        check(16'o100000, MK_RAM037, ram_page(3'd0, 16'o100000), "quirk 012 -> RAM");
         map_write(16'o004000 | 16'o021, 1'b0, 1'b0, 1'b1, "quirk 021");
-        check(16'o100000, MK_EXT, ram_page(3'd0, 16'o100000), "quirk 021 -> RAM");
+        check(16'o100000, MK_RAM037, ram_page(3'd0, 16'o100000), "quirk 021 -> RAM");
         // 0o005: bit 2 is OUTSIDE the 033 mask, so it masks to 001 = bank 0
         map_write(16'o004000 | 16'o005, 1'b0, 1'b0, 1'b1, "quirk 005");
         check(16'o100000, MK_ROM, rom_bank(2'd0, 16'o100000), "quirk 005 -> bank 0");
@@ -202,7 +202,7 @@ module mapper_tb;
         @(negedge sclk) rst = 1'b0;
         #1;
         check(16'o040000, MK_RAM037, ram_page(3'd0, 16'o040000), "dclo win0=0");
-        check(16'o100000, MK_EXT,    ram_page(3'd0, 16'o100000), "dclo rom off");
+        check(16'o100000, MK_RAM037,    ram_page(3'd0, 16'o100000), "dclo rom off");
 
         if (errors == 0) $display("COSIM PASS");
         else             $display("COSIM FAIL (%0d errors)", errors);

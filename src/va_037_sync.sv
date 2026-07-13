@@ -34,6 +34,8 @@ module va_037_sync (
     input  logic        en_pos,     // ÷16 strobe, "posedge CLKIN" phase
     input  logic        en_neg,     // ÷16 strobe, "negedge CLKIN" phase (+8 sys_clk)
     input  logic        mem_ready,  // RPLY done-gate (1 = no-op / bit-identical)
+    input  logic        ext_ram,    // BK-0011M window-1 banked RAM (a15 force);
+                                    // 0 = bit-identical to the pre-Phase-7 decode
 
     input  logic        PIN_R,      // reset, active high
     input  logic        PIN_C,      // test clock select
@@ -99,6 +101,16 @@ module va_037_sync (
    // -----------------------------------------------------------------------
    // Combinational bus / decode (identical to reference)
    // -----------------------------------------------------------------------
+   // A15 as the 037 decodes RAM ownership. The reference gates on the raw
+   // latched A[15] (owns 000000-077777 only) - a BK-0010 simplification. On a
+   // real BK-0011M the 037 fronts ALL internal RAM: the banking network drives
+   // its AD15 pin so its internal A15 = A15_true & ~(window-1-is-RAM). ext_ram
+   // (from qbus_mem's mapper) reproduces that force, so a window-1 banked-RAM
+   // access is arbitrated + RPLYed exactly like the low 32K. ext_ram is 0 in
+   // BK-0010 mode (and for any A15=0 access), so a15_037 == A[15] there and the
+   // core stays bit-identical to the reference (all ref037 goldens invariant).
+   wire a15_037 = A[15] & ~ext_ram;
+
    // RPLY to the CPU is the reference term AND the done-gate (mem_ready).
    assign PIN_nRPLY      = ~(ROE | RWR | (RPLY & mem_ready));
 
@@ -141,7 +153,7 @@ module va_037_sync (
    // Phase-3 taps
    logic RASEL_d;
    always_ff @(posedge clk) RASEL_d <= RASEL;
-   assign cpu_grant = RASEL & ~RASEL_d & ~PIN_nSYNC & ~A[15];  // CPU-access grant edge
+   assign cpu_grant = RASEL & ~RASEL_d & ~PIN_nSYNC & ~a15_037;  // CPU-access grant edge
    assign video_va  = VA[13:1];
 
    // Phase-4 taps: pure reads of existing state, no logic change.
@@ -235,7 +247,7 @@ module va_037_sync (
          if (PC90 & PC[1])
             RASEL <= 1'b0;
          else if (PC90 & ~PC[1] & PC[2])
-            RASEL <= ~(PIN_nSYNC | A[15] | RPLY | (PIN_nDIN & PIN_nDOUT));
+            RASEL <= ~(PIN_nSYNC | a15_037 | RPLY | (PIN_nDIN & PIN_nDOUT));
       end
 
 endmodule

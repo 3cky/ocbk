@@ -55,7 +55,7 @@ module fb_video_tb;
     wire        vfetch, line_en, hgate, vgate;
     wire [13:1] video_va;
     va_037_sync u_037 (
-        .clk(sys_clk), .en_pos(en_pos), .en_neg(en_neg), .mem_ready(1'b1),
+        .clk(sys_clk), .en_pos(en_pos), .en_neg(en_neg), .mem_ready(1'b1), .ext_ram(1'b0),
         .PIN_R(~dclo), .PIN_C(1'b0),
         .PIN_nAD(ad), .PIN_nSYNC(sync_n), .PIN_nDIN(din_n), .PIN_nDOUT(dout_n),
         .PIN_nWTBT(wtbt_n), .PIN_nRPLY(),
