@@ -326,9 +326,17 @@ module qbus_mem #(
     logic        dbg_romgate;   // diagnostic: an external-ROM read RPLY was extended
                                 // past the fixed N_ROM count (sim observability only)
 
-    wire selected = sel_rom | sel_io;
     wire is_read  = !din_n;
     wire is_write = !dout_n;
+    // ROM contributes READS only: a write to ROM is not selected, so it gets no
+    // RPLY -> the CPU's qbto timer expires (56..63 clocks) -> trap 4. This is
+    // authentic mask/overlay-ROM behaviour (real ROMs never assert RPLY on a
+    // write) and is what the "write until trap 4" fast screen-clear idiom relies
+    // on. BkEmu agrees: a write to ReadOnlyMemory returns not-written, so the CPU
+    // raises BUS_ERROR -> vector 4 (Cpu.java writeMemory/processPendingInterrupts).
+    // sel_io still carries I/O reads AND writes (177714/177716 reply+ignore is
+    // unchanged); the ROM read path, done-gate and sel_vreg write are untouched.
+    wire selected = (sel_rom & is_read) | sel_io;
 
     always_ff @(posedge cpu_clk) begin
         fetch_stb <= 1'b0;
@@ -400,6 +408,16 @@ module qbus_mem #(
                         wcnt <= wcnt - 1'b1;
                 end
                 S_REPLY: begin
+                    // Release RPLY once both strobes are idle. This also makes a
+                    // DATIO(B) RMW to ROM time out on its write half WITHOUT any
+                    // special handling: the vm1 will not assert DOUT until the
+                    // read reply's ack has cleared (dout_start &= ~rply_ack[2],
+                    // vm1_qbus.v), and it can't clear until we drop RPLY here - so
+                    // a DATIO always has a both-strobes-idle gap in which this exit
+                    // fires. The write half then re-enters as a fresh access; a
+                    // ROM write is not `selected`, gets no reply, and qbto's ->
+                    // trap 4. (Proven by the sim/romwr RMW leg + its mutation
+                    // test.) I/O 177714 RMW writes still reply via sel_io.
                     if (din_n && dout_n) begin
                         reply <= 1'b0; drive_data <= 1'b0; state <= S_IDLE;
                     end

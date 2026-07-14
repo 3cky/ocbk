@@ -48,7 +48,12 @@ package qbus_pkg;
    //   MK_EXT    : RESERVED for the Phase-8 SMK512 external RAM (its own
    //               controller -> a genuine fixed-latency FSM reply). No longer
    //               used by internal RAM - window 1 is MK_RAM037.
-   //   MK_ROM    : FSM-owned RPLY, read-only (writes are replied to + ignored)
+   //   MK_ROM    : FSM-owned RPLY on reads; read-only. WRITES get NO reply ->
+   //               the CPU's qbto timer -> trap 4 (authentic mask/overlay ROM;
+   //               the "write until trap 4" screen-clear idiom relies on it).
+   //               BkEmu agrees (ReadOnlyMemory.write -> not-written -> BUS_ERROR
+   //               -> vector 4). Applies to the fixed top ROM AND BK-0011M
+   //               window-1 ROM overlays alike.
    localparam logic [1:0] MK_NONE   = 2'd0;
    localparam logic [1:0] MK_RAM037 = 2'd1;
    localparam logic [1:0] MK_EXT    = 2'd2;

@@ -49,6 +49,7 @@ sim/ref014/kbd_ram.hex
 sim/ref014/kbd_rom.hex
 sim/bk11/bk11_page0.hex
 sim/bk11/bk11_page6.hex
+sim/romwr/romwr_ram.hex
 
 # Local MCP servers
 .mcp.json

@@ -20,7 +20,9 @@ not a timing golden - see sim/bk11/):
 Stage 2 walks the whole Bk11MemoryManager contract: page fill/verify through
 window 0, EXT verify through window 1, page-6 aliasing both directions, RMW
 (DATIO) in EXT - the CLAUDE.md RMW-coverage rule; this is the one bus path
-with no bk10 coverage - ROM overlay codes with write-ignore, the 033-quirk
+with no bk10 coverage - ROM overlay codes with write-timeout (a write to a
+mapped ROM overlay gets no reply -> trap 4, proven via a vector-4 detour;
+authentic mask-ROM behaviour, BkEmu-confirmed), the 033-quirk
 fall-through, the fixed top ROM, nINIT preserve (RESET instruction), the
 write-only map register, and (Phase 7) the 177662 video register: word
 writes replied + RESET-preserved (the tb checks the vid_* taps), reads
@@ -113,6 +115,32 @@ def bank_write(a, val):
     a.emit(0o012737, val, 0o177716)         # MOV #val,@#177716 (word = banking)
 
 
+_trap = [0]
+
+
+def expect_trap4(a, emit_access):
+    """Assert the access emitted by emit_access() gets NO bus reply -> trap 4.
+
+    Installs a vector-4 detour, runs the access (which must abort into the
+    handler), fails if control instead falls through (the access REPLIED), and
+    in the handler drops the un-RTI-able bus-error frame (mid-instruction PC -
+    the СТОП finding: never RTI) and restores vector 4 to the fail park before
+    continuing. Mirrors the section-11 177662-read detour."""
+    n = _trap[0]
+    _trap[0] += 1
+    a.emit(0o012737)                        # MOV #__trapN,@#4 (detour vector 4)
+    a.addr(f"__trap{n}")
+    a.emit(0o000004)
+    emit_access()                           # the access that MUST time out
+    a.emit(0o000137)                        # replied?! (no trap) -> JMP @#fail
+    a.addr("fail")
+    a.label(f"__trap{n}")                   # trap-4 entry (access not replied)
+    a.emit(0o062706, 0o000004)              # ADD #4,SP (drop the pushed PC/PSW)
+    a.emit(0o012737)                        # MOV #fail,@#4 (restore the vector)
+    a.addr("fail")
+    a.emit(0o000004)
+
+
 def build_stage2():
     a = Asm(base=PROG_BASE)
 
@@ -162,13 +190,18 @@ def build_stage2():
     a.emit(0o052737, 0o000025, W1 + OFF_A)  # BIS #25 -> 27
     cmp_mem_imm(a, W1 + OFF_A, 0o000027)
 
-    # --- 6. ROM overlays: read the tb-poked markers; writes reply+ignore ------
+    # --- 6. ROM overlays: reads return the tb-poked markers; WRITES get NO
+    #        reply -> trap 4 (authentic mask/overlay ROM - real ROMs never RPLY
+    #        on a write; BkEmu agrees: ReadOnlyMemory.write -> not-written ->
+    #        BUS_ERROR -> vector 4). The write never reaches the RAM page under
+    #        the overlay, so the underlying page-1 pattern stays intact. Both a
+    #        word-0 and a mid-page (OFF_A) overlay write are exercised. -----------
     bank_write(a, BIT11 | 0o001 | (1 << 8))  # bank 0 mapped, page field = 1
-    cmp_mem_imm(a, W1, ROMPAT0)
-    a.emit(0o012737, 0o123123, W1)          # junk into the ROM overlay...
-    a.emit(0o012737, 0o121212, W1 + OFF_A)  # ...and at the page-1 pattern spot
+    cmp_mem_imm(a, W1, ROMPAT0)             # ROM DATI replies (read OK)
+    expect_trap4(a, lambda: a.emit(0o012737, 0o123123, W1))          # write @#100000
+    expect_trap4(a, lambda: a.emit(0o012737, 0o121212, W1 + OFF_A))  # write @#120000
     bank_write(a, BIT11 | (1 << 8))         # window 1 -> RAM page 1
-    cmp_mem_imm(a, W1 + OFF_A, pat_a(1))    # page-1 pattern intact
+    cmp_mem_imm(a, W1 + OFF_A, pat_a(1))    # page-1 pattern intact (write trapped)
     cmp_mem_imm(a, W1, 0)                   # page-1 word 0 untouched
     bank_write(a, BIT11 | 0o001)
     cmp_mem_imm(a, W1, ROMPAT0)             # ROMPAT0 intact

@@ -23,6 +23,7 @@ sim:
 	./sim/run_mapper.sh
 	./sim/bk10/run.sh
 	./sim/bk11/run.sh
+	./sim/romwr/run.sh
 	./sim/ref037/run.sh
 	./sim/ref014/run.sh
 	./sim/run_ps2.sh

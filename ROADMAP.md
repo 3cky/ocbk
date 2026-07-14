@@ -206,8 +206,13 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   cycle-stolen): `qbus_mem` keeps the fixed `N_ROM=2` reply, **done-gated**
   on `mem_ready` (a late word extends RPLY; sticky `dbg_romgate` diagnostic).
   Measured worst port-0 read latency: 37 sys_clk under full 4-port video
-  contention vs the ~64 sys_clk window — the gate never fires. ROM writes:
-  reply + ignore (real BK would trap 4 on timeout; fidelity deferred to Phase 9).
+  contention vs the ~64 sys_clk window — the gate never fires. **ROM writes get
+  no reply → the CPU's qbto timer → trap 4** (authentic mask/overlay ROM; the
+  "write until trap 4" screen-clear idiom relies on it; BkEmu-confirmed). One
+  line in `qbus_mem`: `selected = (sel_rom & is_read) | sel_io`. A DATIO RMW to
+  ROM traps on its write half too (the vm1's DATIO both-strobes-idle gap drops
+  the read reply first — no special handling). Oracle: `sim/romwr/run.sh`
+  (DATO + RMW, mutation-tested); `sim/bk11` §6 for window-1 overlays.
 - **Cycle-accuracy oracle grown:** `golden_037_rom.txt` (generated from the
   reference netlist only) — the same program words executed *from ROM*; key
   property: ROM execution is **flat** (self-loop constant 13 cycles vs the RAM
@@ -398,7 +403,7 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   ROM at 0x38000+. Oracles: `sim/run_mapper.sh` (unit: full 64K bk10 sweep +
   the banking contract) and `sim/bk11/run.sh` (SoC functional program at the
   /24 rate: fill/verify all pages through both windows, page-6 aliasing, RMW
-  in EXT, ROM overlay + write-ignore, 033 quirk, RESET-preserves-map,
+  in EXT, ROM overlay writes → trap 4, 033 quirk, RESET-preserves-map,
   write-only register).
   **Deferred follow-ups:** bit-12 СТОП-enable (done — fifth increment below);
   the 0011M ROM blob in the EPCS loader + SYS_START 140000 (done — sixth

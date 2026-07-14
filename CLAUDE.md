@@ -119,6 +119,15 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   word/odd-byte writes reach the latch, even-byte/banking writes don't,
   RESET preserves it; the trap-4 frame is NOT RTI-able — the aborted HALT
   entry pushes a mid-instruction PC — so the handler continues via R0).
+- `sim/romwr/run.sh` — the ROM-write-timeout functional oracle (BK-0010 SoC
+  stack, data-checking, `COSIM PASS` at the pinned success park like `sim/bk11`).
+  Proves a write to ROM gets NO reply → qbto → trap 4: the **conditionless
+  "write until trap 4" screen-clear** (a counter-free `CLR (R0)+` marching into
+  100000 — only the trap ends it; RAM cleared, ROM word unchanged) and an
+  **INC @#100000 RMW** whose write half must trap while its read half replies.
+  Both are **mutation-tested** (reverting the `selected` change hangs the clear;
+  the RMW leg also proved the S_REPLY refinement unnecessary — the DATIO gap
+  already drops the read reply). The gen program is `mem/gen_romwr_test.py`.
 - `sim/run_epcs_boot.sh` — the EPCS loader unit cosim (flash model →
   `epcs_boot` → arbiter port 0 → SDRAM), **three legs**: the clean run loads
   BOTH blobs (Phase-5 bk10 at flash 0x40000 → SDRAM words 0x4000+, Phase-7
@@ -300,8 +309,19 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   datapath (arbiter port 0, linear `addr[15:1]` map → SDRAM words 0x4000–0x7F7F),
   keeping the fixed `N_ROM=2` reply, **done-gated** on
   `mem_ready` (ROM is NOT 037-arbitrated — mask ROM is never cycle-stolen; the
-  flat ROM self-loop in `golden_037_rom.txt` pins that). ROM writes reply+ignore
-  (real BK would bus-timeout → trap 4; fidelity deferred to Phase 9). Boot:
+  flat ROM self-loop in `golden_037_rom.txt` pins that). **ROM writes get NO
+  reply → the CPU's qbto timer → trap 4** (authentic mask/overlay ROM: real BK
+  ROMs never RPLY on a write, and the "write until trap 4" fast-screen-clear
+  idiom relies on it; BkEmu agrees — `ReadOnlyMemory.write` → not-written →
+  BUS_ERROR → vector 4). In `qbus_mem` this is just `selected = (sel_rom &
+  is_read) | sel_io` — a ROM write is not selected, so the ROM/IO wait FSM never
+  replies. A DATIO(B) RMW to ROM times out on its write half too, with NO special
+  handling: the vm1 gates `dout_start` on the read reply's ack having cleared
+  (`~rply_ack[2]`), so a DATIO always has a both-strobes-idle gap where the
+  S_REPLY exit drops the read reply before the write half re-enters as a fresh
+  (un-selected) access. Applies to the fixed top ROM AND BK-0011M window-1 ROM
+  overlays alike. Oracle: `sim/romwr/run.sh` (both DATO and RMW legs, mutation-
+  tested); `sim/bk11` §6 asserts the overlay-write trap. Boot:
   `src/epcs_boot.sv` copies the blob from EPCS offset 0x40000 through the
   boot-writer mux onto port 0 during reset-hold (DCLO held until `boot_done`).
   **Phase 7: two-pass loader.** After the bk10 blob (pass 0, → words 0x4000+),
