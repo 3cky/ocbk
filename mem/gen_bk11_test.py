@@ -22,7 +22,9 @@ window 0, EXT verify through window 1, page-6 aliasing both directions, RMW
 (DATIO) in EXT - the CLAUDE.md RMW-coverage rule; this is the one bus path
 with no bk10 coverage - ROM overlay codes with write-timeout (a write to a
 mapped ROM overlay gets no reply -> trap 4, proven via a vector-4 detour;
-authentic mask-ROM behaviour, BkEmu-confirmed), the 033-quirk
+authentic mask-ROM behaviour, BkEmu-confirmed) and empty-socket read-timeout
+(the unpopulated stock-BK-0011M banks 2,3 also time out on READS -> trap 4,
+so BOS's reverse probe skips them instead of executing HALT), the 033-quirk
 fall-through, the fixed top ROM, nINIT preserve (RESET instruction), the
 write-only map register, and (Phase 7) the 177662 video register: word
 writes replied + RESET-preserved (the tb checks the vid_* taps), reads
@@ -41,9 +43,10 @@ Park loops (pinned, the tb keys off them):
 The unrolled program is far longer than a branch reach, so every check uses
 BEQ-over-JMP: BEQ .+6 / JMP @#fail.
 
-ROMPAT0/ROMPAT3/TOPPAT below must match the tb's SDRAM pokes at word
-0x30000 / 0x36000 / 0x38002 (TOPPAT sits after the stage-0 boot stub at
-0x38000/0x38001 - keep the two in sync).
+ROMPAT0/TOPPAT below must match the tb's SDRAM pokes at word
+0x30000 / 0x38002 (TOPPAT sits after the stage-0 boot stub at
+0x38000/0x38001 - keep the two in sync). Banks 2,3 (0x34000/0x36000) are
+empty sockets - no marker, they time out on read.
 """
 import sys
 
@@ -62,9 +65,9 @@ OFF_B = 0o30000              #   page-6 writes stay above vectors/code/stack)
 OFF_C = 0o24000              # page-6 aliasing scratch
 
 # tb-poked ROM overlay / top-ROM markers (sim/bk11/bk11_soc_tb.v pokes these
-# at SDRAM words 0x30000 / 0x36000 / 0x38000 - keep in sync)
+# at SDRAM words 0x30000 / 0x38000 - keep in sync). Only the POPULATED window-1
+# bank 0 has a marker; banks 2,3 are empty sockets (no reply -> trap 4).
 ROMPAT0 = 0o123456
-ROMPAT3 = 0o165432
 TOPPAT = 0o054321
 
 ALIAS1 = 0o167321
@@ -190,12 +193,14 @@ def build_stage2():
     a.emit(0o052737, 0o000025, W1 + OFF_A)  # BIS #25 -> 27
     cmp_mem_imm(a, W1 + OFF_A, 0o000027)
 
-    # --- 6. ROM overlays: reads return the tb-poked markers; WRITES get NO
-    #        reply -> trap 4 (authentic mask/overlay ROM - real ROMs never RPLY
-    #        on a write; BkEmu agrees: ReadOnlyMemory.write -> not-written ->
-    #        BUS_ERROR -> vector 4). The write never reaches the RAM page under
-    #        the overlay, so the underlying page-1 pattern stays intact. Both a
-    #        word-0 and a mid-page (OFF_A) overlay write are exercised. -----------
+    # --- 6. ROM overlays: a POPULATED bank (0 = BASIC) reads the tb-poked
+    #        marker; WRITES to it get NO reply -> trap 4 (authentic mask/overlay
+    #        ROM - real ROMs never RPLY on a write; BkEmu agrees: ReadOnlyMemory
+    #        .write -> not-written -> BUS_ERROR -> vector 4). The write never
+    #        reaches the RAM page under the overlay, so the underlying page-1
+    #        pattern stays intact. Both a word-0 and a mid-page (OFF_A) overlay
+    #        write are exercised. An UNPOPULATED bank (2,3) times out on READS
+    #        too (empty socket) - checked at the end of this section. -----------
     bank_write(a, BIT11 | 0o001 | (1 << 8))  # bank 0 mapped, page field = 1
     cmp_mem_imm(a, W1, ROMPAT0)             # ROM DATI replies (read OK)
     expect_trap4(a, lambda: a.emit(0o012737, 0o123123, W1))          # write @#100000
@@ -205,8 +210,13 @@ def build_stage2():
     cmp_mem_imm(a, W1, 0)                   # page-1 word 0 untouched
     bank_write(a, BIT11 | 0o001)
     cmp_mem_imm(a, W1, ROMPAT0)             # ROMPAT0 intact
-    bank_write(a, BIT11 | 0o020)            # code 020 -> bank 3
-    cmp_mem_imm(a, W1, ROMPAT3)
+    # empty (unpopulated) sockets - stock BK-0011M banks 2,3 = codes 010/020:
+    # a READ gets NO reply -> trap 4 (no chip drives the bus), so BOS's reverse
+    # 4->1 ROM probe skips them instead of reading 000000 = HALT and looping.
+    bank_write(a, BIT11 | 0o010)            # code 010 -> bank 2 (EMPTY socket)
+    expect_trap4(a, lambda: a.emit(0o005737, W1))          # TST @#100000 read -> trap
+    bank_write(a, BIT11 | 0o020)            # code 020 -> bank 3 (EMPTY socket)
+    expect_trap4(a, lambda: a.emit(0o005737, W1 + OFF_A))  # TST @#120000 read -> trap
 
     # --- 7. the 033-quirk: 003 falls through to RAM; 005 masks to bank 0 -----
     bank_write(a, BIT11 | (5 << 8) | 0o003)

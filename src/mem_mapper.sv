@@ -27,7 +27,11 @@
 //     single-bit codes 001/002/010/020 -> ROM bank 0/1/2/3 into window 1; ANY
 //     other 033 combination falls through to RAM (a BkEmu quirk - e.g. 003 or
 //     033 select no ROM - replicated deliberately); bits 10:8 = the window-1
-//     RAM page used when no ROM code matched.
+//     RAM page used when no ROM code matched. Banks 0/1 (001/002) are BASIC;
+//     banks 2/3 (010/020) are the UNPOPULATED sockets of a stock BK-0011M -
+//     selecting one maps window 1 to a MK_NONE (no reply -> trap 4) region, not
+//     RAM: an empty socket has no chip, so BOS's reverse ROM probe times out and
+//     skips it (see WIN1_ROM_PRESENT below).
 //   * the register is WRITE-ONLY: reads of 177716 return the system bits
 //     (qbus_mem's io_word), never the map.
 //   * banking writes must NOT update spk_bit/mot_bit and peripheral writes
@@ -84,6 +88,14 @@ module mem_mapper #(
     logic [2:0] win1_page;      // window 1 RAM page (when no ROM overlay)
     logic       win1_rom_en;    // window 1 shows a ROM overlay bank
     logic [1:0] win1_rom_bank;
+
+    // Which window-1 ROM overlay banks are POPULATED. Stock BK-0011M leaves the
+    // two extra sockets (banks 2,3 = codes 010/020) physically EMPTY; the blob
+    // zero-fills them (mem/gen_boot_blob.py). An access to an unpopulated socket
+    // must get NO reply -> qbto -> trap 4 (authentic empty socket: no chip
+    // drives the bus), so BOS's reverse 4->1 ROM probe skips it instead of
+    // reading 000000 = HALT and boot-looping. Keep in sync with the blob.
+    localparam logic [3:0] WIN1_ROM_PRESENT = 4'b0011; // banks 0,1 (BASIC) present
 
     // A banking write is a word write to 177716 with bit 11 set. Idempotent
     // across the multi-sclk DOUT window (like the spk_bit capture): the data
@@ -142,10 +154,18 @@ module mem_mapper #(
                     phys = ADDR_BITS'(BK11_RAM_BASE) | ADDR_BITS'({win0_page, addr[13:1]});
                 end
                 2'b10: begin        // 100000-137777: window 1 (ROM overlay or RAM)
-                    if (win1_rom_en) begin
+                    if (win1_rom_en && WIN1_ROM_PRESENT[win1_rom_bank]) begin
                         kind = MK_ROM;
                         phys = ADDR_BITS'(BK11_WROM_BASE)
                              | ADDR_BITS'({win1_rom_bank, addr[13:1]});
+                    end else if (win1_rom_en) begin
+                        // Unpopulated ROM socket (stock BK-0011M banks 2,3): no
+                        // chip drives the bus -> MK_NONE -> no reply -> qbto ->
+                        // trap 4. NOT the 033-quirk RAM fallthrough (that keeps
+                        // win1_rom_en=0 and shows RAM); this is a selected but
+                        // empty overlay code.
+                        kind = MK_NONE;
+                        phys = '0;
                     end else begin
                         // Window-1 RAM: 037-owned (MK_RAM037), NOT a fixed reply.
                         // On real HW the 037 fronts this too (its AD15 is forced

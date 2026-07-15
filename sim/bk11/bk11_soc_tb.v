@@ -13,7 +13,8 @@
 // (reset map: window 1 = RAM page 0), stage 2 in the fixed page-6 region
 // fills/verifies all 8 pages
 // through both windows, aliases page 6, RMWs in EXT, checks the ROM overlay
-// codes + write-ignore + the 033 quirk + the fixed top ROM, executes RESET
+// codes + write-ignore + empty-socket read-timeout (banks 2,3 unpopulated ->
+// trap 4) + the 033 quirk + the fixed top ROM, executes RESET
 // (nINIT must PRESERVE the map) and verifies the register is write-only.
 // Phase-7 177662 phase: word writes to the video register must be replied
 // (qbus_mem's bk11-only write decode), survive RESET, and reads must bus-
@@ -51,9 +52,10 @@ module bk11_soc_tb;
     localparam int AB = 24;
     localparam int DW = 16;
 
-    // ROM overlay / top-ROM markers - MUST match mem/gen_bk11_test.py
+    // ROM overlay / top-ROM markers - MUST match mem/gen_bk11_test.py.
+    // Only the populated window-1 bank 0 has a marker; banks 2,3 are empty
+    // sockets (mapper -> MK_NONE, never read).
     localparam [15:0] ROMPAT0 = 16'o123456;
-    localparam [15:0] ROMPAT3 = 16'o165432;
     localparam [15:0] TOPPAT  = 16'o054321;
 
     // ---- clocks: sys_clk + /16 037 enables + /24 CPU clock (cpu_clkgen
@@ -297,9 +299,9 @@ module bk11_soc_tb;
         // physical page 0 (stage 1) and page 6 (vectors + stage 2)
         $readmemh("bk11_page0.hex", u_mem.mem, 'h20000, 'h21FFF);
         $readmemh("bk11_page6.hex", u_mem.mem, 'h2C000, 'h2DFFF);
-        // ROM overlay bank 0 / bank 3 markers (word 0 of each)
+        // ROM overlay bank 0 marker (word 0). Banks 2,3 are empty sockets:
+        // the mapper decodes them MK_NONE (no reply -> trap 4), so no marker.
         u_mem.mem['h30000] = ROMPAT0;
-        u_mem.mem['h36000] = ROMPAT3;
         // fixed top ROM: the bk11 start vector is 140000 (SYS_START11), so
         // the first post-reset fetch lands here - a stage-0 stub jumps into
         // stage 1 in the EXT window; the TOPPAT marker moves to BK 140004

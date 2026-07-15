@@ -141,6 +141,9 @@ module mapper_tb;
         end
 
         // ---- 5. the four ROM codes (combined with a win0 field) -------------
+        // Banks 0/1 (001/002) = BASIC, populated -> MK_ROM. Banks 2/3 (010/020)
+        // = the stock BK-0011M UNPOPULATED sockets -> MK_NONE (no reply -> trap
+        // 4), NOT the 033-quirk RAM fallthrough (win1_rom_en is still set here).
         map_write(16'o004000 | 16'o001 | (3 << 12), 1'b0, 1'b0, 1'b1, "rom code 001");
         check(16'o100000, MK_ROM, rom_bank(2'd0, 16'o100000), "rom bank 0");
         check(16'o137776, MK_ROM, rom_bank(2'd0, 16'o137776), "rom bank 0 hi");
@@ -148,9 +151,9 @@ module mapper_tb;
         map_write(16'o004000 | 16'o002, 1'b0, 1'b0, 1'b1, "rom code 002");
         check(16'o100000, MK_ROM, rom_bank(2'd1, 16'o100000), "rom bank 1");
         map_write(16'o004000 | 16'o010, 1'b0, 1'b0, 1'b1, "rom code 010");
-        check(16'o100000, MK_ROM, rom_bank(2'd2, 16'o100000), "rom bank 2");
+        check(16'o100000, MK_NONE, '0, "rom bank 2 empty -> trap");
         map_write(16'o004000 | 16'o020, 1'b0, 1'b0, 1'b1, "rom code 020");
-        check(16'o100000, MK_ROM, rom_bank(2'd3, 16'o100000), "rom bank 3");
+        check(16'o100000, MK_NONE, '0, "rom bank 3 empty -> trap");
 
         // ---- 6. 033-quirk: non-single-bit codes fall through to RAM ---------
         map_write(16'o004000 | 16'o003 | (2 << 8), 1'b0, 1'b0, 1'b1, "quirk 003");
