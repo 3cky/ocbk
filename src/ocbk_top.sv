@@ -292,6 +292,44 @@ module ocbk_top (
         .data0out (spi_miso)
     );
 
+    // --- authentic DRAM power-on pattern fill (ram_init) --------------------
+    // Fills the model's RAM region in SDRAM with the К565РУ6/РУ5 power-on
+    // garbage pattern (BkEmu RandomAccessMemory.initData) at power-on and on a
+    // model-change warm reset, so the BK startup screen looks like real
+    // hardware instead of undefined SDRAM noise. Shares arbiter port 0 with the
+    // EPCS loader through the 2:1 mux below - the two never overlap (the fill
+    // starts only after boot_done, still inside the DCLO hold). fill_busy holds
+    // the CPU until the fill completes (see the reset sequencer); blank_pulse
+    // blacks out the display on a model-change re-fill (see fb_video below).
+    logic        fi_req, fi_gnt, fill_active, fill_busy, blank_pulse;
+    logic [23:0] fi_addr;
+    logic [15:0] fi_wdata;
+
+    ram_init u_raminit (
+        .clk        (sys_clk),
+        .rst_n      (srst_n),
+        .model_bk11 (model_bk11),
+        .enable     (boot_done & ~boot_active),
+        .w_req      (fi_req),
+        .w_addr     (fi_addr),
+        .w_wdata    (fi_wdata),
+        .w_gnt      (fi_gnt),
+        .fill_active(fill_active),
+        .fill_busy  (fill_busy),
+        .blank_pulse(blank_pulse)
+    );
+
+    // 2:1 port-0 writer mux: the EPCS loader first, then the pattern fill. The
+    // OR-ed boot_active keeps qbus_mem's boot-writer mux selected for both, so
+    // qbus_mem is unchanged (the module-level oracles never see this path).
+    wire         mem_boot_active = boot_active | fill_active;
+    wire         mem_bw_req      = fill_active ? fi_req   : bw_req;
+    wire [23:0]  mem_bw_addr     = fill_active ? fi_addr  : bw_addr;
+    wire [15:0]  mem_bw_wdata    = fill_active ? fi_wdata : bw_wdata;
+    wire         mem_bw_gnt;
+    assign bw_gnt = mem_bw_gnt & ~fill_active;   // grant back to the active writer
+    assign fi_gnt = mem_bw_gnt &  fill_active;
+
     // --- init_done + boot_done + boot_ok synced into the CPU-clock domain ---
     // ROM is always the loaded SDRAM image: there is no on-chip fallback, so a
     // failed EPCS boot (boot_ok=0) holds the CPU in reset forever (the reset
@@ -311,6 +349,15 @@ module ocbk_top (
     always_ff @(posedge cpu_clk or negedge locked) begin
         if (!locked) {bo_meta, bo_sync} <= 2'b00;
         else         {bo_meta, bo_sync} <= {boot_ok, bo_meta};
+    end
+    // ram_init's fill_busy (sys_clk) synced in: it holds the CPU past the
+    // warm-reset tail until the pattern fill finishes. Quasi-static (asserts
+    // once at power-on/model-change, drops once at completion); the SDC
+    // false-paths the sys_clk<->cpu_clk crossing.
+    logic fb_meta, fb_sync;
+    always_ff @(posedge cpu_clk or negedge locked) begin
+        if (!locked) {fb_meta, fb_sync} <= 2'b00;
+        else         {fb_meta, fb_sync} <= {fill_busy, fb_meta};
     end
 
     // --- soft reset: the reset button (slot RESET net, external pull-up) -----
@@ -342,9 +389,10 @@ module ocbk_top (
             rstc   <= 4'd0;
             dclo_n <= 1'b0;
             aclo_n <= 1'b0;
-        end else if (!id_sync || !bd_sync || !bo_sync || warm_rst_req) begin
+        end else if (!id_sync || !bd_sync || !bo_sync || warm_rst_req || fb_sync) begin
             rstc   <= 4'd0;          // hold CPU in reset until SDRAM init + a
-                                     // VALID ROM load (bo_sync); a failed EPCS
+                                     // VALID ROM load (bo_sync) + the RAM
+                                     // pattern fill (fb_sync); a failed EPCS
                                      // boot holds here forever (no on-chip ROM)
             dclo_n <= 1'b0;
             aclo_n <= 1'b0;
@@ -584,11 +632,11 @@ module ocbk_top (
         .sel2_n   (sel_n[2]),       //   vm1.v local hook): 177716 / 177714
         .model_bk11(model_bk11),    // DIP-1 model select (latched during DCLO
                                     //   hold above -> quasi-static here)
-        .boot_active(boot_active),
-        .bw_req   (bw_req),
-        .bw_addr  (bw_addr),
-        .bw_wdata (bw_wdata),
-        .bw_gnt   (bw_gnt),
+        .boot_active(mem_boot_active),
+        .bw_req   (mem_bw_req),
+        .bw_addr  (mem_bw_addr),
+        .bw_wdata (mem_bw_wdata),
+        .bw_gnt   (mem_bw_gnt),
         .sclk     (sys_clk),
         .srst_n   (srst_n),
         .init_done(init_done),
@@ -696,6 +744,7 @@ module ocbk_top (
     fb_video u_fbv (
         .clk        (sys_clk),
         .rst_n      (vid_rst_n),       // power-on only: keeps decoding across warm resets
+        .blank_req  (blank_pulse),     // model-change re-fill: black out until fresh frame
         .screen_mode(screen_mode),
         .vram_base  (vram_base),
         .pal_idx    (pal_idx),

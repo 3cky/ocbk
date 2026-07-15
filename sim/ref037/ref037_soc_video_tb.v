@@ -160,7 +160,7 @@ module ref037_soc_video_tb;
     wire        fb_front, fb_front_valid, err_fetch_ovr, err_fifo_ovf;
 
     fb_video #(.ADDR_BITS(AB), .DQ_BITS(DW)) u_fbv (
-        .clk(sys_clk), .rst_n(dclo_cold), .screen_mode(1'b1),
+        .clk(sys_clk), .rst_n(dclo_cold), .blank_req(1'b0), .screen_mode(1'b1),
         .vram_base(24'h002000), .pal_idx(4'd0),   // bk10: fixed base, palette 0
         .vid_fetch(va_vfetch), .vid_line_en(va_line_en),
         .hgate(va_hgate), .vgate(va_vgate), .video_va(video_va),

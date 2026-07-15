@@ -76,7 +76,7 @@ module video_pipe_tb;
 
     fb_video #(.ADDR_BITS(AB), .DQ_BITS(DW),
                .FB0_BASE(FB0_BASE), .FB1_BASE(FB1_BASE)) u_fbv (
-        .clk(sys_clk), .rst_n(dclo), .screen_mode(1'b1),
+        .clk(sys_clk), .rst_n(dclo), .blank_req(1'b0), .screen_mode(1'b1),
         .vram_base(VRAM_BASE), .pal_idx(4'd0),    // bk10: fixed base, palette 0
         .vid_fetch(vfetch), .vid_line_en(line_en), .hgate(hgate), .vgate(vgate),
         .video_va(video_va),

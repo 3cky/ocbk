@@ -31,6 +31,12 @@ module fb_video #(
 ) (
     input  logic                 clk,        // sys_clk
     input  logic                 rst_n,
+    // Pulse (sys_clk) to re-arm the "first full frame" gate: clears
+    // fb_front_valid so the vga_out power-on black-out re-engages until the
+    // next complete frame decodes. Used on a model-change RAM re-fill so the
+    // display blacks out then reveals the freshly-patterned page (never on a
+    // same-model warm reset - the picture stays up). Tie 0 if unused.
+    input  logic                 blank_req,
     input  logic                 screen_mode, // 1 = mono-512, 0 = colour-256 (static)
     // Video fetch base (word address): bk10 = 24'h002000 (BK 040000, fixed);
     // bk11 = the 177662-selected screen page (BK11_VPAGE0/1). Sampled per
@@ -249,6 +255,11 @@ module fb_video #(
                 fb_front_valid <= 1'b1;
                 swap_pending   <= 1'b0;
             end
+            // Model-change re-fill: drop the valid gate (priority over the swap
+            // above) so the display blacks out; the next swap re-publishes it
+            // showing the freshly-patterned page.
+            if (blank_req)
+                fb_front_valid <= 1'b0;
         end
     end
 

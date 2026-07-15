@@ -76,7 +76,7 @@ module fb_video_tb;
 
     fb_video #(.ADDR_BITS(AB), .DQ_BITS(DW),
                .FB0_BASE(FB0_BASE), .FB1_BASE(FB1_BASE)) u_fbv (
-        .clk(sys_clk), .rst_n(dclo), .screen_mode(screen_mode),
+        .clk(sys_clk), .rst_n(dclo), .blank_req(1'b0), .screen_mode(screen_mode),
         .vram_base(vram_base), .pal_idx(pal_idx),
         .vid_fetch(vfetch), .vid_line_en(line_en), .hgate(hgate), .vgate(vgate),
         .video_va(video_va),

@@ -156,7 +156,7 @@ module boot_check_tb;
     localparam [23:0] VPAGE1 = 24'h02E000;   // qbus_pkg BK11_VPAGE1 (RAM page 7)
 
     fb_video #(.ADDR_BITS(AB), .DQ_BITS(DW)) u_fbv (
-        .clk(sys_clk), .rst_n(dclo_cold), .screen_mode(1'b1),
+        .clk(sys_clk), .rst_n(dclo_cold), .blank_req(1'b0), .screen_mode(1'b1),
         .vram_base(model11 ? (vid_page ? VPAGE1 : VPAGE0) : 24'h002000),
         .pal_idx(model11 ? vid_pal : 4'd0),
         .vid_fetch(va_vfetch), .vid_line_en(va_line_en),
@@ -374,6 +374,19 @@ module boot_check_tb;
         tracef = $fopen("boot_trace.txt", "w");
         $readmemh("../mem/boot_blob_flash.hex", blob, 'h40000);
         for (ii = 0; ii < (1<<18); ii = ii + 1) u_mem.mem[ii] = 16'o000000;
+        // Authentic DRAM power-on pattern in the RAM region, exactly as
+        // src/ram_init.sv leaves it (BkEmu RandomAccessMemory.initData):
+        //   word = (addr[0]==addr[N]) ? 0xFFFF : 0,  N=6 (К565РУ6 bk10) /
+        //   N=7 (К565РУ5 bk11).  The CPU must cold-boot on this garbage exactly
+        //   as on real silicon (this replica preloads it, like the ROM blob
+        //   above, in lieu of running ram_init through the boot-writer port -
+        //   that datapath is covered by run_epcs_boot + sim/raminit).
+        if (model11)
+            for (ii = 0; ii <= 'h0FFFF; ii = ii + 1)
+                u_mem.mem['h20000 + ii] = (ii[0] == ii[7]) ? 16'hFFFF : 16'h0000;
+        else
+            for (ii = 0; ii <= 'h03FFF; ii = ii + 1)
+                u_mem.mem[ii] = (ii[0] == ii[6]) ? 16'hFFFF : 16'h0000;
         for (ii = 0; ii < 16320; ii = ii + 1)
             u_mem.mem[16'h4000 + ii] =
                 {blob['h40008 + 2*ii + 1], blob['h40008 + 2*ii]};

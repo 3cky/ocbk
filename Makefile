@@ -21,6 +21,7 @@ all: compile collect
 sim:
 	./sim/run_clkgen.sh
 	./sim/run_mapper.sh
+	./sim/raminit/run.sh
 	./sim/bk10/run.sh
 	./sim/bk11/run.sh
 	./sim/romwr/run.sh

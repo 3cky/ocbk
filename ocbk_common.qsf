@@ -37,6 +37,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE src/ps2_rx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/kbd_ps2bk.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/bk_kbd014.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/epcs_boot.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/ram_init.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/qbus_slot.sv
 # Phase-4 video pipeline
 set_global_assignment -name SYSTEMVERILOG_FILE src/palette_apply.sv

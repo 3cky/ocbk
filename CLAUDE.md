@@ -128,6 +128,18 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   Both are **mutation-tested** (reverting the `selected` change hangs the clear;
   the RMW leg also proved the S_REPLY refinement unnecessary — the DATIO gap
   already drops the read reply). The gen program is `mem/gen_romwr_test.py`.
+- `sim/raminit/run.sh` — the Phase-7 `ram_init` unit oracle (the authentic
+  DRAM power-on pattern filler): drives ram_init through a served-mask-honoring
+  grant model and checks, per fill pass, the exact per-model word pattern
+  (`(addr[0]==addr[N])?0xFFFF:0`, N=6 bk10 / N=7 bk11), the contiguous address
+  walk over the model's RAM range (bk10 0x0000–0x3FFF / bk11 0x20000–0x2FFFF),
+  the served-mask ≥1-cycle req gap, the trigger (power-on fill, NO re-fill on a
+  same-model reset, re-fill on a model change), and `blank_pulse` (silent on the
+  first fill, one pulse per re-fill). **Mutation-tested** (wrong pattern bit /
+  no gap both break it). The SoC-integration side is covered by
+  `sim/run_boot_check.sh` (real MONITOR/BOS cold-booting on the pattern) — the
+  replica preloads the pattern rather than running ram_init through the
+  boot-writer port (that datapath is `run_epcs_boot`'s).
 - `sim/run_epcs_boot.sh` — the EPCS loader unit cosim (flash model →
   `epcs_boot` → arbiter port 0 → SDRAM), **three legs**: the clean run loads
   BOTH blobs (Phase-5 bk10 at flash 0x40000 → SDRAM words 0x4000+, Phase-7
@@ -230,6 +242,32 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   monitor-cable switch and the video pipeline). **DIP 2 is unused** — it
   forced the on-chip test ROM, removed 2026-07-10 (ROM is always the loaded
   SDRAM image).
+- **Authentic DRAM power-on pattern (`src/ram_init.sv`):** the board SDRAM has
+  no defined power-on state, so before this the BK startup screen showed FPGA
+  garbage / stale content (worst on a model-switch warm reset, where DIP 1
+  reinterprets the previous model's screen). `ram_init` fills the selected
+  model's RAM region with the К565РУ6 (bk10) / К565РУ5 (bk11) power-on pattern
+  that BkEmu reproduces (`RandomAccessMemory.initData`): per word,
+  `(addr[0]==addr[N])?0xFFFF:0`, N=6 (РУ6) / N=7 (РУ5) — bases are 0x2000-word
+  aligned and N<13, so BkEmu's per-instance index reduces to the physical word
+  address (the РУ5 rule is BkEmu's `// FIXME`, kept as a one-line tunable). It
+  **fills at power-on and re-fills on a warm reset ONLY when the model changed**
+  (model_bk11 only changes during a DCLO hold, so a re-fill always lands with
+  the CPU parked); a **same-model warm reset preserves RAM** (BK reset
+  semantics — never re-fill it). It shares arbiter port 0 with `epcs_boot`
+  through a top-level 2:1 mux (`mem_bw_*` / OR-ed `boot_active`) — they never
+  overlap (the fill starts after `boot_done`), so **`qbus_mem` is unchanged**
+  and no module-level oracle sees it. `fill_busy` (2-FF into cpu_clk as
+  `fb_sync`) is ORed into the reset sequencer hold so the CPU never starts on
+  half-filled RAM. On a re-fill (`blank_pulse`, gated on the fill being a
+  re-fill i.e. `ram_valid` already 1) it clears `fb_video`'s `fb_front_valid`,
+  reusing the existing power-on black-out so the display goes black → reveals
+  the fresh pattern → firmware clears it (the first power-on fill needs no pulse
+  — video is still in reset then). Oracle: `sim/raminit/run.sh` +
+  `sim/run_boot_check.sh` (real MONITOR/BOS cold-boot on the pattern; the
+  replica preloads it). **DCLO/model-change-only** — like the map/662/spk
+  registers, it is deliberately NOT reset by nINIT (a RESET instruction must
+  not re-pattern RAM under the running program).
 - **Keyboard (Phase 6):** `ps2_rx` → `kbd_ps2bk` (translator, all on
   `cpu_clk`) → `bk_kbd014` (the 1801ВП1-014 bus equivalent at 177660–177663,
   decode = the 037's `PIN_nBS`, netlist-contract-validated — see
