@@ -131,7 +131,9 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
 - `sim/raminit/run.sh` — the Phase-7 `ram_init` unit oracle (the authentic
   DRAM power-on pattern filler): drives ram_init through a served-mask-honoring
   grant model and checks, per fill pass, the exact per-model word pattern
-  (`(addr[0]==addr[N])?0xFFFF:0`, N=6 bk10 / N=7 bk11), the contiguous address
+  (bkemu-QT `InitMemoryValues`: bk10 `idx[0]^idx[6]` with a 64-word phase flip,
+  bk11 `idx[3]^idx[6]`; the tb is an independent literal transcription of the C
+  loops), the contiguous address
   walk over the model's RAM range (bk10 0x0000–0x3FFF / bk11 0x20000–0x2FFFF),
   the served-mask ≥1-cycle req gap, the trigger (power-on fill, NO re-fill on a
   same-model reset, re-fill on a model change), and `blank_pulse` (silent on the
@@ -247,10 +249,17 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   garbage / stale content (worst on a model-switch warm reset, where DIP 1
   reinterprets the previous model's screen). `ram_init` fills the selected
   model's RAM region with the К565РУ6 (bk10) / К565РУ5 (bk11) power-on pattern
-  that BkEmu reproduces (`RandomAccessMemory.initData`): per word,
-  `(addr[0]==addr[N])?0xFFFF:0`, N=6 (РУ6) / N=7 (РУ5) — bases are 0x2000-word
-  aligned and N<13, so BkEmu's per-instance index reduces to the physical word
-  address (the РУ5 rule is BkEmu's `// FIXME`, kept as a one-line tunable). It
+  that the **bkemu-QT** emulator reproduces (`CMotherBoard[_11M]::InitMemoryValues`
+  in `devemu/Board.cpp` / `Board_11M.cpp`). Each word is all-ones/all-zeros per
+  a per-model rule, expressed on the physical word address (bases are 0x2000-word
+  aligned and both rules use only bits < 13, so the emulator's linear word index
+  reduces to `w_addr`): **bk10** `word = w_addr[0] ^ w_addr[6] ^ (w_addr[5:0]==0 &
+  w_addr!=0)` (alternating 0/FFFF whose phase flips at each 64-word boundary — the
+  C loop's `uint8_t flag==192` extra inversion; index 0 is 0); **bk11** `word =
+  w_addr[3] ^ w_addr[6]` (8-word blocks with a 16-word double-block every 64
+  words). Both closed forms were verified bit-for-bit against transcriptions of
+  the C loops over the full fill ranges; the `sim/raminit` tb re-derives them via
+  an **independent literal transcription** of the loops. It
   **fills at power-on and re-fills on a warm reset ONLY when the model changed**
   (model_bk11 only changes during a DCLO hold, so a re-fill always lands with
   the CPU parked); a **same-model warm reset preserves RAM** (BK reset

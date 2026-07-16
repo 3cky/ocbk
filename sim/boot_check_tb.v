@@ -375,18 +375,21 @@ module boot_check_tb;
         $readmemh("../mem/boot_blob_flash.hex", blob, 'h40000);
         for (ii = 0; ii < (1<<18); ii = ii + 1) u_mem.mem[ii] = 16'o000000;
         // Authentic DRAM power-on pattern in the RAM region, exactly as
-        // src/ram_init.sv leaves it (BkEmu RandomAccessMemory.initData):
-        //   word = (addr[0]==addr[N]) ? 0xFFFF : 0,  N=6 (К565РУ6 bk10) /
-        //   N=7 (К565РУ5 bk11).  The CPU must cold-boot on this garbage exactly
-        //   as on real silicon (this replica preloads it, like the ROM blob
-        //   above, in lieu of running ram_init through the boot-writer port -
-        //   that datapath is covered by run_epcs_boot + sim/raminit).
+        // src/ram_init.sv leaves it (bkemu-QT InitMemoryValues, Board.cpp /
+        // Board_11M.cpp): bk10 word = idx[0]^idx[6]^(idx[5:0]==0 & idx!=0)
+        // (64-word phase flip), bk11 word = idx[3]^idx[6].  The CPU must
+        // cold-boot on this garbage exactly as on real silicon (this replica
+        // preloads it, like the ROM blob above, in lieu of running ram_init
+        // through the boot-writer port - that datapath is covered by
+        // run_epcs_boot + sim/raminit).
         if (model11)
             for (ii = 0; ii <= 'h0FFFF; ii = ii + 1)
-                u_mem.mem['h20000 + ii] = (ii[0] == ii[7]) ? 16'hFFFF : 16'h0000;
+                u_mem.mem['h20000 + ii] = (ii[3] ^ ii[6]) ? 16'hFFFF : 16'h0000;
         else
             for (ii = 0; ii <= 'h03FFF; ii = ii + 1)
-                u_mem.mem[ii] = (ii[0] == ii[6]) ? 16'hFFFF : 16'h0000;
+                u_mem.mem[ii] =
+                    (ii[0] ^ ii[6] ^ ((ii[5:0] == 0) && (ii != 0)))
+                        ? 16'hFFFF : 16'h0000;
         for (ii = 0; ii < 16320; ii = ii + 1)
             u_mem.mem[16'h4000 + ii] =
                 {blob['h40008 + 2*ii + 1], blob['h40008 + 2*ii]};

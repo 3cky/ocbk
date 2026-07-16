@@ -1,13 +1,21 @@
 // ram_init - authentic DRAM power-on pattern filler (Phase 7 UX).
 //
 // Fills the selected model's BK RAM region in the board SDRAM with the
-// К565РУ6 (BK-0010) / К565РУ5 (BK-0011M) power-on garbage pattern that BkEmu
-// reproduces (RandomAccessMemory.initData): each 16-bit word is all-ones or
-// all-zeros,
-//     word = (idx[0] == idx[N]) ? 0177777 : 0,   N = 6 (РУ6) or 7 (РУ5).
-// Every RAM page/bank base is 0x2000-word aligned (low 13 bits zero) and N < 13,
-// so BkEmu's per-instance word index reduces to the physical word address:
-//     w_wdata = (w_addr[0] == w_addr[N]) ? 16'hFFFF : 16'h0000.
+// К565РУ6 (BK-0010) / К565РУ5 (BK-0011M) power-on garbage pattern that the
+// bkemu-QT emulator reproduces (CMotherBoard[_11M]::InitMemoryValues, in
+// devemu/Board.cpp / Board_11M.cpp). Each 16-bit word is all-ones or all-zeros
+// per the per-model rule below, where idx is the emulator's linear word index.
+// Every RAM page/bank base is 0x2000-word aligned (low 13 bits zero) and both
+// rules use only bits < 13, so idx reduces to the physical word address w_addr:
+//
+//   BK-0010 (Board.cpp): val=~val every word plus an extra inversion every 64
+//     words (the uint8_t flag==192 event) -> alternating 0/FFFF whose phase
+//     flips at each 64-word boundary (idx 0 is 0; the flip makes idx 64,65
+//     both 0). Closed form: word = idx[0] ^ idx[6] ^ (idx[5:0]==0 & idx!=0).
+//   BK-0011M (Board_11M.cpp): 8-word blocks of 0/FFFF with one skipped flip
+//     every 8th boundary -> a 16-word double block every 64 words. Closed
+//     form: word = idx[3] ^ idx[6].
+//
 // The result is the real BK startup screen - a structured garbage pattern that
 // MONITOR/BOS then clears - instead of undefined FPGA SDRAM noise.
 //
@@ -67,8 +75,15 @@ module ram_init #(
     assign fill_active = filling;
 
     // Pattern word: combinational from the (stable-while-req) write address.
-    wire pat_n = model_bk11 ? w_addr[7] : w_addr[6];
-    assign w_wdata = (w_addr[0] == pat_n) ? 16'hFFFF : 16'h0000;
+    // bk10 (Board.cpp InitMemoryValues): idx[0]^idx[6] with a phase flip at each
+    //   64-word boundary (the uint8_t flag==192 extra inversion); idx 0 = 0.
+    //   The & (|w_addr) term (== idx!=0) suppresses the flip at idx 0 only.
+    // bk11 (Board_11M.cpp InitMemoryValues): idx[3]^idx[6].
+    // idx == w_addr (0x2000-aligned bases, bits used < 13).
+    wire valb10 = w_addr[0] ^ w_addr[6] ^ ((w_addr[5:0] == '0) & (|w_addr));
+    wire valb11 = w_addr[3] ^ w_addr[6];
+    wire valb   = model_bk11 ? valb11 : valb10;
+    assign w_wdata = {16{valb}};
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin

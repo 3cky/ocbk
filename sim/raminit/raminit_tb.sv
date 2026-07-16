@@ -3,8 +3,12 @@
 // checks, per fill pass:
 //   * the address walk covers exactly the model's RAM range, contiguously
 //     (bk10 0x0000..0x3FFF = 16384 words; bk11 0x20000..0x2FFFF = 65536 words);
-//   * every written word matches BkEmu's pattern - (addr[0]==addr[N])?0xFFFF:0,
-//     N=6 (К565РУ6, bk10) / N=7 (К565РУ5, bk11);
+//   * every written word matches the bkemu-QT power-on pattern. This oracle is
+//     an INDEPENDENT, literal transcription of the C loops
+//     CMotherBoard[_11M]::InitMemoryValues (devemu/Board.cpp / Board_11M.cpp) -
+//     an exp_val bit plus the flag/n counters stepped per granted word exactly
+//     as the emulator - NOT a copy of the RTL's closed form, so a derivation
+//     bug in the RTL is caught here;
 //   * the served-mask contract: w_req drops for >=1 cycle after each grant;
 //   * the trigger: fill at power-on, NO re-fill on a same-model "warm reset",
 //     re-fill on a model change;
@@ -55,14 +59,23 @@ module raminit_tb;
     logic          cur_model;
     logic [31:0]   total_fills;
     logic          err;
-    logic          pn;
     logic [15:0]   expw;
     logic [AB-1:0] exp_last;
     logic [31:0]   exp_cnt;
 
+    // Independent pattern model = a literal transcription of the bkemu-QT
+    // InitMemoryValues loops (Board.cpp / Board_11M.cpp), stepped per word.
+    logic          exp_val;       // current word value bit (0 or 1 -> {16{}})
+    logic [7:0]    exp_flag8;     // bk10 uint8_t flag
+    logic [3:0]    exp_n;         // bk11 n (8..1)
+    logic [3:0]    exp_flag11;    // bk11 flag (8..0)
+    logic          ev;            // bk10: flag==192 event (temp)
+    logic [3:0]    nd, fd;        // bk11: decremented n / flag (temp)
+
     initial begin
         err = 0; total_fills = 0; fa_d = 0; gnt_d = 0;
         exp_addr = 0; word_cnt = 0; cur_model = 0;
+        exp_val = 0; exp_flag8 = 0; exp_n = 8; exp_flag11 = 8;
     end
 
     always @(posedge clk) begin
@@ -80,6 +93,11 @@ module raminit_tb;
             exp_addr  <= model_bk11 ? 24'h020000 : 24'h000000;
             word_cnt  <= 0;
             cur_model <= model_bk11;
+            // reset the InitMemoryValues loop state to its i=0 initial values
+            exp_val    <= 1'b0;
+            exp_flag8  <= 8'd0;
+            exp_n      <= 4'd8;
+            exp_flag11 <= 4'd8;
             if (total_fills == 0) begin
                 if (blank_pulse) begin
                     $display("RAMINIT-ERROR: blank_pulse on the first (power-on) fill");
@@ -99,8 +117,7 @@ module raminit_tb;
                 $display("RAMINIT-ERROR: addr %06h != expected %06h", w_addr, exp_addr);
                 err <= 1'b1;
             end
-            pn   = cur_model ? w_addr[7] : w_addr[6];
-            expw = (w_addr[0] == pn) ? 16'hFFFF : 16'h0000;
+            expw = {16{exp_val}};
             if (w_wdata !== expw) begin
                 $display("RAMINIT-ERROR: wdata %04h != expected %04h @ %06h",
                          w_wdata, expw, w_addr);
@@ -108,6 +125,31 @@ module raminit_tb;
             end
             exp_addr <= exp_addr + 1'b1;
             word_cnt <= word_cnt + 1'b1;
+
+            // advance the InitMemoryValues loop state for the next word
+            if (!cur_model) begin
+                // bk10 (Board.cpp): val=~val, then flag==192 -> extra invert +
+                // reset; the for-update decrements the uint8_t flag.
+                ev = (exp_flag8 == 8'd192);
+                exp_val   <= ev ? exp_val : ~exp_val;
+                exp_flag8 <= (ev ? 8'd0 : exp_flag8) - 8'd1;
+            end else begin
+                // bk11 (Board_11M.cpp): every 8 words decrement flag; invert
+                // val while the decremented flag stays >0, else reset flag=8.
+                nd = exp_n - 4'd1;
+                if (nd == 4'd0) begin
+                    exp_n <= 4'd8;
+                    fd = exp_flag11 - 4'd1;
+                    if (fd != 4'd0) begin
+                        exp_val    <= ~exp_val;
+                        exp_flag11 <= fd;
+                    end else begin
+                        exp_flag11 <= 4'd8;
+                    end
+                end else begin
+                    exp_n <= nd;
+                end
+            end
         end
 
         // fill end (falling edge of fill_active)

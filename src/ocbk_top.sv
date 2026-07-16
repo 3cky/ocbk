@@ -294,7 +294,7 @@ module ocbk_top (
 
     // --- authentic DRAM power-on pattern fill (ram_init) --------------------
     // Fills the model's RAM region in SDRAM with the К565РУ6/РУ5 power-on
-    // garbage pattern (BkEmu RandomAccessMemory.initData) at power-on and on a
+    // garbage pattern (bkemu-QT InitMemoryValues) at power-on and on a
     // model-change warm reset, so the BK startup screen looks like real
     // hardware instead of undefined SDRAM noise. Shares arbiter port 0 with the
     // EPCS loader through the 2:1 mux below - the two never overlap (the fill
