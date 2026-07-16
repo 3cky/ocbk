@@ -25,9 +25,12 @@ switch on a real BK) is toggled by the PS/2 **Print Screen** key (power-on
 default = colour-256). The BK ROM always runs from the loaded SDRAM image; if
 the flash blob fails validation the CPU is held in reset (no on-chip
 fallback). **DIP 1 selects the model** (OFF = BK-0010, ON = BK-0011M — Phase
-7 in progress: the 4.03 MHz CPU clock, the 177716 banking mapper and the
-177662 screen-page/palette register are in; no 0011M ROM blob yet, so DIP 1
-ON does not boot). DIP 2 is unused.
+7 done: the 4.03 MHz CPU clock, the 177716 banking mapper, the 177662
+screen-page/palette register, the 50 Hz EVNT/IRQ2 timer, the СТОП-block bit,
+the two-pass EPCS loader with the 0011M ROM set and the authentic DRAM
+power-on pattern are all in — **BK-0011M boots and runs BOS on hardware**;
+both models are resident in flash and the reset button switches between them).
+DIP 2 is unused.
 
 - Fits in **4208 / 12060 LEs (35%)**, **1 M4K**, **1 ASMI block**, **1 PLL**;
   timing closes.
@@ -101,8 +104,8 @@ whose video controller ignores CPU DCLO/ACLO): the screen keeps showing video
 RAM while the button is held, until MONITOR's screen clear. The PS/2 **Print
 Screen** key toggles colour-256 / mono-512 decode live (it stands in for the
 monitor-cable switch of a real BK). **DIP 1** selects the model: OFF =
-BK-0010 (3.02 MHz), ON = BK-0011M (4.03 MHz CPU clock so far — the rest of
-Phase 7 follows). It is latched while the CPU is in reset, so flip it and
+BK-0010 (3.02 MHz), ON = BK-0011M (4.03 MHz CPU clock; boots BOS). It is
+latched while the CPU is in reset, so flip it and
 press the reset button to switch models without a power cycle; flipping it
 mid-run does nothing until the next reset. DIP 2 is unused (it was the
 on-chip test-ROM force, removed along with the on-chip ROM fallback — the BK

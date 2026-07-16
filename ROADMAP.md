@@ -350,7 +350,7 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   of the milestone: pending the hardware smoke — type in MONITOR/BASIC, СТОП
   drops BASIC to the monitor, warm reset keeps РУС/ЛАТ.)*
 
-### Phase 7 — BK-0011M mode
+### Phase 7 — BK-0011M mode ✅ DONE (BK-0011M boots & runs on hardware)
 - 128 KB banked RAM, two video pages, 4 MHz CPU, page/control registers, MMU windows.
 - System timer + interrupt wiring (50 Hz EVNT/IRQ2 from vsync).
 - Runtime model select (BK0010 ↔ BK0011M) via DIP/menu.
@@ -546,6 +546,25 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   internal path now +1.62 ns; 4,253 LE. `SEED 3` kept for bitstream repro but no
   longer load-bearing (ocbk.qsf comment updated). **CONFIRMED ON HARDWARE
   2026-07-12** — `make`/`make flash` boots both BK-0010 and BK-0011M.
+- **Status: authenticity increments done (sim + hardware).** After the core
+  0011M machine booted, three fidelity items closed the phase: (1) **ROM writes
+  time out → trap 4** (2026-07-14) — a write to any ROM region gets no RPLY →
+  qbto → vector 4, enabling the conditionless "write until trap 4" screen-clear
+  idiom (the whole RTL delta is `selected = (sel_rom & is_read) | sel_io` in
+  `qbus_mem`; BkEmu-confirmed; oracle `sim/romwr`). (2) **Unpopulated window-1
+  ROM sockets → `MK_NONE`** (2026-07-15) — banks 2/3 (codes 010/020) are empty
+  on a stock BK-0011M, so the mapper emits no-reply (not zero-fill ROM), letting
+  BOS's reverse 4→1 socket probe skip them instead of executing a HALT
+  (`mem_mapper` `WIN1_ROM_PRESENT`). (3) **Authentic DRAM power-on pattern**
+  (`src/ram_init.sv`, 2026-07-15) — the SDRAM RAM region is pre-filled with the
+  real К565РУ6/РУ5 power-on garbage so startup screens look like real silicon;
+  the per-model pattern follows **bkemu-QT `InitMemoryValues`** (2026-07-16:
+  bk10 `w_addr[0]^w_addr[6]^(w_addr[5:0]==0 & w_addr!=0)`, bk11
+  `w_addr[3]^w_addr[6]`; oracle `sim/raminit`, tb an independent transcription
+  of the C loops). All confirmed on hardware. **Milestone met** — BK-0011M
+  software boots and runs. Remaining 0011M **cycle-accuracy vs a reference**
+  stays a deferred, reference-tb-first fidelity item (see the open points below
+  / Phase 9), not a blocker for the phase.
 
 **Memory model & banking — design notes** (BkEmu remains the authoritative
 register/behaviour reference for the exact bit fields):

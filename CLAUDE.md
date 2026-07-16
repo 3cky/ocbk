@@ -14,9 +14,13 @@ plan: the source building blocks, the validated platform constraints, the settle
 clock tree, and the phase-by-phase milestones. Every change should map to a phase
 there; update ROADMAP.md when scope or status changes. **Phases 1 (CPU bring-up),
 2 (BK RAM in SDRAM), 3 (037 arbiter), 4 (video pipeline), 5 (SoC boot: full
-BK-0010.01 ROM in SDRAM + EPCS loader) and the Phase-6 keyboard (PS/2 →
-1801ВП1-014 equivalent, VIRQ/IAK + СТОП) are done**; see README.md for the
-current result.
+BK-0010.01 ROM in SDRAM + EPCS loader), 6 (keyboard/audio/tape: PS/2 →
+1801ВП1-014 equivalent, VIRQ/IAK + СТОП) and 7 (BK-0011M mode: /24 CPU clock,
+177716 banking mapper, 177662 video register, 50 Hz EVNT/IRQ2, СТОП-block,
+two-pass EPCS loader with the 0011M ROM set, authentic DRAM power-on pattern)
+are done — both models boot and run on hardware**; see README.md for the
+current result. Remaining open item: BK-0011M cycle-accuracy vs a reference
+(deferred, reference-tb-first).
 
 ## Build & test
 
