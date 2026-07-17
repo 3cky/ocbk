@@ -36,12 +36,12 @@ BkEmu `SmkMemoryManager` modes over 8 × 4 KB segments, 16 × 32 KB pages in
 SDRAM; increment 2 = the SMK BIOS ROM (v2.05) with the authentic boot hack —
 in the reset SYS layout the BIOS overlays the register space, the 177716
 start-vector read returns the BIOS word and the CPU boots into the BIOS at
-166400. BK-0011M only, oracle-proven in sim. **No IDE/SD engine yet**: the
-BIOS boots but its drive probes bus-time-out, so expect whatever the real
-BIOS does with an absent drive (behavior to be recorded after the hardware
-run); flip DIP 8 OFF and press reset for a stock machine). DIP 2 is unused.
+166400. BK-0011M only — **confirmed on hardware 2026-07-17: the SMK BIOS
+boots and shows its banner**. **No IDE/SD engine yet**: the BIOS's drive
+probes bus-time-out, so there is no disk activity past the banner; flip
+DIP 8 OFF and press reset for a stock machine). DIP 2 is unused.
 
-- Fits in **4208 / 12060 LEs (35%)**, **1 M4K**, **1 ASMI block**, **1 PLL**;
+- Fits in **4479 / 12060 LEs (37%)**, **1 M4K**, **1 ASMI block**, **1 PLL**;
   timing closes.
 - Cycle accuracy holds under full 4-port SDRAM contention for RAM *and* ROM
   execution: the SoC cosims reproduce both goldens (`golden_037.txt`,

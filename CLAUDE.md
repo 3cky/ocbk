@@ -22,8 +22,9 @@ are done — both models boot and run on hardware**; see README.md for the
 current result. **Phase 8 (SMK512) is in progress**: increment 1 (the 512 KB
 segmented RAM extension on **DIP 8**, BK-0011M only) and increment 2 (the
 SMK BIOS ROM + the SYS register-space boot overlay — **DIP-8-ON boots the
-SMK BIOS**) are done in sim; the IDE/SD engine is next (with no drive the
-BIOS's probes bus-time-out; see the SMK512 bullet). Remaining open item:
+SMK BIOS, confirmed on hardware 2026-07-17: it shows its banner**) are done;
+the IDE/SD engine is next (with no drive the BIOS's probes bus-time-out, so
+nothing happens past the banner; see the SMK512 bullet). Remaining open item:
 BK-0011M cycle-accuracy vs a reference (deferred, reference-tb-first).
 
 ## Build & test

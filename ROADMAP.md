@@ -668,7 +668,8 @@ is not a single peripheral:
   (`ram_init`). Oracles: `sim/run_mapper.sh` (differential smk_en=0
   reference + the directed contract, mutation-tested) and `sim/smk/run.sh`
   (SoC functional oracle with a DCLO-replay second pass, mutation-tested).
-- **SMK BIOS ROM + boot** — ✅ **increment 2 DONE IN SIM 2026-07-17**: ONE
+- **SMK BIOS ROM + boot** — ✅ **increment 2 DONE, CONFIRMED ON HARDWARE
+  2026-07-17** (DIP-8-ON boots the SMK BIOS to its banner on the board): ONE
   4 KB image (`mem/roms/smk512_v205.rom`, BkEmu res/raw) backing BOTH
   selectable windows — rom6 @160000 (SYS/STD10/STD11) and rom7 @170000 (SYS
   only) — appended to the bk11 blob (40960 → 43008 words, SDRAM
@@ -692,9 +693,9 @@ is not a single peripheral:
   data). I/O-page MK_EXT accesses take the N_ROM count (the 037's
   start-vector assist replies EARLY at 177716; N_EXT landed the merged
   word after the vm1's sample point — found in sim). With no IDE engine
-  the BIOS's drive probes bus-time-out — hardware behavior past the boot
-  banner is whatever the real BIOS does with an absent drive (the IDE
-  increment raises this). Oracles: `sim/run_mapper.sh` (BIOS windows,
+  the BIOS's drive probes bus-time-out; **observed on hardware: the BIOS
+  boots and shows its banner** (the IDE increment brings the drives up).
+  Oracles: `sim/run_mapper.sh` (BIOS windows,
   extents, boundary — mutation-tested ×10 total) and `sim/smk/run.sh`
   (boots through the REAL mechanism with a synthetic BIOS image, overlay
   merges, extents, the authentic СТОП/HALT-entry leg, DCLO replay —
@@ -758,7 +759,8 @@ confirmed on hardware 2026-07-16: BK-0011M boots and runs BOS, the reset
 button switches models**. Phase 8 has started: increment 1 (the SMK512
 512 KB segmented RAM extension on DIP 8, BK-0011M only) and increment 2 (the
 SMK BIOS ROM + the SYS register-space boot overlay — DIP-8-ON boots the SMK
-BIOS through the merged 177716 start vector) are sim-proven (see the Phase-8
+BIOS through the merged 177716 start vector) are done, **increment 2 confirmed
+on hardware 2026-07-17: the SMK BIOS boots to its banner** (see the Phase-8
 section). Remaining deferred items: the SMK IDE/SD increment, bk10+SMK, the
 SMK-RAM ram_init pattern, `N_VREG`/`N_EXT`/`N_SMKREG` calibration and 0011M
 cycle-accuracy vs a reference (reference-tb-first).*
