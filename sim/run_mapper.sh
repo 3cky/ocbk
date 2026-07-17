@@ -4,6 +4,14 @@
 # against the pre-Phase-7 inline decode (map-content-independent), and the
 # BK-0011M banking semantics (windows/pages, ROM overlay codes + the 033-quirk
 # fall-through, word-write-only banking, DCLO-only re-init). See sim/mapper_tb.sv.
+#
+# Phase 8 (SMK512): a differential smk_en=0 reference instance pins every
+# non-SMK configuration bit-identical over full-64K sweeps, plus the directed
+# BkEmu SmkMemoryManager contract - the 177130 two-phase strobe (incl. the
+# byte-lane masking), the 8-mode x 8-seg table with the SYS/ALL +4 rotation,
+# the {v0,v3,v2,v10} page scatter, the seg-7 0177000 cap, HLT10 seg-0
+# read-only (smk_ro), std passthrough tracking live banking, DCLO-only reset.
+# Mutation-tested: see the tb header.
 set -euo pipefail
 cd "$(dirname "$0")"
 

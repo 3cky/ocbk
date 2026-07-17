@@ -24,6 +24,7 @@ sim:
 	./sim/raminit/run.sh
 	./sim/bk10/run.sh
 	./sim/bk11/run.sh
+	./sim/smk/run.sh
 	./sim/romwr/run.sh
 	./sim/ref037/run.sh
 	./sim/ref014/run.sh

@@ -30,7 +30,12 @@ screen-page/palette register, the 50 Hz EVNT/IRQ2 timer, the СТОП-block bit,
 the two-pass EPCS loader with the 0011M ROM set and the authentic DRAM
 power-on pattern are all in — **BK-0011M boots and runs BOS on hardware**;
 both models are resident in flash and the reset button switches between them).
-DIP 2 is unused.
+**DIP 8 enables the SMK512 controller** (Phase 8, in progress — increment 1 =
+the 512 KB segmented RAM extension: the 0177130 layout register with all 8
+BkEmu `SmkMemoryManager` modes over 8 × 4 KB segments, 16 × 32 KB pages in
+SDRAM; BK-0011M only, oracle-proven in sim. No SMK BIOS ROM or IDE yet, so
+DIP-8-ON does not boot — the BIOS occupies the boot layout — flip it OFF and
+press reset for a stock machine). DIP 2 is unused.
 
 - Fits in **4208 / 12060 LEs (35%)**, **1 M4K**, **1 ASMI block**, **1 PLL**;
   timing closes.

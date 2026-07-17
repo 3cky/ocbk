@@ -644,14 +644,36 @@ is not a single peripheral:
   range. The heavy part is an ATA command engine (BSY/DRQ handshake,
   READ/WRITE SECTOR(S), IDENTIFY) with a one-sector buffer; the CPU-visible
   data port is **bit-inverted** on the bus. This part is nearly memory-layout-free.
-- **512 KB segmented RAM extension** — the memory-layout piece, and it *is* the
-  Phase-7 coupling: 8 × 4 KB segments mapped into the `100000–177777` window,
-  reconfigured from its own control register (with several layout modes) that
-  also selects/deselects the BK-10 monitor / BK-11 BOS ROM / 0011M second banked
-  window. It must slot into the Phase-7 window-ownership hook as an alternative
-  mapping source at 4 KB granularity — do **not** design it as a bolt-on. The
-  512 KB (256 Kword) lives in SDRAM; capacity is again a non-issue, addressing is
-  the work.
+- **512 KB segmented RAM extension** — ✅ **increment 1 DONE IN SIM 2026-07-17**
+  (BK-0011M only, enable = **DIP 8**, DCLO-hold-latched like DIP 1). The
+  memory-layout piece, and it *was* the Phase-7 coupling: 8 × 4 KB segments
+  (seg = `addr[14:12]`) mapped into the `100000–177777` window from the
+  0177130 control register (the floppy control register the SMK "ab-uses";
+  write-only, two-phase strobe: low nibble == 06 arms, the FOLLOWING write
+  commits mode `v[6:4]` + 32 KB page `{v0,v3,v2,v10}`), layered into the
+  Phase-7 window-ownership hook as a second `mem_mapper` translate stage —
+  NOT a bolt-on. The 512 KB = 256 Kwords live at SDRAM `SMK_RAM_BASE =
+  0x40000` (`phys = base | {page, rel, addr[11:1]}`, concatenation-only);
+  SMK RAM is `MK_EXT` = the FSM-owned fixed `N_EXT` reply (an external
+  controller's RAM is NOT 037-fronted), done-gated both directions on the
+  same cpu_sdram_dp port-0 datapath; HLT10's read-only seg 0 = `smk_ro` (a
+  write falls out un-replied → trap 4, the ROM-write rule). All 8 BkEmu
+  modes (SYS reset default / STD10 / RAM10 / ALL / STD11 / RAM11 / HLT10 /
+  HLT11 incl. the SYS/ALL +4 rotation and the BOS/second-window deselects);
+  BkEmu `SmkMemoryManager` beat MiSTer on every divergence (reset default
+  SYS not STD11, low-nibble strobe compare, per-BkEmu byte-lane masking).
+  **Deliberately deferred:** the SMK BIOS ROM segments are `MK_NONE` (trap 4)
+  until the BIOS blob lands — **DIP-8-ON is non-booting on hardware** (the
+  SYS reset layout deselects BOS and puts power-on garbage at the 140000
+  start vector; the Phase-7 DIP-1 precedent); seg 7 is capped at its
+  0177000 non-restricted extent in ALL modes (the per-mode extents into the
+  I/O page — ALL readable / HLT writable, the 177674/76 HALT-debugger catch
+  — go with the BIOS/IDE increment); bk10+SMK (BkEmu `BK_0010_SMK512`);
+  the SMK-RAM power-on DRAM pattern (`ram_init`). Oracles:
+  `sim/run_mapper.sh` (differential smk_en=0 reference + the directed
+  contract, mutation-tested ×5) and `sim/smk/run.sh` (SoC functional oracle
+  with a DCLO-replay second pass, mutation-tested — see its header for the
+  one documented masked mutation).
 - **SMK BIOS ROM** — the code that drives the IDE; a few KB in the SDRAM ROM
   region alongside the other ROM images.
 - **Open point:** the extension's cycle-stealing / RPLY behaviour on this window
@@ -707,11 +729,14 @@ the СТОП trap-4 path). Phase-6 tape **works on hardware 2026-07-10** (the CM
 jack on the right sound channel, Scroll-Lock-gated after the motor-bit
 experiment broke right audio; oracle-tested). The Phase-7 50 Hz EVNT/IRQ2
 frame interrupt is wired (sim-proven, bk11-only), and the BK-0011M ROM set now
-rides a second EPCS blob with SYS_START 140000, so DIP1-ON boots BOS (sim-
-proven; pending hardware confirmation). Next: route window-1 RAM through the
-037 via a synthesized A15 (the placeholder `MK_EXT`/`N_EXT` is not the real
-0011M model — the 037 fronts all internal RAM; `N_EXT` becomes SMK512-only),
-`N_VREG`, and 0011M cycle-accuracy vs a reference.*
+rides a second EPCS blob with SYS_START 140000 — **Phase 7 is done and
+confirmed on hardware 2026-07-16: BK-0011M boots and runs BOS, the reset
+button switches models**. Phase 8 has started: increment 1 — the SMK512
+512 KB segmented RAM extension on DIP 8 (BK-0011M only, sim-proven, deliberately
+non-booting on hardware until the SMK BIOS blob) — is in (see the Phase-8
+section). Remaining deferred items: the SMK BIOS/IDE increments, `N_VREG`/
+`N_EXT`/`N_SMKREG` calibration and 0011M cycle-accuracy vs a reference
+(reference-tb-first).*
 *See also the project memory notes `bk-on-1chipmsx-feasibility` (bring-up history),
 `bk-video-pipeline-decision` (Phase 3/4 design) and `bkemu-reference-and-roms`
 (BkEmu is the canonical BK reference; ROMs committed in-tree).*

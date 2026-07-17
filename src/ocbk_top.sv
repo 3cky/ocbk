@@ -59,9 +59,11 @@
 // no on-chip ROM fallback - a failed EPCS boot (boot_ok=0) holds the CPU in
 // reset.
 // Naming: "DIP n" = physical switch n = pDip[n-1]; ON pulls the pin low.
-// DIP 1 = model select (OFF = BK-0010, ON = BK-0011M; Phase 7 - currently
-// selects only the CPU clock rate, 3.02 vs 4.03 MHz), latched while DCLO is
-// held (power-on and warm reset). DIP 2 is unused.
+// DIP 1 = model select (OFF = BK-0010, ON = BK-0011M: /24 CPU clock, banking,
+// 177662, EVNT/IRQ2, BOS boot), latched while DCLO is held (power-on and warm
+// reset). DIP 8 = SMK512 enable (Phase 8; BK-0011M only, same DCLO-hold
+// latch; non-booting until the SMK BIOS blob lands - see the latch comment).
+// DIP 2 is unused.
 //
 // screen_mode (mono-512 vs colour-256) models the physical monitor-cable switch
 // of a real BK-0010 -> now toggled by the PS/2 Print Screen key (each press
@@ -80,7 +82,8 @@ module ocbk_top (
     input  logic        pClk21m,   // 21.47727 MHz crystal (PIN_28)
     output logic [7:0]  pLed,      // green LEDs   (1 = on)
     output logic        pLedPwr,   // red power LED (1 = on)
-    input  logic [7:0]  pDip,      // DIP switches (ON = low); [0] = model
+    input  logic [7:0]  pDip,      // DIP switches (ON = low); [0] = model,
+                                   //   [7] = SMK512 enable (Phase 8)
                                     // select (OFF = BK-0010, ON = BK-0011M),
                                     // [1] = free (was force on-chip test ROM,
                                     // removed with the on-chip ROM fallback)
@@ -192,17 +195,30 @@ module ocbk_top (
     // hold (cpu_clkgen's >= wrap; the reset sequencer below just sees its
     // cpu_clk period change between edges). dclo_n is a quasi-static
     // cpu_clk-domain FF, 2-FF resynced here; pDip is a static switch.
-    logic [1:0] dipm_sr, dclo_sr;
-    logic       model_bk11;
+    // --- SMK512 enable: DIP 8 (ON = low = SMK present; Phase 8) -------------
+    // The identical DCLO-hold latch: model and SMK config switch together on
+    // a warm reset. BK-0011M only this increment (qbus_mem/mem_mapper gate
+    // every SMK term with model_bk11); with no SMK BIOS blob yet DIP-8-ON is
+    // deliberately non-booting (reset layout SYS deselects BOS and maps the
+    // 140000 start vector to power-on SMK RAM garbage) - flip DIP 8 off and
+    // press reset to return to a stock machine.
+    logic [1:0] dipm_sr, dips_sr, dclo_sr;
+    logic       model_bk11, smk_en;
     always_ff @(posedge sys_clk or negedge locked) begin
         if (!locked) begin
             dipm_sr    <= 2'b00;
+            dips_sr    <= 2'b00;
             dclo_sr    <= 2'b00;
             model_bk11 <= 1'b0;
+            smk_en     <= 1'b0;
         end else begin
             dipm_sr <= {dipm_sr[0], ~pDip[0]};
+            dips_sr <= {dips_sr[0], ~pDip[7]};
             dclo_sr <= {dclo_sr[0], dclo_n};
-            if (!dclo_sr[1]) model_bk11 <= dipm_sr[1];
+            if (!dclo_sr[1]) begin
+                model_bk11 <= dipm_sr[1];
+                smk_en     <= dips_sr[1];
+            end
         end
     end
 
@@ -632,6 +648,8 @@ module ocbk_top (
         .sel2_n   (sel_n[2]),       //   vm1.v local hook): 177716 / 177714
         .model_bk11(model_bk11),    // DIP-1 model select (latched during DCLO
                                     //   hold above -> quasi-static here)
+        .smk_en   (smk_en),         // DIP-8 SMK512 enable (same DCLO-hold latch
+                                    //   as the model select above)
         .boot_active(mem_boot_active),
         .bw_req   (mem_bw_req),
         .bw_addr  (mem_bw_addr),

@@ -51,6 +51,7 @@ module spk_capture_tb;
         .sel1_n    (sel1_n),
         .sel2_n    (sel2_n),
         .model_bk11(model_bk11),
+        .smk_en(1'b0),               // no SMK512 (never floating: X would poison)
         .sclk      (sclk),
         .srst_n    (1'b1),
         .init_done (),

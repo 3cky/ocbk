@@ -45,9 +45,14 @@ package qbus_pkg;
    //               ALL internal RAM, incl. BK-0011M window-1 banked RAM (the
    //               real 037 fronts it too: qbus_mem exports ext_ram so
    //               va_037_sync forces A15 low - see the a15_037 note there)
-   //   MK_EXT    : RESERVED for the Phase-8 SMK512 external RAM (its own
-   //               controller -> a genuine fixed-latency FSM reply). No longer
-   //               used by internal RAM - window 1 is MK_RAM037.
+   //   MK_EXT    : Phase-8 SMK512 external RAM (its own controller on the real
+   //               Q-bus -> a genuine fixed-latency FSM reply, NOT 037-owned /
+   //               cycle-stolen). Rides the same cpu_sdram_dp port-0 datapath
+   //               with the mapper's phys; read+write, done-gated both ways.
+   //               The mapper's smk_ro flag (HLT10 seg 0) turns off the write
+   //               reply -> a write there bus-times-out -> trap 4, exactly the
+   //               MK_ROM write rule. Not used by internal RAM (window 1 is
+   //               MK_RAM037).
    //   MK_ROM    : FSM-owned RPLY on reads; read-only. WRITES get NO reply ->
    //               the CPU's qbto timer -> trap 4 (authentic mask/overlay ROM;
    //               the "write until trap 4" screen-clear idiom relies on it).
@@ -59,11 +64,18 @@ package qbus_pkg;
    localparam logic [1:0] MK_EXT    = 2'd2;
    localparam logic [1:0] MK_ROM    = 2'd3;
 
-   // MK_EXT fixed reply count. RESERVED for the Phase-8 SMK512 (its external
-   // controller gives a genuine fixed latency); no longer used by internal RAM
-   // (window 1 is 037-owned MK_RAM037 now). Recalibrate reference-tb-first when
-   // the SMK512 lands; the wait FSM's 3-bit wcnt caps any N at 9.
+   // MK_EXT fixed reply count = the SMK512 RAM reply (Phase 8). PLACEHOLDER:
+   // the real SMK is an external Q-bus board (likely a faster, SRAM-like
+   // reply) - recalibrate reference-tb-first with the 0011M cycle-accuracy
+   // item; the wait FSM's 3-bit wcnt caps any N at 9.
    localparam int unsigned N_EXT = N_RAM;
+
+   // SMK512 memory-layout register 177130 (the floppy control register the SMK
+   // "ab-uses"; BkEmu SmkMemoryManager). Write-only fixed reply count for the
+   // qbus_mem positive-decode write path. PLACEHOLDER like N_EXT/N_VREG:
+   // recalibrate reference-tb-first (the real register is board logic, not the
+   // 037).
+   localparam int unsigned N_SMKREG = N_ROM;
 
    // 177662 write register (BK-0011M only; MiSTer rtl/video.sv is the
    // reference - BkEmu's handling is simplified). Fixed reply count for the
@@ -80,6 +92,12 @@ package qbus_pkg;
    localparam logic [23:0] BK11_WROM_BASE   = 24'h030000; // 4 window-1 ROM banks
    localparam logic [23:0] BK11_TOPROM_BASE = 24'h038000; // fixed 140000-177577 ROM
                                                           // (tops out at 0x39FBF)
+
+   // Phase-8 SMK512 external RAM: 512 KB = 256 Kwords at 0x40000-0x7FFFF,
+   // 2^18-aligned so the mapper's translation stays pure concatenation:
+   //   phys = SMK_RAM_BASE | {abs_seg[6:0], addr[11:1]}
+   // (128 segments x 2 Kwords; abs_seg = page[3:0]*8 + rel_seg[2:0]).
+   localparam logic [23:0] SMK_RAM_BASE = 24'h040000;
 
    // BK-0011M displayed-screen bases (177662 bit 15): screen 0 = RAM page 1,
    // screen 1 = RAM page 7 (BkEmu Computer wiring; MiSTer screen_bank).

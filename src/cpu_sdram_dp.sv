@@ -77,6 +77,7 @@ module cpu_sdram_dp #(
     dstate_t state;
 
     logic [15:0] rd_hold;
+    logic        was_read;   // the in-flight access is a read (set at issue)
 
     wire is_read  = (sel_ram || sel_romr) && !din_n;
     wire is_write = sel_ram && !dout_n; // ROM writes never reach the SDRAM
@@ -92,23 +93,26 @@ module cpu_sdram_dp #(
             wdata_o  <= '0;
             be_o     <= 2'b11;
             rd_hold  <= '0;
+            was_read <= 1'b0;
         end else begin
             case (state)
                 D_IDLE: begin
                     req <= 1'b0;
                     if (is_read) begin                 // prefetch the read
-                        we     <= 1'b0;
-                        addr_o <= phys;
-                        be_o   <= 2'b11;
-                        req    <= 1'b1;
-                        state  <= D_RD_REQ;
+                        we       <= 1'b0;
+                        addr_o   <= phys;
+                        be_o     <= 2'b11;
+                        req      <= 1'b1;
+                        was_read <= 1'b1;
+                        state    <= D_RD_REQ;
                     end else if (is_write) begin        // capture + issue the write
-                        we      <= 1'b1;
-                        addr_o  <= phys;
-                        wdata_o <= ad_true;
-                        be_o    <= byte_op ? (addr[0] ? 2'b10 : 2'b01) : 2'b11;
-                        req     <= 1'b1;
-                        state   <= D_WR_REQ;
+                        we       <= 1'b1;
+                        addr_o   <= phys;
+                        wdata_o  <= ad_true;
+                        be_o     <= byte_op ? (addr[0] ? 2'b10 : 2'b01) : 2'b11;
+                        req      <= 1'b1;
+                        was_read <= 1'b0;
+                        state    <= D_WR_REQ;
                     end
                 end
                 D_RD_REQ:  if (gnt)    begin req <= 1'b0; state <= D_RD_WAIT; end
@@ -131,6 +135,15 @@ module cpu_sdram_dp #(
 
     assign mem_ready = (state == D_DONE);
     assign rdata     = rd_hold;
-    assign rdata_oe  = (state == D_DONE) && !din_n && (sel_ram || sel_romr);
+    // Drive gate uses the ISSUE-TIME selection flag (was_read), not the live
+    // sel_ram/sel_romr: behaviourally identical (the selects are SYNC-framed
+    // and D_DONE is only ever reached inside the selecting SYNC window; a
+    // write-half D_DONE has din_n released anyway), but it keeps the mapper's
+    // combinational translate OUT of the bus-pad output-enable cone - the
+    // live gate looped mapper regs -> kind -> OE -> ad pads -> the register
+    // write snoops' data pins, a functionally false path (DIN and DOUT are
+    // mutually exclusive) that cost the Phase-8 netlist its sys_clk timing
+    // closure. Cycle-identical: every ref037 golden pins it.
+    assign rdata_oe  = (state == D_DONE) && !din_n && was_read;
 
 endmodule

@@ -59,6 +59,46 @@
 // Phase-8 hook: window ownership is a selectable source - the SMK512 (or any
 // other expansion mapper) layers in HERE as an alternative page/bank source,
 // not as another decode strewn through qbus_mem.
+//
+// Phase 8 (SMK512, increment 1): the 512 KB segmented RAM extension layers in
+// exactly at that hook, as a second translate stage over the bk11 decode.
+// Canonical reference: BkEmu SmkMemoryManager.java (+ its unit test) - MiSTer
+// rtl/memory.sv was cross-checked and loses every dispute (reset default,
+// strobe arming width). Contract:
+//   * control register = 177130 (the floppy control register the SMK
+//     "ab-uses"; no floppy is modelled - reads stay un-replied -> trap 4).
+//     TWO-PHASE STROBE: every write recomputes strobe = (value & 017) == 06;
+//     a layout commit fires on the strobe FALLING edge - the write FOLLOWING
+//     an arming write, carrying the new mode+page in its own value. Byte
+//     writes are lane-masked as BkEmu's Computer.writeMemory dispatches them
+//     (odd byte = value << 8, even byte = the raw byte; unverified against
+//     real hardware - the GAL may latch both lanes).
+//   * committed word: mode = v[6:4]; page = {v[0], v[3], v[2], v[10]}
+//     (v0 = MSB; 16 pages x 32 KB). The 100000-177777 space is 8 x 4 KB
+//     segments (seg = addr[14:12]); a mapped segment shows SMK RAM absolute
+//     segment page*8 + rel where rel = seg, +4-rotated (seg ^ 4) in SYS/ALL.
+//   * per-mode segment sources: see the table at the mode case below.
+//     MK_EXT = SMK RAM (FSM-owned fixed N_EXT reply in qbus_mem - an external
+//     controller's RAM is NOT 037-fronted/cycle-stolen); smk_ro flags HLT10's
+//     read-only seg 0 (write -> no reply -> trap 4, the MK_ROM write rule).
+//     Deselected windows and the SMK BIOS ROM segments are MK_NONE this
+//     increment (no BIOS blob yet - like the empty window-1 sockets), so
+//     DIP-8-ON is deliberately non-booting on hardware until the BIOS lands.
+//   * seg 7 (0170000-0177777) is CAPPED at its non-restricted extent 0177000
+//     (BkEmu MEMORY_SEGMENT_7_NON_RESTRICTED_SIZE): 177000-177577 -> MK_NONE.
+//     The per-mode extents into the I/O page (readable in ALL, writable in
+//     HLT10/HLT11 - what catches the vm1 HALT entry's 177674/76 PC/PSW store,
+//     the SMK HALT-debugger mechanism) are DEFERRED to the BIOS/IDE increment.
+//   * reset = DCLO ONLY to mode SYS / page 0 / strobe disarmed (BkEmu init()
+//     re-inits on hardwareReset only - the map/662/spk nINIT-exception family).
+//   * bk10 + SMK is NOT wired this increment: every SMK term here and in
+//     qbus_mem is gated smk_en && model_bk11, so DIP8 + BK-0010 is a no-op.
+//     BkEmu's BK_0010_SMK512 config (monitor-ROM deselect) is a later item.
+// A useful invariant (pinned by the oracles): 177130 itself is inside the
+// capped seg-7 region, so under EVERY SMK mode its own translation is MK_NONE
+// - the qbus_mem positive write decode is the sole owner, and a mode write can
+// never re-map its own in-flight cycle. With SMK off it stays MK_ROM: a write
+// there keeps bus-timing-out (sim/romwr semantics).
 module mem_mapper #(
     parameter int ADDR_BITS = 24
 ) (
@@ -66,6 +106,8 @@ module mem_mapper #(
     input  logic        sclk,        // sys_clk
     input  logic        rst,         // active high = ~dclo_n (DCLO ONLY - no nINIT)
     input  logic        model_bk11,  // DIP 1 latched during DCLO hold (quasi-static)
+    input  logic        smk_en,      // DIP 8 latched during DCLO hold (quasi-static):
+                                     // SMK512 present (BK-0011M only this increment)
     input  logic        sync_n,
     input  logic        dout_n,
     input  logic        wtbt_n,      // at DOUT time: 0 = byte op (dual-purpose WTBT)
@@ -78,7 +120,10 @@ module mem_mapper #(
     // ---- combinational translate ------------------------------------------
     input  logic [15:0]          addr,   // latched bus address (true polarity)
     output logic [1:0]           kind,   // MK_* region kind (owner + writability)
-    output logic [ADDR_BITS-1:0] phys    // physical SDRAM word address
+    output logic [ADDR_BITS-1:0] phys,   // physical SDRAM word address
+    output logic                 smk_ro  // with kind==MK_EXT: read-only segment
+                                         // (HLT10 seg 0) - qbus_mem withholds
+                                         // the write reply -> trap 4
 );
 
     import qbus_pkg::*;
@@ -125,38 +170,125 @@ module mem_mapper #(
         end
     end
 
-    // ---- translate ---------------------------------------------------------
+    // ---- Phase-8 SMK512 layout register (177130 write snoop) ---------------
+    // The mode is stored PRE-DECODED as the per-segment source vectors (the
+    // case table below runs on the commit edge, not in the translate cone):
+    // decode-at-commit and decode-at-use are behaviourally identical - the
+    // registers only change on the committing sclk edge either way - but the
+    // translate's smk contribution shrinks to a 1-LUT vector index, keeping
+    // the 8-way mode case OFF the sys_clk critical path (the translate feeds
+    // the datapath output enables, whose cone loops through the bus pads back
+    // into this module's register data pins - a functionally false path, DIN
+    // and DOUT are mutually exclusive, but one the STA must see met).
+    logic [3:0] smk_page;    // 32 KB page, {v0, v3, v2, v10}
+    logic       smk_strobe;  // the two-phase arm flag
+    logic [7:0] seg_smk;     // seg -> SMK RAM (abs seg = smk_page*8 + rel)
+    logic [7:0] seg_std;     // seg -> standard bk11 decode passthrough
+    logic       seg_rot;     // rel = seg ^ 4 (the SYS/ALL +4 rotation)
+    logic       seg0_ro;     // seg 0 is read-only (HLT10)
+
+    // A plain addressed write - no SEL pin (177130 is inside the ROM window;
+    // qbus_mem carves the matching write reply out of sel_rom). Same
+    // DOUT-window sampling as the banking snoop above.
+    wire smk_reg_wr = smk_en && model_bk11 && !sync_n && !dout_n
+                      && (addr[15:1] == 15'(16'o177130 >> 1));
+    // BkEmu Computer.writeMemory lane dispatch: an odd-byte write arrives as
+    // value << 8, an even-byte write as the raw byte, a word write whole. The
+    // mask is load-bearing: an unmasked odd-byte write whose LOW lane happens
+    // to carry x6 would re-arm instead of committing (pinned by the oracle's
+    // junk-lane vector). Unverified against real hardware (the board GAL may
+    // latch both lanes) - BkEmu is decreed authoritative.
+    wire [15:0] smk_eff = wtbt_n  ? ad_true
+                        : addr[0] ? {ad_true[15:8], 8'h00}
+                                  : {8'h00, ad_true[7:0]};
+    wire smk_eff_arm = (smk_eff[3:0] == 4'b0110);
+
+    // Idempotent across the multi-sclk DOUT window: a committing write's first
+    // edge commits AND lowers smk_strobe, so the window's later edges see the
+    // arm already down and re-commit nothing; an arming write just re-arms.
+    //
+    // The mode case is a literal transcription of BkEmu
+    // SmkMemoryManager.setupMemoryLayout as three vectors over the 8 segments
+    // of 100000-177777: seg_smk (SMK RAM), seg_std (standard bk11 decode);
+    // NEITHER = MK_NONE (a deselected window OR an SMK BIOS ROM segment - no
+    // BIOS blob this increment). Reset = MODE_SYS (BkEmu initMemoryLayout).
+    always_ff @(posedge sclk) begin
+        if (rst) begin
+            smk_page   <= 4'd0;
+            smk_strobe <= 1'b0;
+            seg_smk    <= 8'b0011_1100;   // MODE_SYS
+            seg_std    <= 8'b0000_0000;
+            seg_rot    <= 1'b1;
+            seg0_ro    <= 1'b0;
+        end else if (smk_reg_wr) begin
+            smk_strobe <= smk_eff_arm;
+            if (smk_strobe && !smk_eff_arm) begin
+                smk_page <= {smk_eff[0], smk_eff[3], smk_eff[2], smk_eff[10]};
+                seg0_ro  <= 1'b0;
+                unique case (smk_eff[6:4])
+                    // SYS: seg2..5 = P+6,7,0,1; seg6/7 = SMK BIOS ROM; win1 +
+                    // BOS deselected -> seg0,1 NONE
+                    3'd7:    begin seg_smk <= 8'b0011_1100; seg_std <= 8'b0000_0000; seg_rot <= 1'b1; end
+                    // STD10: seg2..5 = P+2..5, seg7 = P+7; seg6 = BIOS ROM;
+                    // seg0,1 NONE
+                    3'd3:    begin seg_smk <= 8'b1011_1100; seg_std <= 8'b0000_0000; seg_rot <= 1'b0; end
+                    // RAM10: all eight segments = P+0..7
+                    3'd5:    begin seg_smk <= 8'b1111_1111; seg_std <= 8'b0000_0000; seg_rot <= 1'b0; end
+                    // ALL: all eight, rotated (seg0..3 = P+4..7, seg4..7 = P+0..3)
+                    3'd1:    begin seg_smk <= 8'b1111_1111; seg_std <= 8'b0000_0000; seg_rot <= 1'b1; end
+                    // STD11: seg0..5 standard (window-1 banking + BOS),
+                    // seg6 = BIOS ROM, seg7 = P+7
+                    3'd6:    begin seg_smk <= 8'b1000_0000; seg_std <= 8'b0011_1111; seg_rot <= 1'b0; end
+                    // RAM11: seg0..3 standard window 1, seg4..7 = P+4..7
+                    3'd2:    begin seg_smk <= 8'b1111_0000; seg_std <= 8'b0000_1111; seg_rot <= 1'b0; end
+                    // HLT10: all eight = P+0..7, seg0 READ-ONLY
+                    3'd4:    begin seg_smk <= 8'b1111_1111; seg_std <= 8'b0000_0000; seg_rot <= 1'b0;
+                                   seg0_ro <= 1'b1; end
+                    // HLT11: seg0..3 standard window 1, seg4..7 = P+4..7
+                    default: begin seg_smk <= 8'b1111_0000; seg_std <= 8'b0000_1111; seg_rot <= 1'b0; end
+                endcase
+            end
+        end
+    end
+
+    // ---- translate stage 1: the standard (pre-SMK) decode ------------------
     // Physical addresses are pure concatenations onto the power-of-two-aligned
     // bases from qbus_pkg (no adders). Fed by the transparent SYNC address
     // latch, so it may glitch mid-address-phase exactly like the old inline
     // sel_ram - every consumer samples on a clock edge.
+    // This block is the pre-Phase-8 translate VERBATIM (only its outputs are
+    // renamed kind_std/phys_std): with smk_en=0 the overlay stage below is a
+    // wire-through, keeping bk10 AND plain-bk11 bit-identical - every existing
+    // timing golden stays the regression anchor.
+    logic [1:0]           kind_std;
+    logic [ADDR_BITS-1:0] phys_std;
     always_comb begin
         if (!model_bk11) begin
             // BK-0010: bit-identical to the pre-Phase-7 inline decode.
             if (addr < RAM_TOP) begin
-                kind = MK_RAM037;
-                phys = ADDR_BITS'(addr[15:1]);
+                kind_std = MK_RAM037;
+                phys_std = ADDR_BITS'(addr[15:1]);
             end else if (addr < IO_BASE) begin
-                kind = MK_ROM;
-                phys = ADDR_BITS'(addr[15:1]);
+                kind_std = MK_ROM;
+                phys_std = ADDR_BITS'(addr[15:1]);
             end else begin
-                kind = MK_NONE;
-                phys = '0;
+                kind_std = MK_NONE;
+                phys_std = '0;
             end
         end else begin
             case (addr[15:14])
                 2'b00: begin        // 000000-037777: fixed RAM page 6
-                    kind = MK_RAM037;
-                    phys = ADDR_BITS'(BK11_RAM_BASE) | ADDR_BITS'({3'd6, addr[13:1]});
+                    kind_std = MK_RAM037;
+                    phys_std = ADDR_BITS'(BK11_RAM_BASE) | ADDR_BITS'({3'd6, addr[13:1]});
                 end
                 2'b01: begin        // 040000-077777: window 0 (always RAM)
-                    kind = MK_RAM037;
-                    phys = ADDR_BITS'(BK11_RAM_BASE) | ADDR_BITS'({win0_page, addr[13:1]});
+                    kind_std = MK_RAM037;
+                    phys_std = ADDR_BITS'(BK11_RAM_BASE) | ADDR_BITS'({win0_page, addr[13:1]});
                 end
                 2'b10: begin        // 100000-137777: window 1 (ROM overlay or RAM)
                     if (win1_rom_en && WIN1_ROM_PRESENT[win1_rom_bank]) begin
-                        kind = MK_ROM;
-                        phys = ADDR_BITS'(BK11_WROM_BASE)
+                        kind_std = MK_ROM;
+                        phys_std = ADDR_BITS'(BK11_WROM_BASE)
                              | ADDR_BITS'({win1_rom_bank, addr[13:1]});
                     end else if (win1_rom_en) begin
                         // Unpopulated ROM socket (stock BK-0011M banks 2,3): no
@@ -164,29 +296,64 @@ module mem_mapper #(
                         // trap 4. NOT the 033-quirk RAM fallthrough (that keeps
                         // win1_rom_en=0 and shows RAM); this is a selected but
                         // empty overlay code.
-                        kind = MK_NONE;
-                        phys = '0;
+                        kind_std = MK_NONE;
+                        phys_std = '0;
                     end else begin
                         // Window-1 RAM: 037-owned (MK_RAM037), NOT a fixed reply.
                         // On real HW the 037 fronts this too (its AD15 is forced
                         // low by the banking network); qbus_mem derives ext_ram
                         // from (this MK_RAM037 access having A15=1) and feeds it
                         // to va_037_sync's a15_037. phys is the win1 RAM page.
-                        kind = MK_RAM037;
-                        phys = ADDR_BITS'(BK11_RAM_BASE)
+                        kind_std = MK_RAM037;
+                        phys_std = ADDR_BITS'(BK11_RAM_BASE)
                              | ADDR_BITS'({win1_page, addr[13:1]});
                     end
                 end
                 default: begin      // 140000-177777: fixed top ROM, then I/O
                     if (addr < IO_BASE) begin
-                        kind = MK_ROM;
-                        phys = ADDR_BITS'(BK11_TOPROM_BASE) | ADDR_BITS'(addr[13:1]);
+                        kind_std = MK_ROM;
+                        phys_std = ADDR_BITS'(BK11_TOPROM_BASE) | ADDR_BITS'(addr[13:1]);
                     end else begin
-                        kind = MK_NONE;
-                        phys = '0;
+                        kind_std = MK_NONE;
+                        phys_std = '0;
                     end
                 end
             endcase
+        end
+    end
+
+    // ---- translate stage 2: the SMK512 segment overlay ----------------------
+    // The per-mode segment sources live pre-decoded in the seg_* registers
+    // (see the commit block above), so the smk contribution here is a 1-LUT
+    // vector index + the priority mux - deliberately shallow, see the
+    // critical-path note at the register declarations.
+    wire [2:0] smk_seg = addr[14:12];
+    wire [2:0] smk_rel = seg_rot ? (smk_seg ^ 3'b100) : smk_seg;
+    // The overlay covers 100000-177577 only; the I/O page stays with stage 1
+    // (MK_NONE there - the SEL/positive decodes in qbus_mem are orthogonal).
+    wire smk_win  = smk_en && model_bk11 && addr[15] && (addr < IO_BASE);
+    // Seg-7 cap: segment offsets >= 0o7000 bytes (words >= 03400) are the
+    // restricted extent -> MK_NONE this increment (see the header).
+    wire smk_cap7 = (smk_seg == 3'b111) && (addr[11:9] == 3'b111);
+
+    always_comb begin
+        smk_ro = 1'b0;
+        if (smk_win && seg_smk[smk_seg]) begin
+            if (smk_cap7) begin
+                kind = MK_NONE;
+                phys = '0;
+            end else begin
+                kind = MK_EXT;
+                phys = ADDR_BITS'(SMK_RAM_BASE)
+                     | ADDR_BITS'({smk_page, smk_rel, addr[11:1]});
+                smk_ro = seg0_ro && (smk_seg == 3'd0);  // HLT10 seg 0
+            end
+        end else if (smk_win && !seg_std[smk_seg]) begin
+            kind = MK_NONE;     // deselected window / SMK BIOS ROM socket
+            phys = '0;
+        end else begin
+            kind = kind_std;    // SMK off, bk10, I/O page, or a std segment
+            phys = phys_std;
         end
     end
 

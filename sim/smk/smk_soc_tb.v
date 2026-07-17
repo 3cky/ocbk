@@ -1,60 +1,44 @@
 //
-// Phase 7 BK-0011M banking FUNCTIONAL oracle (data-checking, NOT a timing
-// golden - ref037 keeps the timing-reference meaning).
+// Phase 8 SMK512 segmented-RAM FUNCTIONAL oracle (data-checking, NOT a timing
+// golden - ref037 keeps the timing-reference meaning; sim/bk11 pins the
+// plain-bk11 contract with smk_en=0).
 //
-//   vm1 CPU + va_037_sync (RAM RPLY for A15=0, done-gate) + the REAL qbus_mem
-//   (mem_mapper in BK-0011M mode + ROM/IO/EXT wait FSM + cpu_sdram_dp +
-//   arbiter + ctrl) + behavioural sdram_model + the port-2 video-fetch
-//   saturator for contention.
+//   vm1 CPU + va_037_sync + the REAL qbus_mem (mem_mapper with smk_en=1 in
+//   BK-0011M mode + the MK_EXT/177130 FSM legs + cpu_sdram_dp + arbiter +
+//   ctrl) + behavioural sdram_model (DEEPENED to 1<<19 words - the SMK RAM
+//   lives at 0x40000-0x7FFFF, above the default model size) + the port-2
+//   video-fetch saturator for contention.
 //
-// The mem/gen_bk11_test.py program runs the whole Bk11MemoryManager contract
-// (see there): boot = 177716 read (start vector 140000 = SYS_START11) -> a
-// stage-0 stub in the fixed top ROM JMPs into stage 1 in the EXT window
-// (reset map: window 1 = RAM page 0), stage 2 in the fixed page-6 region
-// fills/verifies all 8 pages
-// through both windows, aliases page 6, RMWs in EXT, checks the ROM overlay
-// codes + write-ignore + empty-socket read-timeout (banks 2,3 unpopulated ->
-// trap 4) + the 033 quirk + the fixed top ROM, executes RESET
-// (nINIT must PRESERVE the map) and verifies the register is write-only.
-// Phase-7 177662 phase: word writes to the video register must be replied
-// (qbus_mem's bk11-only write decode), survive RESET, and reads must bus-
-// time-out (write-only; proven in-program via a vector-4 detour). This tb
-// checks the vid_page/vid_irq2_mask/vid_pal taps: the DCLO defaults
-// (0 / 1 / 0o17 = MiSTer def_reg662 0o047400) right after reset release,
-// and the program's final write (1 / 0 / 0o12) after the success park.
-// Phase-7 EVNT/IRQ2 leg: nIRQ2 is wired through the ocbk_top replica below
-// (level = ~mask & vgate, sys_clk reg + 2-FF cpu_clk); the program's
-// section 12 proves the mask gates the asserted level, one fire per
-// blanking window (vector 0100), and two tb guards pin every assertion
-// inside the vgate-high window and never-while-masked.
-// Phase-7 СТОП-enable leg (section 13): the tb watches for the program's
-// magic scratch write and pulses key_stop into the ocbk_top replica below
-// (stop_block tap, 2-FF resync, gated 64-clk nIRQ1 one-shot); the program
-// proves the 177716 bit-12 latch blocks/re-enables the СТОП trap-4 path
-// (word + odd-byte writes reach it, even-byte and banking writes don't,
-// RESET preserves it).
+// The mem/gen_smk_test.py program (see there for the section list) walks the
+// BkEmu SmkMemoryManager contract. Boot: the 177716 read returns 140000
+// (SYS_START11); under the SMK reset layout (SYS) that address is SMK RAM
+// abs seg 0 word 0, where this tb PRELOADS a stage-0 stub (JMP @#001000).
+// That preload is a tb liberty: real SMK DRAM powers on as garbage and the
+// BIOS ROM segments are MK_NONE this increment, so DIP-8-ON hardware is
+// deliberately non-booting until the SMK BIOS blob lands.
 //
-// The local divider replica runs the CPU clock at the 0011M /24 rate
-// (4.03 MHz) - which also smokes the SDRAM CDC margins at that rate - with
-// the 037 CLKIN enables on the fixed /16 chain, exactly as cpu_clkgen wires
-// it (the SoC testbenches replicate the divider; sim/run_clkgen.sh is the
-// divider's own oracle).
+// After the first success park the tb checks the 177662 taps (the program's
+// masked write), then RE-PULSES DCLO (the warm-reset shape: memory and the
+// 037 survive, the CPU + mapper re-init): the second boot reaches the
+// success park again only if DCLO restored the SYS layout (the program
+// parked in RAM10 - a preserved layout would leave 140000 mapped to abs S0
+// still, but the RUN_FLAG re-verify leg also proves seg0 trap + SMK RAM
+// content survival, and the 662 taps must be back at the DCLO defaults).
 //
-// Pass/fail: 3 consecutive DIN fetches of the success park 001004 -> COSIM
-// PASS; any 001012 (fail park) hit or the watchdog -> COSIM FAIL.
+// Pass/fail: 3 consecutive DIN fetches of the success park 001004 on EACH
+// pass -> COSIM PASS after the second; any 001012 (fail park) hit or the
+// watchdog -> COSIM FAIL.
 //
 `timescale 1ns / 1ps
 
 `define SYSCLK_HALF 5
 
-module bk11_soc_tb;
+module smk_soc_tb;
 
     localparam int AB = 24;
     localparam int DW = 16;
 
-    // ROM overlay / top-ROM markers - MUST match mem/gen_bk11_test.py.
-    // Only the populated window-1 bank 0 has a marker; banks 2,3 are empty
-    // sockets (mapper -> MK_NONE, never read).
+    // markers - MUST match mem/gen_smk_test.py
     localparam [15:0] ROMPAT0 = 16'o123456;
     localparam [15:0] TOPPAT  = 16'o054321;
 
@@ -92,7 +76,7 @@ module bk11_soc_tb;
     always @(posedge sys_clk) srst_sr <= {srst_sr[0], 1'b1};
     reg  [3:1]  irq;   reg virq, dmgi, sp;   reg [1:0] pa;
     wire        n_irq2;    // EVNT/IRQ2 replica (assigned below qbus_mem)
-    wire        n_irq1;    // СТОП replica (assigned below qbus_mem)
+    wire        n_irq1 = 1'b1;   // no СТОП source in this oracle
     wire        dmgo;  tri1 init, dmr, sack, iako;   wire [2:1] sel;   wire bsy;
 
     // ---- tb-side address latch (for the park monitor) -----------------------
@@ -141,7 +125,7 @@ module bk11_soc_tb;
         else                    fetch_req <= 1'b1;   // otherwise keep requesting
     end
 
-    // ---- the REAL integration module, BK-0011M mode ---------------------------
+    // ---- the REAL integration module: BK-0011M mode + SMK512 -----------------
     wire init_done;
     wire s_cke, s_cs_n, s_ras_n, s_cas_n, s_we_n;
     wire [1:0]  s_ba, s_dqm;
@@ -162,9 +146,9 @@ module bk11_soc_tb;
         .tape_in  (1'b0),
         .sel1_n   (sel[1]),
         .sel2_n   (sel[2]),
-        .model_bk11(1'b1),           // <- the whole point of this oracle
-        .smk_en(1'b0),               // no SMK512: plain-bk11 contract pinned here
-        .boot_active(1'b0),          // no EPCS: pages preloaded directly
+        .model_bk11(1'b1),
+        .smk_en   (1'b1),            // <- the whole point of this oracle
+        .boot_active(1'b0),          // no EPCS: images preloaded directly
         .bw_req   (1'b0),
         .bw_addr  ({AB{1'b0}}),
         .bw_wdata ({DW{1'b0}}),
@@ -203,15 +187,17 @@ module bk11_soc_tb;
         .stop_block(stop_block)
     );
 
-    sdram_model u_mem (
+    // DEEPENED: the SMK RAM occupies SDRAM words 0x40000-0x7FFFF, above the
+    // model's 1<<18 default
+    sdram_model #(.MEM_WORDS(1<<19)) u_mem (
         .clk(sys_clk), .cke(s_cke), .cs_n(s_cs_n), .ras_n(s_ras_n), .cas_n(s_cas_n),
         .we_n(s_we_n), .ba(s_ba), .addr(s_addr), .dqm(s_dqm), .dq(s_dq)
     );
 
-    // ---- EVNT/IRQ2: replica of the ocbk_top wiring (model_bk11 = 1 here) -----
-    // level = ~mask & the 037's vgate, registered on sys_clk, 2-FF onto
-    // posedge cpu_clk (the pin-sync rule); the vm1's internal arm/fire edge
-    // detector makes it one interrupt (vector 0100) per frame.
+    // ---- EVNT/IRQ2: replica of the ocbk_top wiring ---------------------------
+    // The program keeps 662 bit 14 SET throughout (no ISR is installed), so
+    // this must never fire - the guards below turn a stray assert into a
+    // loud failure (a broken mask gate would otherwise go unnoticed here).
     reg       irq2_lvl;
     reg [1:0] irq2_sr;
     initial begin irq2_lvl = 1'b0; irq2_sr = 2'b00; end
@@ -219,73 +205,49 @@ module bk11_soc_tb;
     always @(posedge clk)     irq2_sr  <= {irq2_sr[0], irq2_lvl};
     assign n_irq2 = ~irq2_sr[1];
 
-    // ---- СТОП: replica of the ocbk_top wiring (Phase 7) ----------------------
-    // The program can't press a key, so the tb watches for its magic scratch
-    // write (address AND value - the fill patterns can never collide) and
-    // turns each one into a 1-cpu_clk key_stop strobe, then runs the exact
-    // ocbk_top glue: stop_block (u_ms tap, sclk domain) 2-FF onto posedge
-    // cpu_clk gating the launch of the 64-clk nIRQ1 one-shot.
-    localparam [15:0] STOP_MAGIC_ADDR = 16'o000750;  // = gen_bk11_test.py
-    localparam [15:0] STOP_MAGIC_VAL  = 16'o123321;
-    reg stop_req = 1'b0;                  // toggles once per magic write
-    always @(negedge dout)
-        if (~sync && addr == STOP_MAGIC_ADDR && ~ad == STOP_MAGIC_VAL)
-            stop_req = ~stop_req;
-    reg [2:0] stop_req_sr = 3'b000;
-    always @(posedge clk) stop_req_sr <= {stop_req_sr[1:0], stop_req};
-    wire key_stop = stop_req_sr[2] ^ stop_req_sr[1];
-    reg [1:0] stop_blk_sr = 2'b00;
-    reg [6:0] stop_cnt    = 7'd0;
-    always @(posedge clk) begin
-        stop_blk_sr <= {stop_blk_sr[0], stop_block};
-        if (key_stop && !stop_blk_sr[1]) stop_cnt <= 7'd64;
-        else if (stop_cnt != 0)          stop_cnt <= stop_cnt - 1'b1;
-    end
-    assign n_irq1 = (stop_cnt == 0);
-
-    // assertion guards, pinning what the program-side checks can't:
-    //  - window phase: every nIRQ2 assertion must land inside the 037's
-    //    vertical blanking window (an inverted level would still fire and
-    //    pass the program checks, just at active-area start);
-    //  - mask gating: nIRQ2 must never assert while 662 bit 14 is set (with
-    //    the gate broken the vm1's arm/fire edge detector - the pin never
-    //    deasserts, so it never arms - would quietly defer the first fire
-    //    to the SECOND frame and still pass the program checks).
     always @(negedge n_irq2) begin
-        if (va_vgate !== 1'b1) begin
-            $display("BK11-ERROR: IRQ2 asserted outside the vgate blanking window");
-            $display("COSIM FAIL");
-            $finish;
-        end
-        if (vid_irq2m !== 1'b0) begin
-            $display("BK11-ERROR: IRQ2 asserted while 662 bit 14 masks it");
-            $display("COSIM FAIL");
-            $finish;
-        end
+        $display("SMK-ERROR: IRQ2 asserted (the program never unmasks it)");
+        $display("COSIM FAIL");
+        $finish;
     end
 
-    // ---- pass/fail: the pinned park loops (gen_bk11_test.py) ------------------
+    // ---- pass/fail: the pinned park loops (gen_smk_test.py) -------------------
+    // Two passes: the first success park checks the 177662 taps and triggers
+    // the DCLO replay; the second -> COSIM PASS. replay_wait masks the park
+    // monitor while the replay pulse is being applied (the CPU keeps fetching
+    // the park loop until DCLO lands).
     integer scnt = 0;
+    reg     pass2 = 1'b0;
+    reg     replay_wait = 1'b0;
+    event   replay_ev;
     always @(negedge din) begin
-        if (~sync) begin
+        if (~sync && !replay_wait) begin
             if (addr == 16'o001004) begin
                 scnt = scnt + 1;
                 if (scnt == 3) begin
-                    // 177662 taps must show the program's final write
-                    // (0o105000: page=1, irq2 unmasked, pal=0o12)
-                    if (vid_page !== 1'b1 || vid_irq2m !== 1'b0
-                        || vid_pal !== 4'o12) begin
-                        $display("BK11-ERROR: 177662 taps page=%b m=%b pal=%o",
-                                 vid_page, vid_irq2m, vid_pal);
-                        $display("COSIM FAIL");
-                    end else
+                    if (!pass2) begin
+                        // the program's final 662 write (0o145000: page=1,
+                        // masked, pal=0o12), RESET-instruction-preserved
+                        if (vid_page !== 1'b1 || vid_irq2m !== 1'b1
+                            || vid_pal !== 4'o12) begin
+                            $display("SMK-ERROR: 177662 taps page=%b m=%b pal=%o",
+                                     vid_page, vid_irq2m, vid_pal);
+                            $display("COSIM FAIL");
+                            $finish;
+                        end
+                        pass2 = 1'b1;
+                        scnt = 0;
+                        replay_wait = 1'b1;
+                        -> replay_ev;
+                    end else begin
                         $display("COSIM PASS");
-                    $finish;
+                        $finish;
+                    end
                 end
             end else begin
                 scnt = 0;
                 if (addr == 16'o001012) begin
-                    $display("BK11-ERROR: fail park 001012 reached");
+                    $display("SMK-ERROR: fail park 001012 reached (pass2=%b)", pass2);
                     $display("COSIM FAIL");
                     $finish;
                 end
@@ -293,20 +255,43 @@ module bk11_soc_tb;
         end
     end
 
+    // ---- the DCLO replay (warm-reset shape: memory + 037 survive) ------------
+    initial begin
+        @(replay_ev);
+        repeat (4)  @(negedge clk);
+        dclo = 1'b0; aclo = 1'b0;            // dclo_cold stays HIGH: video-side
+        repeat (20) @(negedge clk);          //   reset is power-on-only
+        dclo = 1'b1;
+        repeat (4)  @(negedge clk);
+        aclo = 1'b1;
+        // 177662 must be back at the DCLO defaults before the program can
+        // write it again (proves the DCLO reset, not just the cold one)
+        repeat (4)  @(negedge clk);
+        if (vid_page !== 1'b0 || vid_irq2m !== 1'b1 || vid_pal !== 4'o17) begin
+            $display("SMK-ERROR: post-replay 662 taps page=%b m=%b pal=%o",
+                     vid_page, vid_irq2m, vid_pal);
+            $display("COSIM FAIL");
+            $finish;
+        end
+        replay_wait = 1'b0;
+    end
+
     // ---- SDRAM preload ---------------------------------------------------------
     integer ii;
     initial begin
-        for (ii = 0; ii < (1<<18); ii = ii + 1) u_mem.mem[ii] = 16'o000000;
-        // physical page 0 (stage 1) and page 6 (vectors + stage 2)
-        $readmemh("bk11_page0.hex", u_mem.mem, 'h20000, 'h21FFF);
-        $readmemh("bk11_page6.hex", u_mem.mem, 'h2C000, 'h2DFFF);
-        // ROM overlay bank 0 marker (word 0). Banks 2,3 are empty sockets:
-        // the mapper decodes them MK_NONE (no reply -> trap 4), so no marker.
+        for (ii = 0; ii < (1<<19); ii = ii + 1) u_mem.mem[ii] = 16'o000000;
+        // fixed page 6: vectors + stage 2
+        $readmemh("smk_page6.hex", u_mem.mem, 'h2C000, 'h2DFFF);
+        // SMK RAM page 0 (abs segs 0-7): the stage-0 stub at abs-seg-0 word 0
+        // (the SYS-mode 140000 start vector) + the section-5 routine. A tb
+        // liberty - real SMK DRAM powers on as garbage (see the header).
+        $readmemh("smk_ram0.hex", u_mem.mem, 'h40000, 'h43FFF);
+        // window-1 ROM overlay bank 0 marker (STD11 leg reads it via std)
         u_mem.mem['h30000] = ROMPAT0;
-        // fixed top ROM: the bk11 start vector is 140000 (SYS_START11), so
-        // the first post-reset fetch lands here - a stage-0 stub jumps into
-        // stage 1 in the EXT window; the TOPPAT marker moves to BK 140004
-        u_mem.mem['h38000] = 16'o000137;    // JMP @#100000 (stage 1, EXT)
+        // fixed top ROM (BOS socket): the same stub+marker shape as sim/bk11 -
+        // under STD11 the program checks these through the std passthrough
+        // (the SMK boot itself never fetches here)
+        u_mem.mem['h38000] = 16'o000137;    // JMP @#100000
         u_mem.mem['h38001] = 16'o100000;
         u_mem.mem['h38002] = TOPPAT;
     end
@@ -321,18 +306,18 @@ module bk11_soc_tb;
         repeat (8) @(negedge clk); dclo = 1'b1; dclo_cold = 1'b1;
         repeat (4) @(negedge clk); aclo = 1'b1;
 
-        // 177662 DCLO defaults (MiSTer def_reg662 0o047400) - checked well
-        // before the program can reach its 662 writes
+        // 177662 DCLO defaults (MiSTer def_reg662 0o047400)
         repeat (4) @(negedge clk);
         if (vid_page !== 1'b0 || vid_irq2m !== 1'b1 || vid_pal !== 4'o17) begin
-            $display("BK11-ERROR: 177662 defaults page=%b m=%b pal=%o",
+            $display("SMK-ERROR: 177662 defaults page=%b m=%b pal=%o",
                      vid_page, vid_irq2m, vid_pal);
             $display("COSIM FAIL");
             $finish;
         end
 
-        #50_000_000;
-        $display("BK11-ERROR: watchdog timeout (last addr %o)", addr);
+        #100_000_000;
+        $display("SMK-ERROR: watchdog timeout (last addr %o, pass2=%b)",
+                 addr, pass2);
         $display("COSIM FAIL");
         $finish;
     end

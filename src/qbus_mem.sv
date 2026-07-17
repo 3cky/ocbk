@@ -61,6 +61,9 @@ module qbus_mem #(
     input  logic        sel2_n,     // CPU nSEL2: 177714/15 register select
     input  logic        model_bk11, // DIP-1 model select, latched during DCLO
                                     // hold (quasi-static): 1 = BK-0011M banking
+    input  logic        smk_en,     // DIP-8 SMK512 enable, latched during DCLO
+                                    // hold (quasi-static); BK-0011M only - every
+                                    // consumer gates it with model_bk11
 
     // ---- SDRAM domain ---------------------------------------------------
     input  logic        sclk,       // sys_clk (96.65 MHz)
@@ -148,11 +151,12 @@ module qbus_mem #(
     logic [1:0]           mkind;
     logic [ADDR_BITS-1:0] mphys;
     logic                 bank_wr;
+    logic                 m_smk_ro;
     mem_mapper #(.ADDR_BITS(ADDR_BITS)) u_map (
-        .sclk(sclk), .rst(reset), .model_bk11(model_bk11),
+        .sclk(sclk), .rst(reset), .model_bk11(model_bk11), .smk_en(smk_en),
         .sync_n(sync_n), .dout_n(dout_n), .wtbt_n(wtbt_n), .sel1_n(sel1_n),
         .ad_true(~ad_n), .addr0(addr[0]), .bank_wr(bank_wr),
-        .addr(addr), .kind(mkind), .phys(mphys)
+        .addr(addr), .kind(mkind), .phys(mphys), .smk_ro(m_smk_ro)
     );
 
     wire sel_ram = !sync_n && (mkind == MK_RAM037);
@@ -164,6 +168,12 @@ module qbus_mem #(
     // bk10 RAM037 is always A15=0), so this flags it for va_037_sync's a15_037
     // force. 0 in BK-0010 mode -> a15_037 == A[15], goldens invariant.
     assign ext_ram = sel_ram && addr[15];
+    // Phase-8 SMK512 external RAM (MK_EXT): FSM-owned fixed N_EXT reply, read
+    // AND write - an external controller's RAM is NOT 037-fronted/cycle-stolen.
+    // Deliberately NOT in ext_ram: a15_037 stays high, so the 037 treats the
+    // access like ROM/IO and never grants or replies (the FSM is uncontested).
+    // m_smk_ro (HLT10 seg 0) withholds the write reply -> qbto -> trap 4.
+    wire sel_ext = !sync_n && (mkind == MK_EXT);
     // ---- I/O decode: the CPU's own nSEL1/nSEL2 register-select pins --------
     // The only I/O the CPU delegates to us is its nSEL pair: nSEL1 = 177716/17
     // (system register), nSEL2 = 177714/15 (programmable parallel port -
@@ -205,6 +215,19 @@ module qbus_mem #(
     // bus-timing-out -> trap 4, exactly as before (bk10 goldens unchanged).
     wire sel_vreg = model_bk11 && !sync_n
                     && (addr[15:1] == 15'(16'o177662 >> 1));
+
+    // ---- 177130: SMK512 memory-layout register (Phase 8) ------------------
+    // The positive decode the Phase-8 note above anticipated, carved out of
+    // the ROM window exactly like sel_vreg: with the SMK present a WRITE to
+    // 177130/1 is replied (fixed N_SMKREG) and snooped by mem_mapper; reads
+    // are NOT selected - BkEmu's SMK register is write-only and no floppy
+    // controller is modelled, so a read keeps bus-timing-out -> trap 4.
+    // (The mapper translates 177130 itself MK_NONE under every SMK mode -
+    // capped seg 7 - so this decode never fights sel_rom/sel_ext; with the
+    // SMK absent the decode is dead and 177130 stays plain ROM: reads return
+    // the MSTD word, writes trap - the sim/romwr contract.)
+    wire sel_smkreg = model_bk11 && smk_en && !sync_n
+                      && (addr[15:1] == 15'(16'o177130 >> 1));
 
     // ROM reads are always served from SDRAM through cpu_sdram_dp (port 0).
     wire sel_romx = sel_rom;
@@ -248,10 +271,16 @@ module qbus_mem #(
     wire [15:0]          ram_rdata;
     wire                 ram_rdata_oe;
 
+    // MK_EXT rides this same datapath: read+write segments through the RAM
+    // feed (byte lanes / DATIO already correct there), the HLT10 read-only
+    // seg 0 through the ROM-read feed - its writes are then structurally
+    // never issued to the SDRAM (cpu_sdram_dp's is_write needs sel_ram),
+    // matching BkEmu's not-written semantics.
     cpu_sdram_dp #(.ADDR_BITS(ADDR_BITS), .DQ_BITS(DQ_BITS)) u_dp (
         .clk(sclk), .rst_n(~reset),
         .sync_n(sync_n), .din_n(din_n), .dout_n(dout_n), .wtbt_n(wtbt_n),
-        .sel_ram(sel_ram), .sel_romr(sel_romx),
+        .sel_ram(sel_ram | (sel_ext & ~m_smk_ro)),
+        .sel_romr(sel_romx | (sel_ext & m_smk_ro)),
         .addr(addr), .phys(mphys), .ad_true(~ad_n),
         .rdata(ram_rdata), .rdata_oe(ram_rdata_oe), .mem_ready(mem_ready),
         .req(dp_req), .we(dp_we), .addr_o(dp_addr), .wdata_o(dp_wdata), .be_o(dp_be),
@@ -336,7 +365,12 @@ module qbus_mem #(
     // raises BUS_ERROR -> vector 4 (Cpu.java writeMemory/processPendingInterrupts).
     // sel_io still carries I/O reads AND writes (177714/177716 reply+ignore is
     // unchanged); the ROM read path, done-gate and sel_vreg write are untouched.
-    wire selected = (sel_rom & is_read) | sel_io;
+    // Phase 8: SMK RAM (sel_ext) contributes reads AND writes - EXCEPT a write
+    // to the HLT10 read-only segment 0 (m_smk_ro), which falls out un-replied
+    // and traps by the exact ROM-write mechanism (incl. the DATIO write half -
+    // see the S_REPLY exit note).
+    wire selected = (sel_rom & is_read) | sel_io
+                  | (sel_ext & (is_read | (is_write & ~m_smk_ro)));
 
     always_ff @(posedge cpu_clk) begin
         fetch_stb <= 1'b0;
@@ -349,7 +383,7 @@ module qbus_mem #(
                     drive_data <= 1'b0;
                     reply      <= 1'b0;
                     if (!sync_n && ((selected && (is_read || is_write))
-                                    || (sel_vreg && is_write))) begin
+                                    || ((sel_vreg || sel_smkreg) && is_write))) begin
                         // 177716 bit-2 write-flag: set at THIS detection edge,
                         // not the reply point - the vm1 self-replies every
                         // write in the 177700-177717 block, so the DOUT window
@@ -360,11 +394,14 @@ module qbus_mem #(
                         // Sel1RegisterSystemBits semantics.
                         if (is_write && !sel1_n)
                             sel1_wflag <= 1'b1;
-                        // The 177662 write gets its own fixed count (PLACEHOLDER
-                        // until 0011M cycle accuracy - see qbus_pkg). The 3-bit
-                        // wcnt caps any N at 9. (Window-1 RAM no longer lands here
-                        // - it is MK_RAM037, 037-owned, done-gated on mem_ready.)
-                        wcnt  <= sel_vreg ? 3'(N_VREG-2)
+                        // The 177662/177130 writes and SMK RAM (MK_EXT) get
+                        // their own fixed counts (all PLACEHOLDERS until 0011M
+                        // cycle accuracy - see qbus_pkg). The 3-bit wcnt caps
+                        // any N at 9. (Window-1 RAM no longer lands here - it
+                        // is MK_RAM037, 037-owned, done-gated on mem_ready.)
+                        wcnt  <= sel_vreg   ? 3'(N_VREG-2)
+                               : sel_smkreg ? 3'(N_SMKREG-2)
+                               : sel_ext    ? 3'(N_EXT-2)
                                : 3'(N_ROM-2);
                         state <= S_WAIT;
                     end
@@ -381,18 +418,20 @@ module qbus_mem #(
                         // golden; no oracle wrote 177716 before it).
                         state <= S_IDLE;
                     end else if (wcnt == 0) begin
-                        if (sel_romx && is_read && !mem_ready) begin
-                            // done-gate: the SDRAM ROM word is late - hold RPLY
+                        if (((sel_romx && is_read) || sel_ext) && !mem_ready) begin
+                            // done-gate: the SDRAM word is late - hold RPLY
                             // (extends the cycle) instead of replying over stale
-                            // data. Should never happen at BK clock rates; the
-                            // ROM-region golden diff catches it if it does.
+                            // data / an unposted write. Covers ROM reads and SMK
+                            // RAM (MK_EXT) BOTH directions. Should never happen
+                            // at BK clock rates; the ROM-region golden diff / the
+                            // smk oracle catch it if it does.
                             dbg_romgate <= 1'b1;
                         end else begin
                             reply <= 1'b1;
                             if (is_read) begin
                                 rdata      <= rd_romio;
-                                // SDRAM ROM data: u_dp drives; I/O data: this FSM
-                                drive_data <= !sel_romx;
+                                // SDRAM ROM/SMK data: u_dp drives; I/O: this FSM
+                                drive_data <= !(sel_romx || sel_ext);
                                 fetch_stb  <= 1'b1;
                             end
                             // 177716 write-flag: cleared after read (rdata

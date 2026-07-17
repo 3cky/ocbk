@@ -12,6 +12,25 @@
 //      no-ops, DCLO re-init, and model_bk11 flips leaving the content alone.
 //  nINIT-preserve is structural (the module has no nINIT port); the
 //  behavioural RESET-instruction check lives in the bk11 SoC oracle.
+//
+//  Phase 8 (SMK512, sections S1-S11): a second DIFFERENTIAL reference
+//  instance (dut_ref, smk_en tied 0, identical stimulus) pins "SMK disabled
+//  == bit-identical" over full-64K sweeps in every non-SMK configuration
+//  (smk_en=0 both models, and smk_en=1 in bk10 - the SMK is BK-0011M-only
+//  this increment); the directed sections then walk the BkEmu
+//  SmkMemoryManager contract: the 177130 two-phase strobe protocol
+//  (low-nibble==6 arms, the FOLLOWING write commits mode+page on the strobe
+//  falling edge), the byte-write lane masking (BkEmu writeMemory: odd byte =
+//  value<<8, even byte = raw byte), the 8-mode x 8-segment table incl. the
+//  SYS/ALL +4 rotation, the {v0,v3,v2,v10} page-bit scatter, the seg-7
+//  0177000 cap, HLT10 seg-0 read-only (smk_ro), std-passthrough segs
+//  tracking the live 177716 banking, mutual isolation of the two register
+//  files, DCLO-only reset (-> SYS, strobe disarmed), and enable/model flips
+//  keeping register content.
+//  MUTATION-TESTED: swapping the page scatter order, committing on the
+//  arming edge, dropping the seg-7 cap, dropping the odd-byte lane mask
+//  (the S5 junk-low-byte vector re-arms instead of committing), and
+//  breaking a mode's segment mask all fail directed checks here.
 // ============================================================================
 `timescale 1ns/1ps
 module mapper_tb;
@@ -33,13 +52,29 @@ module mapper_tb;
     wire  [1:0]    kind;
     wire  [AB-1:0] phys;
 
+    logic          smk_en = 1'b0;
+    wire           smk_ro;
+
     integer errors = 0;
 
     mem_mapper #(.ADDR_BITS(AB)) dut (
-        .sclk(sclk), .rst(rst), .model_bk11(model_bk11),
+        .sclk(sclk), .rst(rst), .model_bk11(model_bk11), .smk_en(smk_en),
         .sync_n(sync_n), .dout_n(dout_n), .wtbt_n(wtbt_n), .sel1_n(sel1_n),
         .ad_true(ad_true), .addr0(addr0), .bank_wr(bank_wr),
-        .addr(addr), .kind(kind), .phys(phys)
+        .addr(addr), .kind(kind), .phys(phys), .smk_ro(smk_ro)
+    );
+
+    // Differential reference: identical stimulus, smk_en hard-tied 0. Its
+    // banking registers track the same 177716 writes, so in every non-SMK
+    // configuration the primary DUT must match it bit-for-bit over all 64K.
+    wire [1:0]    kind_ref;
+    wire [AB-1:0] phys_ref;
+    wire          bank_wr_ref, smk_ro_ref;
+    mem_mapper #(.ADDR_BITS(AB)) dut_ref (
+        .sclk(sclk), .rst(rst), .model_bk11(model_bk11), .smk_en(1'b0),
+        .sync_n(sync_n), .dout_n(dout_n), .wtbt_n(wtbt_n), .sel1_n(sel1_n),
+        .ad_true(ad_true), .addr0(addr0), .bank_wr(bank_wr_ref),
+        .addr(addr), .kind(kind_ref), .phys(phys_ref), .smk_ro(smk_ro_ref)
     );
 
     // ---- one 177716 DOUT window (the write shape qbus_mem's snoop sees) ----
@@ -48,7 +83,10 @@ module mapper_tb;
     task map_write(input [15:0] value, input byte_sig, input odd,
                    input exp_bank, input [159:0] tag);
         begin
+            // drive the real bus address too: the Phase-8 SMK snoop decodes
+            // the latched address, so a stale 177130 here would false-fire it
             sel1_n = 1'b0; addr0 = odd; ad_true = value;
+            addr = odd ? 16'o177717 : 16'o177716;
             #3 sync_n = 1'b0;
             #3 wtbt_n = byte_sig ? 1'b0 : 1'b1;   // word write releases WTBT at DOUT
                dout_n = 1'b0;
@@ -61,6 +99,7 @@ module mapper_tb;
             end
             dout_n = 1'b1;
             #3 sync_n = 1'b1; sel1_n = 1'b1; wtbt_n = 1'b1; addr0 = 1'b0;
+            addr = '0;
             repeat (2) @(posedge sclk);
         end
     endtask
@@ -100,6 +139,84 @@ module mapper_tb;
     function [AB-1:0] rom_bank(input [1:0] b, input [15:0] a);
         rom_bank = BK11_WROM_BASE | {b, a[13:1]};
     endfunction
+    // SMK RAM segment word address: abs seg = page*8 + rel, 2 Kwords each.
+    function [AB-1:0] smk_seg(input [3:0] pg, input [2:0] rel, input [15:0] a);
+        smk_seg = SMK_RAM_BASE | {pg, rel, a[11:1]};
+    endfunction
+
+    // ---- one 177130 DOUT window (no SEL pin - a plain addressed write) -----
+    // The snoop keys on the latched bus address, so `addr` carries 177130/1
+    // for the window. bank_wr must never fire (mutual isolation with the
+    // 177716 banking snoop).
+    task smk_write(input [15:0] value, input byte_sig, input odd,
+                   input [159:0] tag);
+        begin
+            addr = odd ? 16'o177131 : 16'o177130;
+            ad_true = value;
+            #3 sync_n = 1'b0;
+            #3 wtbt_n = byte_sig ? 1'b0 : 1'b1;
+               dout_n = 1'b0;
+            repeat (4) @(posedge sclk);
+            #1;
+            if (bank_wr !== 1'b0) begin
+                $display("MAPPER-ERROR %0s: 177130 write raised bank_wr", tag);
+                errors = errors + 1;
+            end
+            dout_n = 1'b1;
+            #3 sync_n = 1'b1; wtbt_n = 1'b1;
+            addr = '0; ad_true = '0;
+            repeat (2) @(posedge sclk);
+        end
+    endtask
+
+    // arm-then-commit convenience (both word writes, the BkEmu test's setMode)
+    task smk_mode(input [15:0] value, input [159:0] tag);
+        begin
+            smk_write(16'o000006, 1'b0, 1'b0, tag);
+            smk_write(value,      1'b0, 1'b0, tag);
+        end
+    endtask
+
+    // check + the smk_ro flag (only meaningful alongside MK_EXT)
+    task check_ext(input [15:0] a, input [3:0] pg, input [2:0] rel,
+                   input ro, input [159:0] tag);
+        begin
+            check(a, MK_EXT, smk_seg(pg, rel, a), tag);
+            if (smk_ro !== ro) begin
+                $display("MAPPER-ERROR %0s: addr=%o smk_ro exp=%b got=%b",
+                         tag, a, ro, smk_ro);
+                errors = errors + 1;
+            end
+        end
+    endtask
+
+    // ---- differential sweep: DUT must equal the smk_en=0 reference ---------
+    task sweep_diff(input [159:0] tag);
+        integer a;
+        begin
+            for (a = 0; a < 65536; a = a + 1) begin
+                addr = a[15:0]; #1;
+                if (kind !== kind_ref || phys !== phys_ref
+                    || smk_ro !== 1'b0) begin
+                    $display("MAPPER-ERROR %0s: addr=%o dut kind=%0d phys=%h ro=%b ref kind=%0d phys=%h",
+                             tag, a, kind, phys, smk_ro, kind_ref, phys_ref);
+                    errors = errors + 1;
+                end
+            end
+        end
+    endtask
+
+    // one std-passthrough address: the SMK-mode DUT must equal the reference
+    task check_std(input [15:0] a, input [159:0] tag);
+        begin
+            addr = a; #1;
+            if (kind !== kind_ref || phys !== phys_ref || smk_ro !== 1'b0) begin
+                $display("MAPPER-ERROR %0s: addr=%o dut kind=%0d phys=%h ro=%b ref kind=%0d phys=%h",
+                         tag, a, kind, phys, smk_ro, kind_ref, phys_ref);
+                errors = errors + 1;
+            end
+        end
+    endtask
 
     integer p;
     initial begin
@@ -206,6 +323,181 @@ module mapper_tb;
         #1;
         check(16'o040000, MK_RAM037, ram_page(3'd0, 16'o040000), "dclo win0=0");
         check(16'o100000, MK_RAM037,    ram_page(3'd0, 16'o100000), "dclo rom off");
+
+        // ==================== Phase-8 SMK512 sections =======================
+        // State on entry: bk11 mode, banking config 0, smk_en = 0.
+
+        // ---- S0. smk_en=0 baseline: DUT == reference everywhere ------------
+        sweep_diff("S0 bk11 diff smk-off");
+
+        // ---- S1. disabled-time 177130 writes must not even snoop -----------
+        smk_write(16'o000006, 1'b0, 1'b0, "S1 arm smk-off");
+        smk_write(16'o000120, 1'b0, 1'b0, "S1 commit smk-off");
+        sweep_diff("S1 bk11 diff after off-writes");
+        sweep_bk10("S1 bk10 sweep after off-writes");
+        model_bk11 = 1'b1; smk_en = 1'b1; #1;
+        // layout must still be the SYS reset default, NOT the RAM10 above
+        check(16'o100000, MK_NONE, '0, "S1 seg0 still SYS");
+        check_ext(16'o120000, 4'd0, 3'd6, 1'b0, "S1 seg2 still SYS");
+
+        // ---- S2. bk10 immunity with smk_en=1 (SMK is BK-0011M-only) --------
+        model_bk11 = 1'b0; #1;
+        sweep_diff("S2 bk10 diff smk-on");
+        smk_write(16'o000006, 1'b0, 1'b0, "S2 arm bk10");
+        smk_write(16'o000120, 1'b0, 1'b0, "S2 commit bk10");
+        model_bk11 = 1'b1; #1;
+        check(16'o100000, MK_NONE, '0, "S2 bk10 write no snoop");
+        check_ext(16'o120000, 4'd0, 3'd6, 1'b0, "S2 seg2 still SYS");
+
+        // ---- S3. SYS reset-default segment boundaries (page 0) -------------
+        check(16'o100000, MK_NONE, '0, "S3 SYS seg0 lo");
+        check(16'o117776, MK_NONE, '0, "S3 SYS seg1 hi");
+        check_ext(16'o120000, 4'd0, 3'd6, 1'b0, "S3 SYS seg2 lo");
+        check_ext(16'o137776, 4'd0, 3'd7, 1'b0, "S3 SYS seg3 hi");
+        check_ext(16'o140000, 4'd0, 3'd0, 1'b0, "S3 SYS seg4 lo");
+        check_ext(16'o157776, 4'd0, 3'd1, 1'b0, "S3 SYS seg5 hi");
+        check(16'o160000, MK_NONE, '0, "S3 SYS seg6 BIOS socket");
+        check(16'o170000, MK_NONE, '0, "S3 SYS seg7 BIOS socket");
+        check(16'o177600, MK_NONE, '0, "S3 io page untouched");
+        check(16'o077776, MK_RAM037, ram_page(3'd0, 16'o077776), "S3 win0 untouched");
+        check(16'o020000, MK_RAM037, ram_page(3'd6, 16'o020000), "S3 page6 untouched");
+
+        // ---- S4. the two-phase strobe protocol ------------------------------
+        smk_write(16'o000120, 1'b0, 1'b0, "S4 commit w/o arm");
+        check(16'o100000, MK_NONE, '0, "S4 no commit w/o arm");
+        smk_write(16'o000006, 1'b0, 1'b0, "S4 arm");
+        // low nibble 6 with junk upper bits: RE-ARMS instead of committing
+        smk_write(16'o170006, 1'b0, 1'b0, "S4 re-arm junk upper");
+        check(16'o100000, MK_NONE, '0, "S4 re-arm did not commit");
+        smk_write(16'o000120, 1'b0, 1'b0, "S4 commit RAM10");
+        check_ext(16'o100000, 4'd0, 3'd0, 1'b0, "S4 RAM10 seg0");
+        check_ext(16'o160000, 4'd0, 3'd6, 1'b0, "S4 RAM10 seg6");
+        check_ext(16'o170000, 4'd0, 3'd7, 1'b0, "S4 RAM10 seg7 lo");
+        check_ext(16'o176776, 4'd0, 3'd7, 1'b0, "S4 RAM10 seg7 top");
+        check(16'o177000, MK_NONE, '0, "S4 seg7 cap lo");
+        check(16'o177576, MK_NONE, '0, "S4 seg7 cap hi");
+
+        // ---- S5. byte-write lane masking (BkEmu writeMemory dispatch) ------
+        // even byte = the raw low byte; the high-lane junk must be masked
+        smk_write(16'h4506, 1'b1, 1'b0, "S5 even-byte arm");
+        smk_write(16'o000160, 1'b0, 1'b0, "S5 word commit SYS");
+        check(16'o100000, MK_NONE, '0, "S5 even-byte arm worked");
+        smk_write(16'o000006, 1'b0, 1'b0, "S5 arm2");
+        smk_write(16'hFF50, 1'b1, 1'b0, "S5 even-byte commit"); // 0x50 = 0o120
+        check_ext(16'o100000, 4'd0, 3'd0, 1'b0, "S5 even-byte commit RAM10");
+        // odd byte = value << 8 (data bit 10 = high-lane bit 2); the junk low
+        // lane carries nibble 6 - unmasked it would RE-ARM instead of commit
+        smk_write(16'o000006, 1'b0, 1'b0, "S5 arm3");
+        smk_write({8'o004, 8'h66}, 1'b1, 1'b1, "S5 odd-byte commit");
+        check_ext(16'o140000, 4'd1, 3'd4, 1'b0, "S5 odd-byte HLT11 page1");
+        check(16'o100000, MK_RAM037, ram_page(3'd0, 16'o100000), "S5 HLT11 seg0 std");
+
+        // ---- S6. the 8-mode x 8-seg table, live banking loaded --------------
+        map_write(16'o004000 | (3 << 12) | (5 << 8), 1'b0, 1'b0, 1'b1, "S6 banking");
+        // SYS (0160): +4 rotation, seg0/1 deselected, seg6/7 BIOS
+        smk_mode(16'o000160, "S6 SYS");
+        check(16'o100000, MK_NONE, '0, "S6 SYS seg0");
+        check(16'o110000, MK_NONE, '0, "S6 SYS seg1");
+        check_ext(16'o120000, 4'd0, 3'd6, 1'b0, "S6 SYS seg2");
+        check_ext(16'o130000, 4'd0, 3'd7, 1'b0, "S6 SYS seg3");
+        check_ext(16'o140000, 4'd0, 3'd0, 1'b0, "S6 SYS seg4");
+        check_ext(16'o150000, 4'd0, 3'd1, 1'b0, "S6 SYS seg5");
+        check(16'o160000, MK_NONE, '0, "S6 SYS seg6");
+        check(16'o170000, MK_NONE, '0, "S6 SYS seg7");
+        // STD10 (060)
+        smk_mode(16'o000060, "S6 STD10");
+        check(16'o100000, MK_NONE, '0, "S6 STD10 seg0");
+        check(16'o110000, MK_NONE, '0, "S6 STD10 seg1");
+        check_ext(16'o120000, 4'd0, 3'd2, 1'b0, "S6 STD10 seg2");
+        check_ext(16'o130000, 4'd0, 3'd3, 1'b0, "S6 STD10 seg3");
+        check_ext(16'o140000, 4'd0, 3'd4, 1'b0, "S6 STD10 seg4");
+        check_ext(16'o150000, 4'd0, 3'd5, 1'b0, "S6 STD10 seg5");
+        check(16'o160000, MK_NONE, '0, "S6 STD10 seg6");
+        check_ext(16'o170000, 4'd0, 3'd7, 1'b0, "S6 STD10 seg7");
+        // RAM10 (0120): identity
+        smk_mode(16'o000120, "S6 RAM10");
+        check_ext(16'o100000, 4'd0, 3'd0, 1'b0, "S6 RAM10 seg0");
+        check_ext(16'o130000, 4'd0, 3'd3, 1'b0, "S6 RAM10 seg3");
+        check_ext(16'o160000, 4'd0, 3'd6, 1'b0, "S6 RAM10 seg6");
+        check_ext(16'o170000, 4'd0, 3'd7, 1'b0, "S6 RAM10 seg7");
+        // ALL (020): +4 rotation over all eight
+        smk_mode(16'o000020, "S6 ALL");
+        check_ext(16'o100000, 4'd0, 3'd4, 1'b0, "S6 ALL seg0");
+        check_ext(16'o130000, 4'd0, 3'd7, 1'b0, "S6 ALL seg3");
+        check_ext(16'o140000, 4'd0, 3'd0, 1'b0, "S6 ALL seg4");
+        check_ext(16'o160000, 4'd0, 3'd2, 1'b0, "S6 ALL seg6");
+        check_ext(16'o170000, 4'd0, 3'd3, 1'b0, "S6 ALL seg7");
+        check(16'o177000, MK_NONE, '0, "S6 ALL seg7 cap");
+        // STD11 (0140): seg0..5 = std (win1 page 5 + BOS top ROM), seg6 BIOS
+        smk_mode(16'o000140, "S6 STD11");
+        check(16'o100000, MK_RAM037, ram_page(3'd5, 16'o100000), "S6 STD11 seg0 std");
+        check_std(16'o137776, "S6 STD11 seg3 std");
+        check_std(16'o140000, "S6 STD11 seg4 std");
+        check_std(16'o157776, "S6 STD11 seg5 std");
+        check(16'o160000, MK_NONE, '0, "S6 STD11 seg6");
+        check_ext(16'o170000, 4'd0, 3'd7, 1'b0, "S6 STD11 seg7");
+        // RAM11 (040): seg0..3 std, seg4..7 SMK
+        smk_mode(16'o000040, "S6 RAM11");
+        check_std(16'o100000, "S6 RAM11 seg0 std");
+        check_std(16'o137776, "S6 RAM11 seg3 std");
+        check_ext(16'o140000, 4'd0, 3'd4, 1'b0, "S6 RAM11 seg4");
+        check_ext(16'o170000, 4'd0, 3'd7, 1'b0, "S6 RAM11 seg7");
+        // HLT10 (0100): identity, seg0 READ-ONLY
+        smk_mode(16'o000100, "S6 HLT10");
+        check_ext(16'o100000, 4'd0, 3'd0, 1'b1, "S6 HLT10 seg0 RO");
+        check_ext(16'o107776, 4'd0, 3'd0, 1'b1, "S6 HLT10 seg0 RO hi");
+        check_ext(16'o110000, 4'd0, 3'd1, 1'b0, "S6 HLT10 seg1 rw");
+        check_ext(16'o170000, 4'd0, 3'd7, 1'b0, "S6 HLT10 seg7");
+        // HLT11 (0): seg0..3 std, seg4..7 SMK
+        smk_mode(16'o000000, "S6 HLT11");
+        check_std(16'o100000, "S6 HLT11 seg0 std");
+        check_ext(16'o140000, 4'd0, 3'd4, 1'b0, "S6 HLT11 seg4");
+        // STD11 + a window-1 ROM overlay / empty socket through the std path
+        map_write(16'o004000 | 16'o001, 1'b0, 1'b0, 1'b1, "S6 overlay 001");
+        smk_mode(16'o000140, "S6 STD11+overlay");
+        check(16'o100000, MK_ROM, rom_bank(2'd0, 16'o100000), "S6 STD11 overlay");
+        check_std(16'o120000, "S6 STD11 overlay diff");
+        map_write(16'o004000 | 16'o010, 1'b0, 1'b0, 1'b1, "S6 overlay 010 empty");
+        check(16'o100000, MK_NONE, '0, "S6 STD11 empty socket");
+        // ...and banking writes must not have disturbed the SMK registers
+        check_ext(16'o170000, 4'd0, 3'd7, 1'b0, "S6 banking kept SMK");
+        map_write(16'o004000, 1'b0, 1'b0, 1'b1, "S6 banking reset");
+
+        // ---- S7. page-bit scatter {v0, v3, v2, v10} -------------------------
+        smk_mode(16'o002120, "S7 page1 v10");
+        check_ext(16'o100000, 4'd1, 3'd0, 1'b0, "S7 page1 seg0");
+        check_ext(16'o170000, 4'd1, 3'd7, 1'b0, "S7 page1 seg7");
+        smk_mode(16'o000124, "S7 page2 v2");
+        check_ext(16'o100000, 4'd2, 3'd0, 1'b0, "S7 page2 seg0");
+        smk_mode(16'o000130, "S7 page4 v3");
+        check_ext(16'o100000, 4'd4, 3'd0, 1'b0, "S7 page4 seg0");
+        smk_mode(16'o000121, "S7 page8 v0");
+        check_ext(16'o100000, 4'd8, 3'd0, 1'b0, "S7 page8 seg0");
+        smk_mode(16'o002135, "S7 page15 all");
+        check_ext(16'o100000, 4'd15, 3'd0, 1'b0, "S7 page15 seg0");
+        check_ext(16'o176776, 4'd15, 3'd7, 1'b0, "S7 page15 seg7 top");
+
+        // ---- S9. DCLO: -> SYS, page 0, strobe DISARMED ----------------------
+        smk_write(16'o000006, 1'b0, 1'b0, "S9 arm before DCLO");
+        @(negedge sclk) rst = 1'b1;
+        repeat (2) @(posedge sclk);
+        @(negedge sclk) rst = 1'b0;
+        #1;
+        smk_write(16'o000120, 1'b0, 1'b0, "S9 post-DCLO commit attempt");
+        check(16'o100000, MK_NONE, '0, "S9 DCLO disarmed strobe");
+        check_ext(16'o120000, 4'd0, 3'd6, 1'b0, "S9 DCLO -> SYS");
+
+        // ---- S10. enable/model flips are decode-only (content kept) ---------
+        smk_mode(16'o000124, "S10 RAM10 page2");
+        check_ext(16'o100000, 4'd2, 3'd0, 1'b0, "S10 set");
+        smk_en = 1'b0; #1;
+        sweep_diff("S10 diff smk-off again");
+        smk_en = 1'b1; #1;
+        check_ext(16'o100000, 4'd2, 3'd0, 1'b0, "S10 dip flip kept");
+        model_bk11 = 1'b0; #1;
+        sweep_diff("S10 bk10 diff");
+        model_bk11 = 1'b1; #1;
+        check_ext(16'o100000, 4'd2, 3'd0, 1'b0, "S10 model flip kept");
 
         if (errors == 0) $display("COSIM PASS");
         else             $display("COSIM FAIL (%0d errors)", errors);

@@ -141,6 +141,7 @@ module ref014_irq_soc_tb;
         .sel1_n   (sel[1]),          // CPU nSEL1/nSEL2 register selects
         .sel2_n   (sel[2]),
         .model_bk11(1'b0),           // BK-0010 mode: mapper = bit-identical pass-through
+        .smk_en(1'b0),               // no SMK512 (never floating: X would poison)
         .boot_active(1'b0),
         .bw_req   (1'b0),
         .bw_addr  ({AB{1'b0}}),
