@@ -151,12 +151,13 @@ module qbus_mem #(
     logic [1:0]           mkind;
     logic [ADDR_BITS-1:0] mphys;
     logic                 bank_wr;
-    logic                 m_smk_ro;
+    logic                 m_smk_ro, m_smk_wo;
     mem_mapper #(.ADDR_BITS(ADDR_BITS)) u_map (
         .sclk(sclk), .rst(reset), .model_bk11(model_bk11), .smk_en(smk_en),
         .sync_n(sync_n), .dout_n(dout_n), .wtbt_n(wtbt_n), .sel1_n(sel1_n),
         .ad_true(~ad_n), .addr0(addr[0]), .bank_wr(bank_wr),
-        .addr(addr), .kind(mkind), .phys(mphys), .smk_ro(m_smk_ro)
+        .addr(addr), .kind(mkind), .phys(mphys), .smk_ro(m_smk_ro),
+        .smk_wo(m_smk_wo)
     );
 
     wire sel_ram = !sync_n && (mkind == MK_RAM037);
@@ -172,8 +173,39 @@ module qbus_mem #(
     // AND write - an external controller's RAM is NOT 037-fronted/cycle-stolen.
     // Deliberately NOT in ext_ram: a15_037 stays high, so the 037 treats the
     // access like ROM/IO and never grants or replies (the FSM is uncontested).
-    // m_smk_ro (HLT10 seg 0) withholds the write reply -> qbto -> trap 4.
+    // m_smk_ro (HLT10 seg 0 / the ALL-mode seg-7 extent) withholds the write
+    // reply -> qbto -> trap 4; m_smk_wo (the HLT-mode write-only extent)
+    // withholds the READ reply the same way.
     wire sel_ext = !sync_n && (mkind == MK_EXT);
+
+    // ---- Phase-8 increment 2: the SMK I/O-page overlay policy ---------------
+    // In SYS mode the rom7 BIOS window / in the extent modes the seg-7 SMK RAM
+    // reach INTO the I/O page 177600-177777 (the mapper translates uniformly;
+    // BkEmu covers the whole segment). The real bus wire-ORs the SMK's data
+    // with whatever register also replies (BkEmu Computer.readMemory ORs
+    // memory and device reads) - the FSM below reproduces that by latching
+    // io_word | ram_rdata and driving the merged word itself (u_dp fetches
+    // via rd_noe but never drives - single on-chip driver, no pad fight).
+    // TWO CARVE-OUTS (documented deviations from the uniform overlay):
+    //  * 177700-177717 (cpu_blk): the vm1 decodes this block itself
+    //    (sel177x), self-replies AND drives read data for 177700-177712 -
+    //    an external reply/drive is a guaranteed ad_n fight (the Phase-5
+    //    177700-13 lesson). Never replied or driven; the boot-critical
+    //    177716/177714 reads are NOT affected - they ride the existing
+    //    sel_io (nSEL) reply whose data simply gains the merge term.
+    //    Extent WRITES here are posted to SMK RAM silently (u_dp write leg,
+    //    bus-passive - the vm1 self-replies; BkEmu broadcast-write).
+    //  * 177660-177667 READS (kbd_blk): bk_kbd014 (177660-663) and the 037
+    //    (177664 scroll) reply and push-pull-drive their own read data - a
+    //    second driver is a pad fight, and this FSM never sees their data to
+    //    merge it (the smk64 replica carves the same read hole). Extent
+    //    writes ARE claimed (no data fight; the OC RPLY double-assert with
+    //    the kbd's own 177660 write reply is benign wire-AND).
+    wire ovl_zone  = (addr >= IO_BASE);
+    wire cpu_blk   = (addr[15:4] == 12'hFFC);         // 177700-177717
+    wire kbd_blk   = (addr[15:3] == 13'h1FF6);        // 177660-177667
+    wire ovl_rd_ok = !ovl_zone || (!cpu_blk && !kbd_blk);
+    wire ovl_wr_ok = !ovl_zone || !cpu_blk;
     // ---- I/O decode: the CPU's own nSEL1/nSEL2 register-select pins --------
     // The only I/O the CPU delegates to us is its nSEL pair: nSEL1 = 177716/17
     // (system register), nSEL2 = 177714/15 (programmable parallel port -
@@ -219,13 +251,18 @@ module qbus_mem #(
     // ---- 177130: SMK512 memory-layout register (Phase 8) ------------------
     // The positive decode the Phase-8 note above anticipated, carved out of
     // the ROM window exactly like sel_vreg: with the SMK present a WRITE to
-    // 177130/1 is replied (fixed N_SMKREG) and snooped by mem_mapper; reads
-    // are NOT selected - BkEmu's SMK register is write-only and no floppy
-    // controller is modelled, so a read keeps bus-timing-out -> trap 4.
-    // (The mapper translates 177130 itself MK_NONE under every SMK mode -
-    // capped seg 7 - so this decode never fights sel_rom/sel_ext; with the
-    // SMK absent the decode is dead and 177130 stays plain ROM: reads return
-    // the MSTD word, writes trap - the sim/romwr contract.)
+    // 177130/1 is replied (fixed N_SMKREG) and snooped by mem_mapper.
+    // The refined increment-2 invariant: the mapper never claims the WRITE
+    // reply at 177130 - this decode is the sole write owner. The READ side is
+    // mode-dependent: under SYS the rom7 BIOS window covers it (MK_ROM, reads
+    // return BIOS data); in the HLT modes the write-only extent covers it
+    // (MK_EXT+smk_wo, reads NOT replied); everywhere else the capped extent
+    // leaves it MK_NONE - reads bus-time-out -> trap 4 (BkEmu: register
+    // read = BUS_ERROR, memory per layout). A HLT-mode commit write also
+    // posts to SMK RAM through u_dp on the PRE-commit translate (BkEmu's
+    // memory-then-device write order), so a mode write can never re-map its
+    // own in-flight cycle. With the SMK absent the decode is dead and 177130
+    // stays plain ROM: reads return the MSTD word, writes trap (sim/romwr).
     wire sel_smkreg = model_bk11 && smk_en && !sync_n
                       && (addr[15:1] == 15'(16'o177130 >> 1));
 
@@ -272,15 +309,22 @@ module qbus_mem #(
     wire                 ram_rdata_oe;
 
     // MK_EXT rides this same datapath: read+write segments through the RAM
-    // feed (byte lanes / DATIO already correct there), the HLT10 read-only
-    // seg 0 through the ROM-read feed - its writes are then structurally
-    // never issued to the SDRAM (cpu_sdram_dp's is_write needs sel_ram),
-    // matching BkEmu's not-written semantics.
+    // feed (byte lanes / DATIO already correct there), the read-only cases
+    // (HLT10 seg 0 / ALL extent) through the ROM-read feed - their writes are
+    // then structurally never issued to the SDRAM (cpu_sdram_dp's is_write
+    // needs sel_ram/sel_ramw), matching BkEmu's not-written semantics - and
+    // the HLT write-only extent through sel_ramw, the mirror leg whose reads
+    // are structurally never fetched. rd_noe marks I/O-page overlay reads:
+    // u_dp fetches the word but the wait FSM below drives the OR-merged data
+    // (see the carve-out block above). Note the extent write posts even in
+    // cpu_blk (bus-passive broadcast; only the REPLY is carved out there).
     cpu_sdram_dp #(.ADDR_BITS(ADDR_BITS), .DQ_BITS(DQ_BITS)) u_dp (
         .clk(sclk), .rst_n(~reset),
         .sync_n(sync_n), .din_n(din_n), .dout_n(dout_n), .wtbt_n(wtbt_n),
-        .sel_ram(sel_ram | (sel_ext & ~m_smk_ro)),
+        .sel_ram(sel_ram | (sel_ext & ~m_smk_ro & ~m_smk_wo)),
         .sel_romr(sel_romx | (sel_ext & m_smk_ro)),
+        .sel_ramw(sel_ext & m_smk_wo),
+        .rd_noe((sel_romx | sel_ext) & ovl_zone),
         .addr(addr), .phys(mphys), .ad_true(~ad_n),
         .rdata(ram_rdata), .rdata_oe(ram_rdata_oe), .mem_ready(mem_ready),
         .req(dp_req), .we(dp_we), .addr_o(dp_addr), .wdata_o(dp_wdata), .be_o(dp_be),
@@ -366,11 +410,14 @@ module qbus_mem #(
     // sel_io still carries I/O reads AND writes (177714/177716 reply+ignore is
     // unchanged); the ROM read path, done-gate and sel_vreg write are untouched.
     // Phase 8: SMK RAM (sel_ext) contributes reads AND writes - EXCEPT a write
-    // to the HLT10 read-only segment 0 (m_smk_ro), which falls out un-replied
-    // and traps by the exact ROM-write mechanism (incl. the DATIO write half -
-    // see the S_REPLY exit note).
-    wire selected = (sel_rom & is_read) | sel_io
-                  | (sel_ext & (is_read | (is_write & ~m_smk_ro)));
+    // to a read-only case (m_smk_ro: HLT10 seg 0 / ALL extent) and a read of
+    // the write-only extent (m_smk_wo), which fall out un-replied and trap by
+    // the exact ROM-write mechanism (incl. the DATIO write half - see the
+    // S_REPLY exit note). The ovl_* carve-outs (see their block) keep the
+    // overlay/extent replies out of the vm1-internal and kbd-owned addresses.
+    wire selected = (sel_rom & is_read & ovl_rd_ok) | sel_io
+                  | (sel_ext & ((is_read  & ~m_smk_wo & ovl_rd_ok)
+                               |(is_write & ~m_smk_ro & ovl_wr_ok)));
 
     always_ff @(posedge cpu_clk) begin
         fetch_stb <= 1'b0;
@@ -399,9 +446,17 @@ module qbus_mem #(
                         // cycle accuracy - see qbus_pkg). The 3-bit wcnt caps
                         // any N at 9. (Window-1 RAM no longer lands here - it
                         // is MK_RAM037, 037-owned, done-gated on mem_ready.)
+                        // MK_EXT takes N_EXT only in the MEM region: an
+                        // I/O-page extent access uses the N_ROM (I/O-family)
+                        // count, because at 177716 the 037's start-vector
+                        // assist asserts RPLY EARLY (wire-AND) and the vm1's
+                        // data-sample point then sits a fixed distance after
+                        // that assert - the N_EXT count landed the merged
+                        // word AFTER the sample (found in sim: the ALL-mode
+                        // 177716 read returned only the AD15 bit).
                         wcnt  <= sel_vreg   ? 3'(N_VREG-2)
                                : sel_smkreg ? 3'(N_SMKREG-2)
-                               : sel_ext    ? 3'(N_EXT-2)
+                               : (sel_ext && !ovl_zone) ? 3'(N_EXT-2)
                                : 3'(N_ROM-2);
                         state <= S_WAIT;
                     end
@@ -418,7 +473,16 @@ module qbus_mem #(
                         // golden; no oracle wrote 177716 before it).
                         state <= S_IDLE;
                     end else if (wcnt == 0) begin
-                        if (((sel_romx && is_read) || sel_ext) && !mem_ready) begin
+                        // What did u_dp actually ISSUE for this cycle? Only
+                        // those legs may done-gate or merge: a direction the
+                        // mapper flags off (an smk_wo read / smk_ro write)
+                        // never issues, and gating on raw sel_ext there would
+                        // hold RPLY forever when sel_io coexists in the I/O
+                        // page (e.g. a HLT-mode 177716 read: SEL1 replies,
+                        // the write-only extent fetches nothing).
+                        if (((sel_romx || (sel_ext && !m_smk_wo)) && is_read
+                             || (sel_ext && !m_smk_ro && is_write))
+                            && !mem_ready) begin
                             // done-gate: the SDRAM word is late - hold RPLY
                             // (extends the cycle) instead of replying over stale
                             // data / an unposted write. Covers ROM reads and SMK
@@ -429,9 +493,22 @@ module qbus_mem #(
                         end else begin
                             reply <= 1'b1;
                             if (is_read) begin
-                                rdata      <= rd_romio;
-                                // SDRAM ROM/SMK data: u_dp drives; I/O: this FSM
-                                drive_data <= !(sel_romx || sel_ext);
+                                // I/O-page overlay/extent reads: the OR-merge
+                                // (io_word | the fetched SDRAM word) - the
+                                // open-collector wire-OR BkEmu models by OR-ing
+                                // memory and device reads. THE boot read: at
+                                // 177716 under SYS this returns BIOS[0o7716] |
+                                // SEL1 = 166400-based -> the start PC. Mem-
+                                // region ROM/SMK reads stay u_dp-driven. The
+                                // merge term is the issued-read condition
+                                // (never a stale rd_hold from a wo extent).
+                                rdata      <= rd_romio
+                                            | (((sel_romx | (sel_ext & ~m_smk_wo))
+                                                & ovl_zone)
+                                               ? ram_rdata : 16'h0000);
+                                // SDRAM ROM/SMK data: u_dp drives; I/O incl.
+                                // the merged overlay reads: this FSM
+                                drive_data <= !((sel_romx || sel_ext) && !ovl_zone);
                                 fetch_stb  <= 1'b1;
                             end
                             // 177716 write-flag: cleared after read (rdata

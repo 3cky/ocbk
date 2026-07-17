@@ -18,6 +18,12 @@
 # requires the 140000 start-vector reply, a 177662 write and the screen
 # clear, no X throughout (+warmreset is bk10-only, ignored here).
 #
+# ./run_boot_check.sh +smk (Phase 8) cold-boots the real SMK512 BIOS:
+# +bk11 stack with smk_en=1 and the BIOS image at SDRAM 0x3A000; requires
+# the merged 166400 start vector (the rom7 register-space overlay) and the
+# BIOS executing from the rom6 window, no X. Deliberately modest - no IDE
+# engine yet, so no screen/disk activity is required.
+#
 set -euo pipefail
 cd "$(dirname "$0")"
 

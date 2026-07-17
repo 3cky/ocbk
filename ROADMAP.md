@@ -662,20 +662,44 @@ is not a single peripheral:
   HLT11 incl. the SYS/ALL +4 rotation and the BOS/second-window deselects);
   BkEmu `SmkMemoryManager` beat MiSTer on every divergence (reset default
   SYS not STD11, low-nibble strobe compare, per-BkEmu byte-lane masking).
-  **Deliberately deferred:** the SMK BIOS ROM segments are `MK_NONE` (trap 4)
-  until the BIOS blob lands — **DIP-8-ON is non-booting on hardware** (the
-  SYS reset layout deselects BOS and puts power-on garbage at the 140000
-  start vector; the Phase-7 DIP-1 precedent); seg 7 is capped at its
-  0177000 non-restricted extent in ALL modes (the per-mode extents into the
-  I/O page — ALL readable / HLT writable, the 177674/76 HALT-debugger catch
-  — go with the BIOS/IDE increment); bk10+SMK (BkEmu `BK_0010_SMK512`);
-  the SMK-RAM power-on DRAM pattern (`ram_init`). Oracles:
-  `sim/run_mapper.sh` (differential smk_en=0 reference + the directed
-  contract, mutation-tested ×5) and `sim/smk/run.sh` (SoC functional oracle
-  with a DCLO-replay second pass, mutation-tested — see its header for the
-  one documented masked mutation).
-- **SMK BIOS ROM** — the code that drives the IDE; a few KB in the SDRAM ROM
-  region alongside the other ROM images.
+  **Deliberately deferred (now landed in increment 2 — see the next
+  bullet):** the BIOS ROM windows and the seg-7 extents. Still deferred:
+  bk10+SMK (BkEmu `BK_0010_SMK512`); the SMK-RAM power-on DRAM pattern
+  (`ram_init`). Oracles: `sim/run_mapper.sh` (differential smk_en=0
+  reference + the directed contract, mutation-tested) and `sim/smk/run.sh`
+  (SoC functional oracle with a DCLO-replay second pass, mutation-tested).
+- **SMK BIOS ROM + boot** — ✅ **increment 2 DONE IN SIM 2026-07-17**: ONE
+  4 KB image (`mem/roms/smk512_v205.rom`, BkEmu res/raw) backing BOTH
+  selectable windows — rom6 @160000 (SYS/STD10/STD11) and rom7 @170000 (SYS
+  only) — appended to the bk11 blob (40960 → 43008 words, SDRAM
+  `SMK_BIOS_BASE = 0x3A000`; no third EPCS pass). **The boot hack**
+  (user-lore-confirmed, verified against the image): in SYS the rom7 window
+  covers the FULL 0170000–0177777 *including the register space*, so the
+  vm1's initial-start 177716 read returns `bios[0o7716] | SEL1` (the
+  open-collector wire-OR; BkEmu `Computer.readMemory` ORs memory and device
+  reads) and PC ← & 177400 = **166400**, inside rom6 — **DIP-8-ON now
+  boots the SMK BIOS**. qbus_mem reproduces the merge by latching
+  `io_word | ram_rdata` and driving it itself (u_dp fetches via an
+  issue-time `rd_noe`/`was_drive` inhibit — the pad-OE rule), with two
+  carve-outs (documented deviations): 177700–177717 (vm1-internal; never
+  replied/driven, extent writes still posted silently) and 177660–177667
+  reads (kbd/037 drive their own data; the smk64 replica carves the same
+  hole). Seg-7 restricted extent per mode: ALL = readable (`smk_ro`),
+  HLT10/HLT11 = writable (`smk_wo` — the 177674/76 HALT-debugger catch:
+  the vm1's HALT-entry stores land in SMK RAM, the vector comes from
+  160002/4 = SMK RAM seg 6), others capped → MK_NONE. The 177130 invariant
+  refined: the mapper never claims the WRITE there (SYS reads return BIOS
+  data). I/O-page MK_EXT accesses take the N_ROM count (the 037's
+  start-vector assist replies EARLY at 177716; N_EXT landed the merged
+  word after the vm1's sample point — found in sim). With no IDE engine
+  the BIOS's drive probes bus-time-out — hardware behavior past the boot
+  banner is whatever the real BIOS does with an absent drive (the IDE
+  increment raises this). Oracles: `sim/run_mapper.sh` (BIOS windows,
+  extents, boundary — mutation-tested ×10 total) and `sim/smk/run.sh`
+  (boots through the REAL mechanism with a synthetic BIOS image, overlay
+  merges, extents, the authentic СТОП/HALT-entry leg, DCLO replay —
+  mutation-tested, incl. the increment-1 masked mutation now KILLED);
+  `sim/run_boot_check.sh +smk` cold-boots the real BIOS on the full SoC.
 - **Open point:** the extension's cycle-stealing / RPLY behaviour on this window
   interacts with the Phase-7 dynamic-RPLY-ownership question — settle both
   together, reference-tb-first.
@@ -731,12 +755,13 @@ experiment broke right audio; oracle-tested). The Phase-7 50 Hz EVNT/IRQ2
 frame interrupt is wired (sim-proven, bk11-only), and the BK-0011M ROM set now
 rides a second EPCS blob with SYS_START 140000 — **Phase 7 is done and
 confirmed on hardware 2026-07-16: BK-0011M boots and runs BOS, the reset
-button switches models**. Phase 8 has started: increment 1 — the SMK512
-512 KB segmented RAM extension on DIP 8 (BK-0011M only, sim-proven, deliberately
-non-booting on hardware until the SMK BIOS blob) — is in (see the Phase-8
-section). Remaining deferred items: the SMK BIOS/IDE increments, `N_VREG`/
-`N_EXT`/`N_SMKREG` calibration and 0011M cycle-accuracy vs a reference
-(reference-tb-first).*
+button switches models**. Phase 8 has started: increment 1 (the SMK512
+512 KB segmented RAM extension on DIP 8, BK-0011M only) and increment 2 (the
+SMK BIOS ROM + the SYS register-space boot overlay — DIP-8-ON boots the SMK
+BIOS through the merged 177716 start vector) are sim-proven (see the Phase-8
+section). Remaining deferred items: the SMK IDE/SD increment, bk10+SMK, the
+SMK-RAM ram_init pattern, `N_VREG`/`N_EXT`/`N_SMKREG` calibration and 0011M
+cycle-accuracy vs a reference (reference-tb-first).*
 *See also the project memory notes `bk-on-1chipmsx-feasibility` (bring-up history),
 `bk-video-pipeline-decision` (Phase 3/4 design) and `bkemu-reference-and-roms`
 (BkEmu is the canonical BK reference; ROMs committed in-tree).*

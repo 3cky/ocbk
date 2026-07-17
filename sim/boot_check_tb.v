@@ -37,6 +37,16 @@
 // profile (e.g. a RAM test before the clear) needs it. +warmreset is
 // bk10-only for now (ignored under +bk11).
 //
+// +smk (Phase 8): cold-boot the REAL SMK512 BIOS - +bk11 stack plus
+// smk_en=1, the 43008-word blob incl. the BIOS image at SDRAM 0x3A000, a
+// deepened SDRAM model (SMK RAM at 0x40000+, left zeroed - real hardware
+// powers on garbage there). Checks the boot hack end-to-end: the first
+// 177716 read must carry the merged 166400 vector (rom7 register-space
+// overlay | SEL1), then >= SMK_FETCH_TARGET DIN fetches from the rom6
+// window (the BIOS EXECUTING from ROM), no X throughout. DELIBERATELY
+// MODEST: no IDE engine exists yet, the BIOS's drive probes bus-time-out,
+// so no screen/disk activity is required (the IDE increment raises this).
+//
 // Prints BOOTCHK-* lines; run_boot_check.sh greps for the final verdict.
 //
 `timescale 1ns / 1ps
@@ -49,10 +59,18 @@ module boot_check_tb;
     localparam int DW = 16;
     localparam integer VID_TARGET = 200;    // video-RAM writes to declare victory
     localparam integer TRACE_N    = 5000;   // bus transactions to dump
+    // +smk: DIN fetches from the rom6 BIOS window to declare victory (the
+    // modest criterion - with no IDE engine the BIOS's drive probes just
+    // bus-time-out, so no screen/disk activity is required)
+    localparam integer SMK_FETCH_TARGET = 200;
 
-    // ---- model select (+bk11 = BK-0011M BOS boot) ------------------------------
-    reg model11;
-    initial model11 = $test$plusargs("bk11");
+    // ---- model select (+bk11 = BK-0011M BOS boot; +smk = BK-0011M + SMK512,
+    //      boots the REAL SMK BIOS through the 177716 overlay) ---------------
+    reg model11, smk;
+    initial begin
+        smk     = $test$plusargs("smk");
+        model11 = $test$plusargs("bk11") || smk;
+    end
 
     // ---- clocks (as ref037_soc_video_tb / bk11_soc_tb) --------------------------
     // 037 CLKIN enables on the fixed /16 chain; CPU clock = cpu_clkgen replica
@@ -217,7 +235,7 @@ module boot_check_tb;
         .sel1_n   (sel[1]),          // CPU nSEL1/nSEL2 register selects
         .sel2_n   (sel[2]),
         .model_bk11(model11),        // bk10 pass-through, or +bk11 banking
-        .smk_en(1'b0),               // no SMK512 (never floating: X would poison)
+        .smk_en(smk),                // +smk only (never floating: X would poison)
         .boot_active(1'b0),
         .bw_req   (1'b0),
         .bw_addr  ({AB{1'b0}}),
@@ -255,7 +273,8 @@ module boot_check_tb;
     always @(posedge clk)     irq2_sr  <= {irq2_sr[0], irq2_lvl};
     assign n_irq2 = ~irq2_sr[1];
 
-    sdram_model u_mem (
+    // deepened for +smk (SMK RAM = SDRAM 0x40000-0x7FFFF); harmless otherwise
+    sdram_model #(.MEM_WORDS(1<<19)) u_mem (
         .clk(sys_clk), .cke(s_cke), .cs_n(s_cs_n), .ras_n(s_ras_n), .cas_n(s_cas_n),
         .we_n(s_we_n), .ba(s_ba), .addr(s_addr), .dqm(s_dqm), .dq(s_dq)
     );
@@ -315,11 +334,39 @@ module boot_check_tb;
     always @(posedge din) if (aclo === 1'b1 && addr == 16'o177716
                               && !vec_checked) begin
         vec_checked = 1;
-        if (model11 && (~ad & 16'o140000) !== 16'o140000) begin
+        if (smk && (~ad & 16'o177400) !== 16'o166400) begin
+            // the SMK boot hack: the rom7 overlay word ORs onto SEL1 and the
+            // start PC must come out 166400 (inside the rom6 BIOS window)
+            $display("BOOTCHK-VEC-ERROR: 177716 read = %06o, no 166400 SMK vector",
+                     ~ad);
+            xerrs = xerrs + 1;
+        end else if (model11 && (~ad & 16'o140000) !== 16'o140000) begin
             $display("BOOTCHK-VEC-ERROR: 177716 read = %06o, no 140000 vector", ~ad);
             xerrs = xerrs + 1;
         end else if (model11)
             $display("BOOTCHK: 177716 start-vector read = %06o", ~ad);
+    end
+
+    // ---- +smk check: the BIOS must EXECUTE from the rom6 window ---------------
+    integer bios_fetches = 0;
+    always @(negedge din)
+        if (aclo === 1'b1 && smk
+            && addr >= 16'o160000 && addr < 16'o170000) begin
+            bios_fetches = bios_fetches + 1;
+            if (bios_fetches == 1 || bios_fetches == SMK_FETCH_TARGET)
+                $display("BOOTCHK: SMK BIOS fetch #%0d at %06o", bios_fetches, addr);
+        end
+    always @(bios_fetches) begin
+        if (smk && bios_fetches >= SMK_FETCH_TARGET) begin
+            if (!vec_checked) begin
+                $display("BOOTCHK-VEC-ERROR: BIOS ran but 177716 never read");
+                xerrs = xerrs + 1;
+            end
+            if (xerrs == 0) $display("BOOTCHK: PASS");
+            else            $display("BOOTCHK: FAIL (%0d X errors)", xerrs);
+            $fclose(tracef);
+            $finish;
+        end
     end
 
     // ---- +warmreset: reboot mid-screen-clear, MONITOR must come back ----------
@@ -374,7 +421,7 @@ module boot_check_tb;
         wr_seen = 0;
         tracef = $fopen("boot_trace.txt", "w");
         $readmemh("../mem/boot_blob_flash.hex", blob, 'h40000);
-        for (ii = 0; ii < (1<<18); ii = ii + 1) u_mem.mem[ii] = 16'o000000;
+        for (ii = 0; ii < (1<<19); ii = ii + 1) u_mem.mem[ii] = 16'o000000;
         // Authentic DRAM power-on pattern in the RAM region, exactly as
         // src/ram_init.sv leaves it (bkemu-QT InitMemoryValues, Board.cpp /
         // Board_11M.cpp): bk10 word = idx[0]^idx[6]^(idx[5:0]==0 & idx!=0)
@@ -395,8 +442,11 @@ module boot_check_tb;
             u_mem.mem[16'h4000 + ii] =
                 {blob['h40008 + 2*ii + 1], blob['h40008 + 2*ii]};
         if (model11) begin                   // +bk11: window-ROM banks + top ROM
+            // 43008 words: incl. the SMK BIOS at 0x3A000 (only reachable
+            // under +smk; SMK RAM itself stays zeroed - real hardware powers
+            // on garbage there and the BIOS must not depend on it)
             $readmemh("../mem/boot_blob11_flash.hex", blob, 'h48000);
-            for (ii = 0; ii < 40960; ii = ii + 1)
+            for (ii = 0; ii < 43008; ii = ii + 1)
                 u_mem.mem['h30000 + ii] =
                     {blob['h48008 + 2*ii + 1], blob['h48008 + 2*ii]};
         end

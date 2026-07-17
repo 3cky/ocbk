@@ -13,24 +13,35 @@
 //  nINIT-preserve is structural (the module has no nINIT port); the
 //  behavioural RESET-instruction check lives in the bk11 SoC oracle.
 //
-//  Phase 8 (SMK512, sections S1-S11): a second DIFFERENTIAL reference
+//  Phase 8 (SMK512, sections S1-S10): a second DIFFERENTIAL reference
 //  instance (dut_ref, smk_en tied 0, identical stimulus) pins "SMK disabled
 //  == bit-identical" over full-64K sweeps in every non-SMK configuration
-//  (smk_en=0 both models, and smk_en=1 in bk10 - the SMK is BK-0011M-only
-//  this increment); the directed sections then walk the BkEmu
-//  SmkMemoryManager contract: the 177130 two-phase strobe protocol
-//  (low-nibble==6 arms, the FOLLOWING write commits mode+page on the strobe
-//  falling edge), the byte-write lane masking (BkEmu writeMemory: odd byte =
-//  value<<8, even byte = raw byte), the 8-mode x 8-segment table incl. the
-//  SYS/ALL +4 rotation, the {v0,v3,v2,v10} page-bit scatter, the seg-7
-//  0177000 cap, HLT10 seg-0 read-only (smk_ro), std-passthrough segs
-//  tracking the live 177716 banking, mutual isolation of the two register
-//  files, DCLO-only reset (-> SYS, strobe disarmed), and enable/model flips
-//  keeping register content.
+//  (smk_en=0 both models, and smk_en=1 in bk10 - the SMK is BK-0011M-only);
+//  the directed sections then walk the BkEmu SmkMemoryManager contract: the
+//  177130 two-phase strobe protocol (low-nibble==6 arms, the FOLLOWING write
+//  commits mode+page on the strobe falling edge), the byte-write lane
+//  masking (BkEmu writeMemory: odd byte = value<<8, even byte = raw byte),
+//  the 8-mode x 8-segment table incl. the SYS/ALL +4 rotation, the
+//  {v0,v3,v2,v10} page-bit scatter, the SMK BIOS ROM windows (increment 2:
+//  rom6 @160000 in SYS/STD10/STD11, rom7 @170000 in SYS spanning the WHOLE
+//  segment incl. the register space - the 177716 boot overlay; one shared
+//  2048-word image at SMK_BIOS_BASE), the per-mode seg-7 restricted extent
+//  0177000-0177777 (ALL readable/smk_ro, HLT10/HLT11 writable/smk_wo,
+//  others capped -> MK_NONE, boundary exact at 177000), 177130 read = BIOS
+//  ROM under SYS (the refined invariant: the mapper never claims the WRITE
+//  there), HLT10 seg-0 read-only (smk_ro), std-passthrough segs tracking
+//  the live 177716 banking, mutual isolation of the two register files,
+//  DCLO-only reset (-> SYS, both BIOS windows live, strobe disarmed), and
+//  enable/model flips keeping register content.
 //  MUTATION-TESTED: swapping the page scatter order, committing on the
 //  arming edge, dropping the seg-7 cap, dropping the odd-byte lane mask
 //  (the S5 junk-low-byte vector re-arms instead of committing), and
 //  breaking a mode's segment mask all fail directed checks here.
+//  Increment-2 mutations (each fails): dropping rom7 from SYS (S3/S6 BIOS
+//  checks), swapping rom6/rom7 selection per mode (S6 STD10), swapping the
+//  extent direction flags (S8 ALL vs HLT10), extent boundary off-by-one
+//  (addr[11:9]==3'b110 - S8 boundary pairs), a wrong SMK_BIOS_BASE bit
+//  (every check_bios phys).
 // ============================================================================
 `timescale 1ns/1ps
 module mapper_tb;
@@ -53,7 +64,7 @@ module mapper_tb;
     wire  [AB-1:0] phys;
 
     logic          smk_en = 1'b0;
-    wire           smk_ro;
+    wire           smk_ro, smk_wo;
 
     integer errors = 0;
 
@@ -61,7 +72,7 @@ module mapper_tb;
         .sclk(sclk), .rst(rst), .model_bk11(model_bk11), .smk_en(smk_en),
         .sync_n(sync_n), .dout_n(dout_n), .wtbt_n(wtbt_n), .sel1_n(sel1_n),
         .ad_true(ad_true), .addr0(addr0), .bank_wr(bank_wr),
-        .addr(addr), .kind(kind), .phys(phys), .smk_ro(smk_ro)
+        .addr(addr), .kind(kind), .phys(phys), .smk_ro(smk_ro), .smk_wo(smk_wo)
     );
 
     // Differential reference: identical stimulus, smk_en hard-tied 0. Its
@@ -69,12 +80,13 @@ module mapper_tb;
     // configuration the primary DUT must match it bit-for-bit over all 64K.
     wire [1:0]    kind_ref;
     wire [AB-1:0] phys_ref;
-    wire          bank_wr_ref, smk_ro_ref;
+    wire          bank_wr_ref, smk_ro_ref, smk_wo_ref;
     mem_mapper #(.ADDR_BITS(AB)) dut_ref (
         .sclk(sclk), .rst(rst), .model_bk11(model_bk11), .smk_en(1'b0),
         .sync_n(sync_n), .dout_n(dout_n), .wtbt_n(wtbt_n), .sel1_n(sel1_n),
         .ad_true(ad_true), .addr0(addr0), .bank_wr(bank_wr_ref),
-        .addr(addr), .kind(kind_ref), .phys(phys_ref), .smk_ro(smk_ro_ref)
+        .addr(addr), .kind(kind_ref), .phys(phys_ref), .smk_ro(smk_ro_ref),
+        .smk_wo(smk_wo_ref)
     );
 
     // ---- one 177716 DOUT window (the write shape qbus_mem's snoop sees) ----
@@ -177,14 +189,32 @@ module mapper_tb;
         end
     endtask
 
-    // check + the smk_ro flag (only meaningful alongside MK_EXT)
-    task check_ext(input [15:0] a, input [3:0] pg, input [2:0] rel,
-                   input ro, input [159:0] tag);
+    // check + both direction flags (only meaningful alongside MK_EXT)
+    task check_extd(input [15:0] a, input [3:0] pg, input [2:0] rel,
+                    input ro, input wo, input [159:0] tag);
         begin
             check(a, MK_EXT, smk_seg(pg, rel, a), tag);
-            if (smk_ro !== ro) begin
-                $display("MAPPER-ERROR %0s: addr=%o smk_ro exp=%b got=%b",
-                         tag, a, ro, smk_ro);
+            if (smk_ro !== ro || smk_wo !== wo) begin
+                $display("MAPPER-ERROR %0s: addr=%o smk_ro exp=%b got=%b smk_wo exp=%b got=%b",
+                         tag, a, ro, smk_ro, wo, smk_wo);
+                errors = errors + 1;
+            end
+        end
+    endtask
+
+    // the common read+write case (wo = 0)
+    task check_ext(input [15:0] a, input [3:0] pg, input [2:0] rel,
+                   input ro, input [159:0] tag);
+        check_extd(a, pg, rel, ro, 1'b0, tag);
+    endtask
+
+    // SMK BIOS ROM window: ONE 2048-word image at SMK_BIOS_BASE, both windows
+    task check_bios(input [15:0] a, input [159:0] tag);
+        begin
+            check(a, MK_ROM, SMK_BIOS_BASE | a[11:1], tag);
+            if (smk_ro !== 1'b0 || smk_wo !== 1'b0) begin
+                $display("MAPPER-ERROR %0s: addr=%o bios flags ro=%b wo=%b",
+                         tag, a, smk_ro, smk_wo);
                 errors = errors + 1;
             end
         end
@@ -197,9 +227,9 @@ module mapper_tb;
             for (a = 0; a < 65536; a = a + 1) begin
                 addr = a[15:0]; #1;
                 if (kind !== kind_ref || phys !== phys_ref
-                    || smk_ro !== 1'b0) begin
-                    $display("MAPPER-ERROR %0s: addr=%o dut kind=%0d phys=%h ro=%b ref kind=%0d phys=%h",
-                             tag, a, kind, phys, smk_ro, kind_ref, phys_ref);
+                    || smk_ro !== 1'b0 || smk_wo !== 1'b0) begin
+                    $display("MAPPER-ERROR %0s: addr=%o dut kind=%0d phys=%h ro=%b wo=%b ref kind=%0d phys=%h",
+                             tag, a, kind, phys, smk_ro, smk_wo, kind_ref, phys_ref);
                     errors = errors + 1;
                 end
             end
@@ -210,9 +240,10 @@ module mapper_tb;
     task check_std(input [15:0] a, input [159:0] tag);
         begin
             addr = a; #1;
-            if (kind !== kind_ref || phys !== phys_ref || smk_ro !== 1'b0) begin
-                $display("MAPPER-ERROR %0s: addr=%o dut kind=%0d phys=%h ro=%b ref kind=%0d phys=%h",
-                         tag, a, kind, phys, smk_ro, kind_ref, phys_ref);
+            if (kind !== kind_ref || phys !== phys_ref
+                || smk_ro !== 1'b0 || smk_wo !== 1'b0) begin
+                $display("MAPPER-ERROR %0s: addr=%o dut kind=%0d phys=%h ro=%b wo=%b ref kind=%0d phys=%h",
+                         tag, a, kind, phys, smk_ro, smk_wo, kind_ref, phys_ref);
                 errors = errors + 1;
             end
         end
@@ -356,9 +387,14 @@ module mapper_tb;
         check_ext(16'o137776, 4'd0, 3'd7, 1'b0, "S3 SYS seg3 hi");
         check_ext(16'o140000, 4'd0, 3'd0, 1'b0, "S3 SYS seg4 lo");
         check_ext(16'o157776, 4'd0, 3'd1, 1'b0, "S3 SYS seg5 hi");
-        check(16'o160000, MK_NONE, '0, "S3 SYS seg6 BIOS socket");
-        check(16'o170000, MK_NONE, '0, "S3 SYS seg7 BIOS socket");
-        check(16'o177600, MK_NONE, '0, "S3 io page untouched");
+        check_bios(16'o160000, "S3 SYS seg6 BIOS");
+        check_bios(16'o167776, "S3 SYS seg6 BIOS hi");
+        check_bios(16'o170000, "S3 SYS seg7 BIOS");
+        // rom7 spans the whole segment incl. the register space - the boot
+        // overlay (qbus_mem carves the reply policy; translation is uniform)
+        check_bios(16'o177600, "S3 SYS io page BIOS overlay");
+        check_bios(16'o177716, "S3 SYS 177716 boot word");
+        check_bios(16'o177776, "S3 SYS io page top");
         check(16'o077776, MK_RAM037, ram_page(3'd0, 16'o077776), "S3 win0 untouched");
         check(16'o020000, MK_RAM037, ram_page(3'd6, 16'o020000), "S3 page6 untouched");
 
@@ -402,8 +438,11 @@ module mapper_tb;
         check_ext(16'o130000, 4'd0, 3'd7, 1'b0, "S6 SYS seg3");
         check_ext(16'o140000, 4'd0, 3'd0, 1'b0, "S6 SYS seg4");
         check_ext(16'o150000, 4'd0, 3'd1, 1'b0, "S6 SYS seg5");
-        check(16'o160000, MK_NONE, '0, "S6 SYS seg6");
-        check(16'o170000, MK_NONE, '0, "S6 SYS seg7");
+        check_bios(16'o160000, "S6 SYS seg6 BIOS");
+        check_bios(16'o170000, "S6 SYS seg7 BIOS");
+        // 177130 under SYS is BIOS ROM on the READ side (the refined
+        // invariant: the mapper never claims the WRITE - MK_ROM is read-only)
+        check_bios(16'o177130, "S6 SYS 177130 read = BIOS");
         // STD10 (060)
         smk_mode(16'o000060, "S6 STD10");
         check(16'o100000, MK_NONE, '0, "S6 STD10 seg0");
@@ -412,8 +451,9 @@ module mapper_tb;
         check_ext(16'o130000, 4'd0, 3'd3, 1'b0, "S6 STD10 seg3");
         check_ext(16'o140000, 4'd0, 3'd4, 1'b0, "S6 STD10 seg4");
         check_ext(16'o150000, 4'd0, 3'd5, 1'b0, "S6 STD10 seg5");
-        check(16'o160000, MK_NONE, '0, "S6 STD10 seg6");
+        check_bios(16'o160000, "S6 STD10 seg6 BIOS");
         check_ext(16'o170000, 4'd0, 3'd7, 1'b0, "S6 STD10 seg7");
+        check(16'o177130, MK_NONE, '0, "S6 STD10 177130 capped");
         // RAM10 (0120): identity
         smk_mode(16'o000120, "S6 RAM10");
         check_ext(16'o100000, 4'd0, 3'd0, 1'b0, "S6 RAM10 seg0");
@@ -427,14 +467,15 @@ module mapper_tb;
         check_ext(16'o140000, 4'd0, 3'd0, 1'b0, "S6 ALL seg4");
         check_ext(16'o160000, 4'd0, 3'd2, 1'b0, "S6 ALL seg6");
         check_ext(16'o170000, 4'd0, 3'd3, 1'b0, "S6 ALL seg7");
-        check(16'o177000, MK_NONE, '0, "S6 ALL seg7 cap");
+        // ALL: the restricted extent is READABLE (read-only SMK RAM)
+        check_extd(16'o177000, 4'd0, 3'd3, 1'b1, 1'b0, "S6 ALL extent readable");
         // STD11 (0140): seg0..5 = std (win1 page 5 + BOS top ROM), seg6 BIOS
         smk_mode(16'o000140, "S6 STD11");
         check(16'o100000, MK_RAM037, ram_page(3'd5, 16'o100000), "S6 STD11 seg0 std");
         check_std(16'o137776, "S6 STD11 seg3 std");
         check_std(16'o140000, "S6 STD11 seg4 std");
         check_std(16'o157776, "S6 STD11 seg5 std");
-        check(16'o160000, MK_NONE, '0, "S6 STD11 seg6");
+        check_bios(16'o160000, "S6 STD11 seg6 BIOS");
         check_ext(16'o170000, 4'd0, 3'd7, 1'b0, "S6 STD11 seg7");
         // RAM11 (040): seg0..3 std, seg4..7 SMK
         smk_mode(16'o000040, "S6 RAM11");
@@ -442,16 +483,19 @@ module mapper_tb;
         check_std(16'o137776, "S6 RAM11 seg3 std");
         check_ext(16'o140000, 4'd0, 3'd4, 1'b0, "S6 RAM11 seg4");
         check_ext(16'o170000, 4'd0, 3'd7, 1'b0, "S6 RAM11 seg7");
-        // HLT10 (0100): identity, seg0 READ-ONLY
+        // HLT10 (0100): identity, seg0 READ-ONLY, extent WRITE-ONLY
         smk_mode(16'o000100, "S6 HLT10");
         check_ext(16'o100000, 4'd0, 3'd0, 1'b1, "S6 HLT10 seg0 RO");
         check_ext(16'o107776, 4'd0, 3'd0, 1'b1, "S6 HLT10 seg0 RO hi");
         check_ext(16'o110000, 4'd0, 3'd1, 1'b0, "S6 HLT10 seg1 rw");
         check_ext(16'o170000, 4'd0, 3'd7, 1'b0, "S6 HLT10 seg7");
-        // HLT11 (0): seg0..3 std, seg4..7 SMK
+        check_extd(16'o177000, 4'd0, 3'd7, 1'b0, 1'b1, "S6 HLT10 extent WO");
+        check_extd(16'o177674, 4'd0, 3'd7, 1'b0, 1'b1, "S6 HLT10 177674 catch");
+        // HLT11 (0): seg0..3 std, seg4..7 SMK, extent WRITE-ONLY
         smk_mode(16'o000000, "S6 HLT11");
         check_std(16'o100000, "S6 HLT11 seg0 std");
         check_ext(16'o140000, 4'd0, 3'd4, 1'b0, "S6 HLT11 seg4");
+        check_extd(16'o177676, 4'd0, 3'd7, 1'b0, 1'b1, "S6 HLT11 177676 catch");
         // STD11 + a window-1 ROM overlay / empty socket through the std path
         map_write(16'o004000 | 16'o001, 1'b0, 1'b0, 1'b1, "S6 overlay 001");
         smk_mode(16'o000140, "S6 STD11+overlay");
@@ -476,6 +520,26 @@ module mapper_tb;
         smk_mode(16'o002135, "S7 page15 all");
         check_ext(16'o100000, 4'd15, 3'd0, 1'b0, "S7 page15 seg0");
         check_ext(16'o176776, 4'd15, 3'd7, 1'b0, "S7 page15 seg7 top");
+
+        // ---- S8. seg-7 extent boundary matrix (176776 | 177000) ------------
+        // ALL: extent readable (ro), boundary exact, incl. the I/O page
+        smk_mode(16'o000020, "S8 ALL");
+        check_ext (16'o176776, 4'd0, 3'd3, 1'b0, "S8 ALL below boundary rw");
+        check_extd(16'o177000, 4'd0, 3'd3, 1'b1, 1'b0, "S8 ALL extent lo");
+        check_extd(16'o177576, 4'd0, 3'd3, 1'b1, 1'b0, "S8 ALL extent mem top");
+        check_extd(16'o177716, 4'd0, 3'd3, 1'b1, 1'b0, "S8 ALL extent 177716");
+        check_extd(16'o177776, 4'd0, 3'd3, 1'b1, 1'b0, "S8 ALL extent top");
+        // HLT10: extent writable (wo), boundary exact
+        smk_mode(16'o000100, "S8 HLT10");
+        check_ext (16'o176776, 4'd0, 3'd7, 1'b0, "S8 HLT10 below boundary rw");
+        check_extd(16'o177000, 4'd0, 3'd7, 1'b0, 1'b1, "S8 HLT10 extent lo");
+        check_extd(16'o177676, 4'd0, 3'd7, 1'b0, 1'b1, "S8 HLT10 extent 177676");
+        check_extd(16'o177776, 4'd0, 3'd7, 1'b0, 1'b1, "S8 HLT10 extent top");
+        // STD10: extent neither -> the cap holds across the whole extent
+        smk_mode(16'o000060, "S8 STD10");
+        check_ext(16'o176776, 4'd0, 3'd7, 1'b0, "S8 STD10 below boundary rw");
+        check(16'o177000, MK_NONE, '0, "S8 STD10 extent capped lo");
+        check(16'o177776, MK_NONE, '0, "S8 STD10 extent capped top");
 
         // ---- S9. DCLO: -> SYS, page 0, strobe DISARMED ----------------------
         smk_write(16'o000006, 1'b0, 1'b0, "S9 arm before DCLO");

@@ -51,6 +51,18 @@ module cpu_sdram_dp #(
     input  logic                 sel_ram,   // this access targets RAM (SYNC-framed;
                                             // incl. 0011M window-1 banked RAM)
     input  logic                 sel_romr,  // targets SDRAM-backed ROM (read-only)
+    input  logic                 sel_ramw,  // write-ONLY RAM leg (Phase-8 SMK
+                                            // HLT-mode seg-7 extent): issues the
+                                            // write like sel_ram but has NO read
+                                            // path - a read is structurally never
+                                            // fetched/driven (the smk_wo mirror
+                                            // of sel_romr's never-issued write)
+    input  logic                 rd_noe,    // fetch but do NOT drive this read
+                                            // (Phase-8 I/O-page overlay: the
+                                            // qbus_mem FSM drives the OR-merged
+                                            // word instead); sampled into the
+                                            // issue-time was_drive flop - never
+                                            // gates the pad OE combinationally
     input  logic [15:0]          addr,      // latched bus address (true; byte lanes)
     input  logic [ADDR_BITS-1:0] phys,      // mapped physical SDRAM word address
     input  logic [15:0]          ad_true,   // current bus data (true = ~ad_n), for writes
@@ -78,9 +90,13 @@ module cpu_sdram_dp #(
 
     logic [15:0] rd_hold;
     logic        was_read;   // the in-flight access is a read (set at issue)
+    logic        was_drive;  // ...and this FSM drives its data (issue-time
+                             // ~rd_noe; the pad-OE rule - see rdata_oe)
 
     wire is_read  = (sel_ram || sel_romr) && !din_n;
-    wire is_write = sel_ram && !dout_n; // ROM writes never reach the SDRAM
+    wire is_write = (sel_ram || sel_ramw) && !dout_n; // ROM writes never reach
+                                                      // the SDRAM; sel_ramw is
+                                                      // the write-only leg
     // Byte op is WTBT sampled at DOUT time (dual-purpose WTBT).
     wire byte_op  = !wtbt_n;
 
@@ -94,6 +110,7 @@ module cpu_sdram_dp #(
             be_o     <= 2'b11;
             rd_hold  <= '0;
             was_read <= 1'b0;
+            was_drive <= 1'b0;
         end else begin
             case (state)
                 D_IDLE: begin
@@ -104,6 +121,7 @@ module cpu_sdram_dp #(
                         be_o     <= 2'b11;
                         req      <= 1'b1;
                         was_read <= 1'b1;
+                        was_drive <= !rd_noe;
                         state    <= D_RD_REQ;
                     end else if (is_write) begin        // capture + issue the write
                         we       <= 1'b1;
@@ -112,6 +130,7 @@ module cpu_sdram_dp #(
                         be_o     <= byte_op ? (addr[0] ? 2'b10 : 2'b01) : 2'b11;
                         req      <= 1'b1;
                         was_read <= 1'b0;
+                        was_drive <= 1'b0;
                         state    <= D_WR_REQ;
                     end
                 end
@@ -143,7 +162,9 @@ module cpu_sdram_dp #(
     // live gate looped mapper regs -> kind -> OE -> ad pads -> the register
     // write snoops' data pins, a functionally false path (DIN and DOUT are
     // mutually exclusive) that cost the Phase-8 netlist its sys_clk timing
-    // closure. Cycle-identical: every ref037 golden pins it.
-    assign rdata_oe  = (state == D_DONE) && !din_n && was_read;
+    // closure. Cycle-identical: every ref037 golden pins it. was_drive is the
+    // same idea for the I/O-page overlay reads (rd_noe sampled at issue): the
+    // word is fetched for the qbus_mem FSM's OR-merge, never driven from here.
+    assign rdata_oe  = (state == D_DONE) && !din_n && was_read && was_drive;
 
 endmodule

@@ -49,10 +49,11 @@ package qbus_pkg;
    //               Q-bus -> a genuine fixed-latency FSM reply, NOT 037-owned /
    //               cycle-stolen). Rides the same cpu_sdram_dp port-0 datapath
    //               with the mapper's phys; read+write, done-gated both ways.
-   //               The mapper's smk_ro flag (HLT10 seg 0) turns off the write
-   //               reply -> a write there bus-times-out -> trap 4, exactly the
-   //               MK_ROM write rule. Not used by internal RAM (window 1 is
-   //               MK_RAM037).
+   //               The mapper's smk_ro flag (HLT10 seg 0 / the ALL-mode seg-7
+   //               extent) turns off the write reply -> a write bus-times-out
+   //               -> trap 4, exactly the MK_ROM write rule; the mirror smk_wo
+   //               (the HLT-mode write-only extent) turns off the READ reply.
+   //               Not used by internal RAM (window 1 is MK_RAM037).
    //   MK_ROM    : FSM-owned RPLY on reads; read-only. WRITES get NO reply ->
    //               the CPU's qbto timer -> trap 4 (authentic mask/overlay ROM;
    //               the "write until trap 4" screen-clear idiom relies on it).
@@ -98,6 +99,13 @@ package qbus_pkg;
    //   phys = SMK_RAM_BASE | {abs_seg[6:0], addr[11:1]}
    // (128 segments x 2 Kwords; abs_seg = page[3:0]*8 + rel_seg[2:0]).
    localparam logic [23:0] SMK_RAM_BASE = 24'h040000;
+
+   // Phase-8 SMK512 BIOS ROM: ONE 4 KB image (2048 words, appended to the
+   // bk11 blob right after MSTD) backing BOTH selectable windows (rom6
+   // @160000, rom7 @170000 - selection per SMK mode in mem_mapper). 2^11-
+   // aligned so phys = SMK_BIOS_BASE | addr[11:1]. Reads reuse the fixed
+   // N_ROM reply (placeholder family - recalibrate reference-tb-first).
+   localparam logic [23:0] SMK_BIOS_BASE = 24'h03A000;
 
    // BK-0011M displayed-screen bases (177662 bit 15): screen 0 = RAM page 1,
    // screen 1 = RAM page 7 (BkEmu Computer wiring; MiSTer screen_bank).

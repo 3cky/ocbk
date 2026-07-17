@@ -10,20 +10,33 @@
 //   video-fetch saturator for contention.
 //
 // The mem/gen_smk_test.py program (see there for the section list) walks the
-// BkEmu SmkMemoryManager contract. Boot: the 177716 read returns 140000
-// (SYS_START11); under the SMK reset layout (SYS) that address is SMK RAM
-// abs seg 0 word 0, where this tb PRELOADS a stage-0 stub (JMP @#001000).
-// That preload is a tb liberty: real SMK DRAM powers on as garbage and the
-// BIOS ROM segments are MK_NONE this increment, so DIP-8-ON hardware is
-// deliberately non-booting until the SMK BIOS blob lands.
+// BkEmu SmkMemoryManager contract - increment 2: BIOS ROM windows, the
+// I/O-page overlay OR-merge, the seg-7 extents, and the authentic boot.
+//
+// Boot rides the REAL SMK mechanism: this tb preloads the SYNTHETIC BIOS
+// image (smk_bios.hex) at SDRAM SMK_BIOS_BASE = 0x3A000 - exactly where the
+// EPCS loader puts the real one - and nothing else SMK-side (the old
+// stage-0-stub-in-SMK-RAM liberty is GONE; SMK RAM starts zeroed like the
+// rest of the model). The reset layout (SYS) maps rom7 over the whole
+// 0170000-0177777 incl. the register space, so the CPU's initial-start
+// 177716 read returns bios[0o7716] | SEL1 (qbus_mem's wire-OR merge) and
+// PC <- & 177400 = 166400 - the stage-0 in the rom6 window.
+//
+// СТОП leg: the tb watches for the program's magic scratch write and pulses
+// key_stop (the sim/bk11 §13 replica: stop_block tap, 2-FF resync, gated
+// 64-clk nIRQ1 one-shot). In HLT10 the vm1's HALT-entry PSW/PC stores land
+// in the writable seg-7 extent and the HALT vector is fetched from SMK RAM.
+//
+// An X monitor at the reply edges turns any bus drive fight (the vm1's
+// 177712 self-served read, the kbd carve-out) into a loud failure.
 //
 // After the first success park the tb checks the 177662 taps (the program's
 // masked write), then RE-PULSES DCLO (the warm-reset shape: memory and the
-// 037 survive, the CPU + mapper re-init): the second boot reaches the
-// success park again only if DCLO restored the SYS layout (the program
-// parked in RAM10 - a preserved layout would leave 140000 mapped to abs S0
-// still, but the RUN_FLAG re-verify leg also proves seg0 trap + SMK RAM
-// content survival, and the 662 taps must be back at the DCLO defaults).
+// 037 survive, the CPU + mapper re-init): the second boot re-runs the real
+// boot mechanism and reaches the success park again only if DCLO restored
+// the SYS layout (the program parked in RAM10; the RUN_FLAG re-verify leg
+// also proves seg0 trap + BIOS windows back + SMK RAM content survival, and
+// the 662 taps must be back at the DCLO defaults).
 //
 // Pass/fail: 3 consecutive DIN fetches of the success park 001004 on EACH
 // pass -> COSIM PASS after the second; any 001012 (fail park) hit or the
@@ -76,7 +89,7 @@ module smk_soc_tb;
     always @(posedge sys_clk) srst_sr <= {srst_sr[0], 1'b1};
     reg  [3:1]  irq;   reg virq, dmgi, sp;   reg [1:0] pa;
     wire        n_irq2;    // EVNT/IRQ2 replica (assigned below qbus_mem)
-    wire        n_irq1 = 1'b1;   // no СТОП source in this oracle
+    wire        n_irq1;    // СТОП one-shot (replica below qbus_mem)
     wire        dmgo;  tri1 init, dmr, sack, iako;   wire [2:1] sel;   wire bsy;
 
     // ---- tb-side address latch (for the park monitor) -----------------------
@@ -211,6 +224,50 @@ module smk_soc_tb;
         $finish;
     end
 
+    // ---- СТОП: replica of the ocbk_top wiring (the sim/bk11 §13 shape) ------
+    // The program can't press a key, so the tb watches for its magic scratch
+    // write (address AND value) and turns each one into a 1-cpu_clk key_stop
+    // strobe, then runs the exact ocbk_top glue: stop_block (u_ms tap, sclk
+    // domain) 2-FF onto posedge cpu_clk gating the 64-clk nIRQ1 one-shot.
+    localparam [15:0] STOP_MAGIC_ADDR = 16'o000750;  // = gen_smk_test.py
+    localparam [15:0] STOP_MAGIC_VAL  = 16'o123321;
+    reg stop_req = 1'b0;                  // toggles once per magic write
+    always @(negedge dout)
+        if (~sync && addr == STOP_MAGIC_ADDR && ~ad == STOP_MAGIC_VAL)
+            stop_req = ~stop_req;
+    reg [2:0] stop_req_sr = 3'b000;
+    always @(posedge clk) stop_req_sr <= {stop_req_sr[1:0], stop_req};
+    wire key_stop = stop_req_sr[2] ^ stop_req_sr[1];
+    reg [1:0] stop_blk_sr = 2'b00;
+    reg [6:0] stop_cnt    = 7'd0;
+    always @(posedge clk) begin
+        stop_blk_sr <= {stop_blk_sr[0], stop_block};
+        if (key_stop && !stop_blk_sr[1]) stop_cnt <= 7'd64;
+        else if (stop_cnt != 0)          stop_cnt <= stop_cnt - 1'b1;
+    end
+    assign n_irq1 = (stop_cnt == 0);
+
+    // ---- X monitor at the reply edges (boot_check shape) --------------------
+    // A bus drive fight (e.g. the overlay wrongly driving against the vm1's
+    // 177712 self-served read data, or against the kbd block) shows as X on
+    // ad; the tri1 pull keeps an undriven bus at 1, so X = a real fight.
+    integer xerrs = 0;
+    always @(negedge rply) if (aclo === 1'b1) begin
+        #1;                                  // let the data settle at the edge
+        if (!din && ^ad === 1'bx) begin
+            $display("SMK-X-ERROR: ad=%b addr=%06o t=%0t", ad, addr, $time);
+            xerrs = xerrs + 1;
+        end
+        if (rply === 1'bx) begin
+            $display("SMK-X-ERROR: rply=X t=%0t", $time);
+            xerrs = xerrs + 1;
+        end
+        if (xerrs != 0) begin
+            $display("COSIM FAIL");
+            $finish;
+        end
+    end
+
     // ---- pass/fail: the pinned park loops (gen_smk_test.py) -------------------
     // Two passes: the first success park checks the 177662 taps and triggers
     // the DCLO replay; the second -> COSIM PASS. replay_wait masks the park
@@ -282,10 +339,11 @@ module smk_soc_tb;
         for (ii = 0; ii < (1<<19); ii = ii + 1) u_mem.mem[ii] = 16'o000000;
         // fixed page 6: vectors + stage 2
         $readmemh("smk_page6.hex", u_mem.mem, 'h2C000, 'h2DFFF);
-        // SMK RAM page 0 (abs segs 0-7): the stage-0 stub at abs-seg-0 word 0
-        // (the SYS-mode 140000 start vector) + the section-5 routine. A tb
-        // liberty - real SMK DRAM powers on as garbage (see the header).
-        $readmemh("smk_ram0.hex", u_mem.mem, 'h40000, 'h43FFF);
+        // the synthetic SMK BIOS image at SMK_BIOS_BASE - exactly where the
+        // EPCS loader puts the real one. SMK RAM itself gets NO preload: the
+        // program boots from the BIOS windows (the real mechanism) and owns
+        // its SMK RAM content.
+        $readmemh("smk_bios.hex", u_mem.mem, 'h3A000, 'h3A7FF);
         // window-1 ROM overlay bank 0 marker (STD11 leg reads it via std)
         u_mem.mem['h30000] = ROMPAT0;
         // fixed top ROM (BOS socket): the same stub+marker shape as sim/bk11 -

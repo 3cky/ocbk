@@ -43,7 +43,9 @@ module epcs_boot #(
     // pass 1: BK-0011M ROM set (4 window banks + fixed top ROM, contiguous)
     parameter logic [23:0] FLASH_ADDR1 = 24'h048000,
     parameter logic [23:0] BASE_W1     = 24'h030000, // BK11_WROM_BASE
-    parameter int          MAX_WORDS1  = 40960       // words 0x30000-0x39FFF
+    parameter int          MAX_WORDS1  = 43008       // words 0x30000-0x3A7FF
+                                                     // (incl. the SMK512 BIOS
+                                                     // at SMK_BIOS_BASE 0x3A000)
 ) (
     input  logic                 clk,        // sys_clk
     input  logic                 rst_n,

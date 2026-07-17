@@ -66,7 +66,7 @@ mem/ram_test.hex: mem/gen_mem.py
 mem/boot_blob.hex: mem/gen_boot_blob.py mem/roms/monit10.rom \
 		mem/roms/basic10_1.rom mem/roms/basic10_2.rom mem/roms/basic10_3.rom \
 		mem/roms/basic11m_0.rom mem/roms/basic11m_1.rom mem/roms/ext11m.rom \
-		mem/roms/bos11m.rom mem/roms/mstd11m.rom
+		mem/roms/bos11m.rom mem/roms/mstd11m.rom mem/roms/smk512_v205.rom
 	cd mem && python3 gen_boot_blob.py
 
 mem/boot_blob11.hex: mem/boot_blob.hex ;

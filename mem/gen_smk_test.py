@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the Phase-8 SMK512 segmented-RAM functional oracle program.
+"""Generate the Phase-8 SMK512 functional oracle program (RAM + BIOS ROM).
 
 Imports the tiny PDP-11 assembler from gen_mem.py (and the check helpers from
 gen_bk11_test.py) and builds the images sim/smk/smk_soc_tb.v preloads (a
@@ -9,33 +9,45 @@ DATA-checking oracle like sim/bk11, NOT a timing golden):
                   the fixed 000000-037777 region: vectors (trap 4 -> the fail
                   park) + stage 2. Page 6 is immune to every SMK mode - the
                   safe residence.
-  smk_ram0.hex  : 16384 words = SMK RAM page 0 (abs segments 0-7, SDRAM
-                  0x40000-0x43FFF): the stage-0 boot stub at abs-seg-0 word 0
-                  and the section-5 mode-switch routine at abs-seg-2 word
-                  0o2000. THE PRELOAD IS A TB LIBERTY: real SMK DRAM powers on
-                  as garbage, and with the BIOS ROM segments MK_NONE this
-                  increment DIP-8-ON hardware is deliberately non-booting -
-                  the tb owns the SDRAM model, so it plants the stub where the
-                  reset map (mode SYS: seg4 = P+0) puts the 140000 start
-                  vector.
+  smk_bios.hex  : 2048 words = the SYNTHETIC SMK BIOS image at SDRAM
+                  SMK_BIOS_BASE (0x3A000) - the tb preloads it exactly where
+                  the EPCS loader puts the real one. Marker words at the
+                  window head / the 177130 offset / the register-space
+                  offsets, the stage-0 entry at image offset 0o6400, and the
+                  LOAD-BEARING start word at offset 0o7716 (see Boot below).
 
-Boot: the 177716 read returns SYS_START11 = 140000; under the SMK reset
-layout (SYS) that is SMK RAM abs seg 0 word 0 -> the stub JMPs to stage 2 at
-001000 in page 6.
+Boot rides the REAL SMK mechanism (increment 2): the reset layout is SYS with
+BOTH BIOS windows live, rom7 covering the whole 0170000-0177777 incl. the
+register space, so the CPU's initial-start 177716 read returns
+START_W | SEL1 (the open-collector wire-OR; qbus_mem's I/O-page merge) and
+PC <- value & 0o177400 = 0o166400 - the stage-0 JMP @#001000 executing FROM
+the BIOS ROM (rom6 window). No SMK-RAM preload remains: the section-5
+mode-switch routine is copied into SMK RAM by the program itself.
 
 Stage 2 walks the BkEmu SmkMemoryManager contract on the real SoC stack:
-the 177130 write reply + no-commit-without-arm + write-only read-timeout,
+the 177130 write reply + no-commit-without-arm, the BIOS windows (one image
+at BOTH 160000 and 170000, writes -> trap 4, 177130 READ = BIOS data under
+SYS but write-only again elsewhere), the I/O-page overlay OR-merge (177714
+pure-BIOS, 177776 BIOS-only reply, 177716 = START_W | SEL1) with the kbd
+(177660, trap 4) and vm1-internal (177712, self-served) carve-outs,
 SYS/RAM10/ALL/STD10/STD11/HLT10 layouts with fill/verify and the +4 rotation
 aliasing, two extra pages (2 and 8 - the v2/v0 scatter bits end-to-end),
 executing FROM SMK RAM and switching the mode under the running code, RMW
 (DATIO) in SMK RAM, HLT10 seg-0 read-only (write + RMW write-half -> trap 4,
-value intact), the seg-7 0177000 cap, the BIOS-ROM sockets (MK_NONE -> trap
-4, incl. 160000 under STD11 - the SMK shadows the MSTD socket), STD11
-passthrough (window-1 banking + ROM overlay + top ROM + a 177662 write),
-and the RESET instruction preserving the layout (DCLO-only reset). The tb
-then re-pulses DCLO: the second boot only reaches the success park again if
-DCLO restored SYS (the RUN_FLAG word routes stage 2 to a short re-verify
-which also proves SMK RAM content SURVIVED the warm reset).
+value intact), the per-mode seg-7 restricted extent (HLT10 writes replied
+incl. 177674/76 + reads trap; ALL reads back the HLT-written words through
+the seg-3 mem-region aliases + writes trap; STD10 fully capped), STD11
+passthrough (window-1 banking + ROM overlay + top ROM + a 177662 write +
+160000 = BIOS, the SMK shadowing MSTD), the RESET instruction preserving
+the layout (DCLO-only reset), and the authentic СТОП/HALT-entry leg: in
+HLT10 the program plants the HALT vector at 160002/4 (= SMK RAM seg 6), the
+tb pulses key_stop, the vm1's HALT-entry PSW/PC stores at 177676/74 land in
+the writable extent (on a stock BK they bus-time-out -> trap 4), and the
+handler - reached through the SMK-RAM vector - verifies the stored PC via
+the ALL alias. The tb then re-pulses DCLO: the second boot re-runs the real
+boot mechanism and only reaches the success park if DCLO restored SYS (BIOS
+windows + overlay back, RUN_FLAG routes to a re-verify which also proves SMK
+RAM content SURVIVED the warm reset).
 
 Park loops (pinned, the tb keys off them):
   success self-loop PC = 001004
@@ -49,7 +61,7 @@ from gen_mem import Asm, BR, BEQ
 from gen_bk11_test import expect_eq, cmp_mem_imm, bank_write, expect_trap4
 
 PAGE_WORDS = 8192
-SMK_IMG_WORDS = 16384        # SMK page 0 = 8 segments x 2 Kwords
+BIOS_WORDS = 2048            # one 4 KB image = one segment
 PROG_BASE = 0o001000
 
 BIT11 = 0o004000             # the 177716 banking-ENABLE bit
@@ -62,12 +74,16 @@ STD11, RAM11, HLT10, HLT11 = 0o140, 0o040, 0o100, 0o000
 
 RUN_FLAG = 0o000760          # page-6 scratch: 0 = first pass, !=0 = post-DCLO
 
-# in-segment offsets (bytes). Keep clear of the stub (seg words 0-1) and the
-# section-5 routine (abs-seg-2 words 0o2000-0o2007 = byte offset 0o4000).
+# СТОП magic scratch write (tb watches address AND value - sim/bk11 §13 shape)
+STOP_MAGIC_ADDR = 0o000750
+STOP_MAGIC_VAL = 0o123321
+
+# in-segment offsets (bytes). Keep clear of the section-5 routine (abs-seg-2
+# words 0o2000-0o2007 = byte offset 0o4000) and the HALT vector (seg-6 words
+# 1,2).
 OFF_S = 0o2000               # fill/verify offset
 OFF_B = 0o3000               # RMW / write-probe offset
-ROUTINE = 0o124000           # the section-5 routine: seg 2 + byte 0o4000
-ROUT_IMG_WORD = 2 * 2048 + 0o2000   # ...at this smk_ram0 image word
+ROUTINE = 0o124000           # the section-5 routine: RAM10 seg 2 + byte 0o4000
 
 SYSPAT = 0o171717
 S6PAT = 0o111111
@@ -77,11 +93,27 @@ PG8PAT = 0o140441
 W1PAT = 0o031313
 S1PAT = 0o054054
 
-# tb-poked markers, shared with the bk11 oracle conventions (keep in sync
-# with sim/smk/smk_soc_tb.v: ROMPAT0 at SDRAM 0x30000, the top-ROM stub +
-# TOPPAT at 0x38000-0x38002)
-ROMPAT0 = 0o123456
-TOPPAT = 0o054321
+# synthetic-BIOS marker words (also read back through both windows)
+BIOSPAT0 = 0o125252          # image word 0 (160000 AND 170000)
+BIOSPAT130 = 0o052525        # image offset 0o7130 (the 177130 read under SYS)
+BIOSPAT14 = 0o135531         # image offset 0o7714 (177714: pure-BIOS merge)
+BIOSPAT76 = 0o117117         # image offset 0o7776 (177776: BIOS-only reply)
+START_W = 0o166421           # image offset 0o7716: start 166400 + junk low
+                             # bits (proves the low-bit OR-through)
+VOLATILE = 0o000144          # SEL1 bits masked in merged compares: kbd (6),
+                             # tape (5), write-flag (2)
+
+# seg-7 extent probes: HLT10 writes (land in abs P+7), read back via the ALL
+# seg-3 mem-region aliases; EXTPATs planted at abs P+3 in RAM10, read via the
+# ALL extent addresses.
+HP74 = 0o031031              # HLT10 write @ 177674 (the HALT-debugger word)
+HP76 = 0o042042              # HLT10 write @ 177676
+HP00 = 0o015015              # HLT10 write @ 177000 (extent low boundary)
+HPTOP = 0o106106             # HLT10 write @ 177776 (extent top)
+EXTPAT74 = 0o124512          # planted @ 137674 (RAM10) -> ALL extent 177674
+EXTPAT16 = 0o120421          # planted @ 137716 (RAM10) -> ALL merged 177716
+                             # (bit 15 SET - agrees with the 037 AD15 assist;
+                             # no VOLATILE bits)
 
 
 def seg(n):
@@ -96,6 +128,14 @@ def smk_mode(a, val):
     """The two-phase strobe write pair (BkEmu test setMode)."""
     a.emit(0o012737, ARM, REG)              # MOV #6,@#177130 (arm)
     a.emit(0o012737, val, REG)              # MOV #mode,@#177130 (commit)
+
+
+def cmp_reg_imm(a, addr, imm, mask):
+    """Read @#addr into R0, clear the mask bits, compare with imm."""
+    a.emit(0o013700, addr)                  # MOV @#addr,R0
+    a.emit(0o042700, mask)                  # BIC #mask,R0
+    a.emit(0o020027, imm)                   # CMP R0,#imm
+    expect_eq(a)
 
 
 def build_stage2():
@@ -121,26 +161,45 @@ def build_stage2():
     a.label("first")
     a.emit(0o005237, RUN_FLAG)              # INC @#RUN_FLAG
 
-    # --- 1. the register itself ---------------------------------------------
+    # --- 1. the register + the SYS BIOS windows -----------------------------
     # 1a. a commit attempt WITHOUT a prior arm: the write must be REPLIED
     # (parking at fail via trap 4 if not) but must NOT commit - SYS seg 0
     # stays deselected (trap 4 on read).
     a.emit(0o012737, RAM10, REG)
     expect_trap4(a, lambda: a.emit(0o005737, seg(0)))   # TST @#100000
-    # 1b. the SYS BIOS-ROM sockets: MK_NONE this increment (no BIOS blob)
-    expect_trap4(a, lambda: a.emit(0o005737, seg(6)))
-    expect_trap4(a, lambda: a.emit(0o005737, seg(7)))
-    # 1c. write-only: a 177130 READ gets no reply -> trap 4 (BkEmu BUS_ERROR;
-    # no floppy controller is modelled)
-    expect_trap4(a, lambda: a.emit(0o013700, REG))      # MOV @#177130,R0
+    # 1b. ONE image, BOTH windows: rom6 @160000, rom7 @170000
+    cmp_mem_imm(a, seg(6), BIOSPAT0)
+    cmp_mem_imm(a, seg(7), BIOSPAT0)
+    # 1c. BIOS ROM writes get NO reply -> trap 4 (the ROM-write rule)
+    expect_trap4(a, lambda: a.emit(0o012737, 0o123123, seg(6)))
+    expect_trap4(a, lambda: a.emit(0o012737, 0o123123, seg(7) + 0o1000))
+    # 1d. 177130 READ under SYS = the BIOS word (rom7 covers it; the refined
+    # invariant - the register decode owns only the WRITE)
+    cmp_mem_imm(a, REG, BIOSPAT130)
+    # 1e. the kbd-block read carve-out: nothing replies at 177660 in this tb
+    # (no bk_kbd014 here), and the overlay must NOT either -> trap 4
+    expect_trap4(a, lambda: a.emit(0o005737, 0o177660))
+    # 1f. the vm1-internal block: 177712 is self-served (CPU drives its own
+    # read data; the overlay must stay silent - the tb's X monitor is the
+    # real check here, this read is its tripwire)
+    a.emit(0o013700, 0o177712)              # MOV @#177712,R0 (no compare)
 
-    # --- 2. SYS fill: seg4 = abs S0, seg2 = abs S6 ---------------------------
+    # --- 2. the I/O-page overlay OR-merge ------------------------------------
+    # 177714 (nSEL2, io_word = 0): the merge returns the pure BIOS word
+    cmp_mem_imm(a, 0o177714, BIOSPAT14)
+    # 177776 (no register at all): the overlay alone replies
+    cmp_mem_imm(a, 0o177776, BIOSPAT76)
+    # 177716: BIOS start word | SEL1 (mask the volatile SEL1 bits; the
+    # surviving low bits 4,0 prove the OR-through - THE boot mechanism)
+    cmp_reg_imm(a, 0o177716, START_W, VOLATILE)
+
+    # --- 3. SYS fill: seg4 = abs S0, seg2 = abs S6 ---------------------------
     a.emit(0o012737, SYSPAT, seg(4) + OFF_S)
     cmp_mem_imm(a, seg(4) + OFF_S, SYSPAT)
     a.emit(0o012737, S6PAT, seg(2) + OFF_S)
     cmp_mem_imm(a, seg(2) + OFF_S, S6PAT)
 
-    # --- 3. RAM10: aliasing vs SYS, full fill, seg-7 cap ---------------------
+    # --- 4. RAM10: aliasing vs SYS, full fill, seg-7 cap ---------------------
     smk_mode(a, RAM10)
     cmp_mem_imm(a, seg(0) + OFF_S, SYSPAT)  # RAM10 seg0 = SYS seg4 = abs S0
     cmp_mem_imm(a, seg(6) + OFF_S, S6PAT)   # RAM10 seg6 = SYS seg2 = abs S6
@@ -151,8 +210,28 @@ def build_stage2():
         cmp_mem_imm(a, seg(n) + OFF_S, pat_s(n))
     cmp_mem_imm(a, 0o176776, B7PAT)
     expect_trap4(a, lambda: a.emit(0o005737, 0o177000))   # the cap: trap 4
+    # write-only again outside SYS: no BIOS at 177130, read -> trap 4
+    expect_trap4(a, lambda: a.emit(0o013700, REG))
+    # no overlay outside SYS: 177716 is the plain SEL1 register again
+    cmp_reg_imm(a, 0o177716, 0o140000, VOLATILE)
+    # plant the ALL-extent probes at abs P+3 (RAM10 seg3 = P+3): the ALL
+    # extent maps 177xxx -> abs P+3 (seg 7 ^ 4)
+    a.emit(0o012737, EXTPAT74, seg(3) + 0o7674)
+    a.emit(0o012737, EXTPAT16, seg(3) + 0o7716)
+    # copy the section-5 routine into SMK RAM (abs S2 via RAM10 seg 2) - the
+    # increment-1 tb preload is gone, the program owns its SMK RAM content
+    a.emit(0o012737, 0o012737, ROUTINE + 0o00)
+    a.emit(0o012737, ARM,      ROUTINE + 0o02)
+    a.emit(0o012737, REG,      ROUTINE + 0o04)
+    a.emit(0o012737, 0o012737, ROUTINE + 0o06)
+    a.emit(0o012737, STD10,    ROUTINE + 0o10)
+    a.emit(0o012737, REG,      ROUTINE + 0o12)
+    a.emit(0o012737, 0o000137, ROUTINE + 0o14)
+    a.emit(0o012737)                        # MOV #ret5,@#ROUTINE+16
+    a.addr("ret5")
+    a.emit(ROUTINE + 0o16)
 
-    # --- 4. ALL rotation aliasing + pages 2 and 8 ----------------------------
+    # --- 5. ALL rotation aliasing + pages 2 and 8 ----------------------------
     smk_mode(a, ALL)
     for n in range(8):                      # ALL seg n = abs S(n^4)
         cmp_mem_imm(a, seg(n) + OFF_S, pat_s(n ^ 4))
@@ -165,24 +244,25 @@ def build_stage2():
     smk_mode(a, RAM10)                      # back to page 0: isolation intact
     cmp_mem_imm(a, seg(0) + OFF_S, pat_s(0))
 
-    # --- 5. execute FROM SMK RAM and switch the mode under the running code --
-    # The preloaded routine at abs-seg-2 word 0o2000 (RAM10 seg2 = 124000)
-    # arms+commits STD10 from inside itself - seg2 maps to P+2 in BOTH modes,
-    # so its own fetches stay put - then JMPs back here.
+    # --- 6. execute FROM SMK RAM and switch the mode under the running code --
+    # The program-copied routine at abs-seg-2 word 0o2000 (RAM10 seg2 =
+    # 124000) arms+commits STD10 from inside itself - seg2 maps to P+2 in
+    # BOTH modes, so its own fetches stay put - then JMPs back here.
     a.emit(0o000137, ROUTINE)               # JMP @#124000
     a.label("ret5")
     expect_trap4(a, lambda: a.emit(0o005737, seg(0)))   # STD10 seg0 deselected
     cmp_mem_imm(a, ROUTINE, 0o012737)       # seg2 still S2: its own opcode
-    expect_trap4(a, lambda: a.emit(0o005737, seg(6)))   # STD10 seg6 = BIOS socket
+    cmp_mem_imm(a, seg(6), BIOSPAT0)        # STD10 seg6 = the BIOS window
+    expect_trap4(a, lambda: a.emit(0o005737, 0o177000))  # STD10 extent capped
 
-    # --- 6. RMW (DATIO) in SMK RAM (STD10 seg2 = abs S2) ---------------------
+    # --- 7. RMW (DATIO) in SMK RAM (STD10 seg2 = abs S2) ---------------------
     a.emit(0o005037, seg(2) + OFF_B)        # CLR  -> 0
     a.emit(0o005237, seg(2) + OFF_B)        # INC  -> 1
     a.emit(0o006337, seg(2) + OFF_B)        # ASL  -> 2
     a.emit(0o052737, 0o000025, seg(2) + OFF_B)  # BIS #25 -> 27
     cmp_mem_imm(a, seg(2) + OFF_B, 0o000027)
 
-    # --- 7. HLT10: seg 0 is READ-ONLY ----------------------------------------
+    # --- 8. HLT10: seg 0 READ-ONLY + the WRITABLE extent ---------------------
     smk_mode(a, HLT10)
     cmp_mem_imm(a, seg(0) + OFF_S, pat_s(0))            # readable
     expect_trap4(a, lambda: a.emit(0o012737, 0o123123, seg(0) + OFF_B))
@@ -190,8 +270,42 @@ def build_stage2():
     cmp_mem_imm(a, seg(0) + OFF_S, pat_s(0))            # value INTACT
     a.emit(0o012737, S1PAT, seg(1) + OFF_B)             # seg1 stays writable
     cmp_mem_imm(a, seg(1) + OFF_B, S1PAT)
+    # the extent 177000-177777 is WRITABLE (a timeout would trap -> fail):
+    # 177674/76 = the HALT-debugger catch words, 177000/177776 = boundaries
+    a.emit(0o012737, HP74, 0o177674)
+    a.emit(0o012737, HP76, 0o177676)
+    a.emit(0o012737, HP00, 0o177000)
+    a.emit(0o012737, HPTOP, 0o177776)
+    # ...but NOT readable (write-only extent) -> trap 4
+    expect_trap4(a, lambda: a.emit(0o005737, 0o177674))
+    # a non-arm 177130 write is replied and commits nothing (layout kept)
+    a.emit(0o012737, 0o000120, REG)
+    cmp_mem_imm(a, seg(0) + OFF_S, pat_s(0))            # still HLT10 page 0
 
-    # --- 8. STD11 passthrough: the standard machine under the SMK ------------
+    # --- 9. ALL: the READABLE extent + the cross-mode aliases ----------------
+    smk_mode(a, ALL)
+    # extent reads (ALL seg7 -> abs P+3): the RAM10-planted probe
+    cmp_mem_imm(a, 0o177674, EXTPAT74)
+    # the HLT10 extent writes landed in abs P+7 = ALL seg 3 (3^4)
+    cmp_mem_imm(a, 0o137674, HP74)
+    cmp_mem_imm(a, 0o137676, HP76)
+    cmp_mem_imm(a, 0o137000, HP00)
+    cmp_mem_imm(a, 0o137776, HPTOP)
+    # the extent is read-ONLY in ALL -> a write traps
+    expect_trap4(a, lambda: a.emit(0o012737, 0o123123, 0o177674))
+    # 177716 through the ALL extent: SMK RAM word | SEL1 (the merge again,
+    # now with the extent as the memory side)
+    cmp_reg_imm(a, 0o177716, EXTPAT16 | 0o140000, VOLATILE)
+
+    # --- 10. a COMMITTED SYS re-selects both BIOS windows --------------------
+    # (reset-SYS is covered by boot; this exercises the register-commit SYS
+    # arm - without it a broken commit-time rom6/rom7 decode hides behind the
+    # reset defaults)
+    smk_mode(a, SYS)
+    cmp_mem_imm(a, seg(6), BIOSPAT0)        # rom6 back via the commit
+    cmp_mem_imm(a, REG, BIOSPAT130)         # rom7 overlay back via the commit
+
+    # --- 10b. STD11 passthrough: the standard machine under the SMK ----------
     smk_mode(a, STD11)
     bank_write(a, BIT11 | (1 << 8))         # window 1 -> RAM page 1
     a.emit(0o012737, W1PAT, seg(0) + OFF_S) # std win-1 RAM (037 path) write
@@ -200,25 +314,48 @@ def build_stage2():
     cmp_mem_imm(a, seg(0), ROMPAT0)         # the tb-poked overlay marker
     cmp_mem_imm(a, 0o140000, 0o000137)      # std top ROM (BOS socket) visible
     cmp_mem_imm(a, 0o140004, TOPPAT)
-    expect_trap4(a, lambda: a.emit(0o005737, seg(6)))   # 160000: SMK shadows MSTD
+    cmp_mem_imm(a, seg(6), BIOSPAT0)        # 160000: the SMK shadows MSTD
     cmp_mem_imm(a, seg(7) + OFF_S, pat_s(7))            # seg7 = P+7 (page 0)
     # a 177662 write must be replied; value keeps IRQ2 MASKED (no ISR here).
     # The tb checks the vid taps (page=1, mask=1, pal=0o12) at the first park.
     a.emit(0o012737, 0o145000, 0o177662)
 
-    # --- 9. the RESET instruction preserves the layout (DCLO-only reset) -----
+    # --- 11. the RESET instruction preserves the layout (DCLO-only reset) ----
     smk_mode(a, RAM10)
     a.emit(0o000005)                        # RESET (pulses nINIT)
     cmp_mem_imm(a, seg(0) + OFF_S, pat_s(0))  # still RAM10 page 0 (a re-init
                                               # to SYS would trap -> fail)
 
-    # --- 10. success, leaving mode = RAM10 (the tb then re-pulses DCLO) ------
+    # --- 12. the authentic СТОП/HALT-entry leg (LAST: the CPU stays in HALT
+    # mode after it - only the parks follow) ----------------------------------
+    # HLT10: seg 6 = SMK RAM holds the HALT vector; the extent catches the
+    # vm1's PSW/PC stores at 177676/74 (on a stock BK they bus-time-out and
+    # the CPU takes trap 4 - reaching the handler at all proves BOTH stores
+    # replied AND the vector was fetched from SMK RAM).
+    smk_mode(a, HLT10)
+    a.emit(0o012737)                        # MOV #stop_handler,@#160002
+    a.addr("stop_handler")
+    a.emit(0o160002)
+    a.emit(0o012737, 0o000340, 0o160004)    # HALT-vector PSW
+    a.emit(0o012737, STOP_MAGIC_VAL, STOP_MAGIC_ADDR)   # tb -> key_stop pulse
+    a.label("stop_spin")
+    a.emit(0o000777)                        # BR . (СТОП lands here)
+    a.label("stop_handler")
+    # verify the stored PC through the ALL seg-3 alias (abs P+7 word 0o3736)
+    smk_mode(a, ALL)
+    a.emit(0o023727, 0o137674)              # CMP @#137674,#stop_spin
+    a.addr("stop_spin")
+    expect_eq(a)
+    smk_mode(a, RAM10)                      # the tb replay expects RAM10
     a.emit(0o000137)
     a.addr("success")
 
-    # --- second pass (post-DCLO): SYS restored, SMK RAM content survived -----
+    # --- second pass (post-DCLO): SYS + the BIOS windows restored, SMK RAM
+    # content survived --------------------------------------------------------
     a.label("second")
     expect_trap4(a, lambda: a.emit(0o005737, seg(0)))   # seg0 deselected again
+    cmp_mem_imm(a, seg(6), BIOSPAT0)           # rom6 back (SYS restored)
+    cmp_mem_imm(a, REG, BIOSPAT130)            # rom7 overlay back over 177130
     cmp_mem_imm(a, seg(2) + OFF_S, pat_s(6))   # SYS seg2 = abs S6 (pattern kept)
     cmp_mem_imm(a, seg(4) + OFF_S, pat_s(0))   # SYS seg4 = abs S0 (pattern kept)
     a.emit(0o000137)
@@ -228,13 +365,25 @@ def build_stage2():
     return words, a.labels
 
 
-def build_routine(ret5_addr):
-    """The section-5 mode-switch routine, position-fixed at ROUTINE (124000)."""
-    return [
-        0o012737, ARM, REG,                 # MOV #6,@#177130 (arm)
-        0o012737, STD10, REG,               # MOV #STD10,@#177130 (commit)
-        0o000137, ret5_addr,                # JMP @#ret5 (back into page 6)
-    ]
+# tb-poked markers, shared with the bk11 oracle conventions (keep in sync
+# with sim/smk/smk_soc_tb.v: ROMPAT0 at SDRAM 0x30000, the top-ROM stub +
+# TOPPAT at 0x38000-0x38002)
+ROMPAT0 = 0o123456
+TOPPAT = 0o054321
+
+
+def build_bios():
+    """The synthetic BIOS image (word-indexed; byte offset = 2*index)."""
+    img = [0] * BIOS_WORDS
+    img[0] = BIOSPAT0                       # window head (160000 AND 170000)
+    img[0o7130 >> 1] = BIOSPAT130           # the 177130 read under SYS
+    img[0o6400 >> 1] = 0o000137             # stage-0 @ 166400: JMP @#001000
+    img[(0o6400 >> 1) + 1] = PROG_BASE
+    img[0o7714 >> 1] = BIOSPAT14            # 177714 pure-BIOS merge
+    img[0o7716 >> 1] = START_W              # THE boot word (PC <- & 177400)
+    img[0o7776 >> 1] = BIOSPAT76            # 177776 BIOS-only reply
+    assert (START_W & 0o177400) == 0o166400
+    return img
 
 
 def main():
@@ -257,17 +406,13 @@ def main():
     for i, w in enumerate(s2):
         page6[(PROG_BASE >> 1) + i] = w
 
-    smk0 = [0] * SMK_IMG_WORDS
-    smk0[0] = 0o000137                      # abs-seg-0 word 0: JMP @#001000
-    smk0[1] = PROG_BASE                     # (the SYS-mode 140000 start vector)
-    for i, w in enumerate(build_routine(word_at("ret5"))):
-        smk0[ROUT_IMG_WORD + i] = w
+    bios = build_bios()
 
-    for name, img in (("smk_page6.hex", page6), ("smk_ram0.hex", smk0)):
+    for name, img in (("smk_page6.hex", page6), ("smk_bios.hex", bios)):
         with open(f"{outdir}/{name}", "w") as f:
             for w in img:
                 f.write(f"{w:04x}\n")
-    print(f"wrote {outdir}/smk_page6.hex + smk_ram0.hex "
+    print(f"wrote {outdir}/smk_page6.hex + smk_bios.hex "
           f"(stage 2 {len(s2)} words at {oct(PROG_BASE)})")
 
 

@@ -9,9 +9,13 @@
 # non-SMK configuration bit-identical over full-64K sweeps, plus the directed
 # BkEmu SmkMemoryManager contract - the 177130 two-phase strobe (incl. the
 # byte-lane masking), the 8-mode x 8-seg table with the SYS/ALL +4 rotation,
-# the {v0,v3,v2,v10} page scatter, the seg-7 0177000 cap, HLT10 seg-0
-# read-only (smk_ro), std passthrough tracking live banking, DCLO-only reset.
-# Mutation-tested: see the tb header.
+# the {v0,v3,v2,v10} page scatter, HLT10 seg-0 read-only (smk_ro), std
+# passthrough tracking live banking, DCLO-only reset. Increment 2 (BIOS ROM):
+# the rom6/rom7 BIOS windows (rom7 = the SYS register-space boot overlay,
+# 177716 included), the per-mode seg-7 restricted extent (ALL readable /
+# HLT10-HLT11 writable via smk_wo, others capped -> MK_NONE, boundary exact),
+# and 177130-read = BIOS ROM under SYS (write side stays qbus_mem's).
+# Mutation-tested x10 (5 increment-1 + 5 increment-2): see the tb header.
 set -euo pipefail
 cd "$(dirname "$0")"
 

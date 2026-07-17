@@ -97,7 +97,7 @@ module epcs_boot_tb;
     );
 
     // ---- stimulus + check -----------------------------------------------------
-    localparam int NWORDS11 = 40960;
+    localparam int NWORDS11 = 43008;
 
     reg [7:0] blob [0:(1<<19)-1];        // reference copy of the flash bytes
     integer   ii, errors;
