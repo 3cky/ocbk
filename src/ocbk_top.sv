@@ -77,7 +77,8 @@
 //   pLed[0]        : BK speaker activity (solid while a tone plays; audio tap).
 //   pLed[1]        : CMT tape-in mode (Scroll Lock toggle; lit = the right
 //                    jack is the cassette port).
-//   pLed[6:2]      : unused (0).
+//   pLed[2]        : SMK512 drive-access (ide_act stretched ~87 ms).
+//   pLed[6:3]      : unused (0).
 module ocbk_top (
     input  logic        pClk21m,   // 21.47727 MHz crystal (PIN_28)
     output logic [7:0]  pLed,      // green LEDs   (1 = on)
@@ -92,6 +93,14 @@ module ocbk_top (
     // ---- PS/2 keyboard (receive-only; pins pulled up, driven Z) ----------
     inout  wire         pPs2Clk,
     inout  wire         pPs2Dat,
+
+    // ---- SD card (megasd slot; the SMK512 HDD backing store, Phase 8b) ---
+    // SPI-mode roles per esemsx3: DAT3 = chip select, CMD = MOSI,
+    // DAT0 = MISO; DAT1/DAT2 unused (weak pull-ups in the QSF, driven Z -
+    // pad-only tri-states like pDac_SR, never internal logic).
+    output logic        pSd_Ck,
+    output logic        pSd_Cm,
+    inout  wire  [3:0]  pSd_Dt,
 
     // ---- VGA (6-bit R-2R DAC per channel, negative syncs) ----------------
     output logic        pVideoHS_n,
@@ -644,12 +653,17 @@ module ocbk_top (
     // ide_rdata at its reply point. All sclk; reset is DCLO-only (BkEmu
     // resets the IDE on hardware reset only - the 5th deliberate nINIT
     // exception; software resets ride the SRST control-register bit).
-    // The backend sector port is the increment-(b) SD/SPI seam: tied off
-    // "no media" on hardware for now, so the drive reports cleanly ABSENT
-    // (task-file reads 0xFFFF) instead of the old bus-timeout probes -
-    // the intended behaviour change, DIP-8-gated.
+    // The backend sector port is served by the increment-(b) SD/SPI engine
+    // below: the card in the megasd slot holds the raw AltPro image at
+    // LBA 0; with no/failed card the drive reports cleanly ABSENT
+    // (task-file reads 0xFFFF) - identical to the increment-(a) tie-off.
     logic [15:0] ide_rdata;
     logic        ide_act;
+    logic        bk_req, bk_wr, bk_bank, bk_ack, bk_done, bk_error;
+    logic        bk_media_ok, bk_we;
+    logic [27:0] bk_sector, bk_total;
+    logic [7:0]  bk_baddr;
+    logic [15:0] bk_wdata, bk_rdata;
     smk_ide u_ide (
         .sclk       (sys_clk),
         .reset      (~dclo_n),
@@ -661,20 +675,56 @@ module ocbk_top (
         .wtbt_n     (wtbt_n),
         .ide_rdata  (ide_rdata),
         .ide_act    (ide_act),
-        .bk_req     (),
-        .bk_wr      (),
-        .bk_sector  (),
-        .bk_bank    (),
-        .bk_ack     (1'b0),
-        .bk_done    (1'b0),
-        .bk_error   (1'b0),
-        .bk_media_ok(1'b0),         // no backend yet: drive absent
-        .bk_total   (28'd0),
-        .bk_baddr   (8'd0),
-        .bk_wdata   (16'd0),
-        .bk_we      (1'b0),
-        .bk_rdata   ()
+        .bk_req     (bk_req),
+        .bk_wr      (bk_wr),
+        .bk_sector  (bk_sector),
+        .bk_bank    (bk_bank),
+        .bk_ack     (bk_ack),
+        .bk_done    (bk_done),
+        .bk_error   (bk_error),
+        .bk_media_ok(bk_media_ok),
+        .bk_total   (bk_total),
+        .bk_baddr   (bk_baddr),
+        .bk_wdata   (bk_wdata),
+        .bk_we      (bk_we),
+        .bk_rdata   (bk_rdata)
     );
+
+    // ---- SD/SPI backend (Phase-8 IDE increment (b)) ------------------------
+    // All sys_clk (no CDC on the seam); reset = DCLO-only like smk_ide, so
+    // card init re-runs at power-on AND warm reset ("insert card, press
+    // reset" - the slot has no card-detect pin). enable-gated with the
+    // engine: a stock machine (DIP 8 OFF / bk10) never clocks the card.
+    // Pads: registered outputs only; DAT3 = CS is push-pull (a lone Z-idle
+    // driver is the Cyclone-I stuck-asserted trap - the virq_n gotcha),
+    // DAT2/DAT1 stay Z (pad-only tri-states, pulled up in the QSF),
+    // DAT0 = MISO input.
+    logic sd_cs;
+    sd_backend u_sd (
+        .clk        (sys_clk),
+        .rst_n      (dclo_n),
+        .enable     (smk_en && model_bk11),
+        .sd_ck      (pSd_Ck),
+        .sd_cs      (sd_cs),
+        .sd_mosi    (pSd_Cm),
+        .sd_miso    (pSd_Dt[0]),
+        .bk_req     (bk_req),
+        .bk_wr      (bk_wr),
+        .bk_sector  (bk_sector),
+        .bk_bank    (bk_bank),
+        .bk_ack     (bk_ack),
+        .bk_done    (bk_done),
+        .bk_error   (bk_error),
+        .bk_media_ok(bk_media_ok),
+        .bk_total   (bk_total),
+        .bk_baddr   (bk_baddr),
+        .bk_wdata   (bk_wdata),
+        .bk_we      (bk_we),
+        .bk_rdata   (bk_rdata)
+    );
+    assign pSd_Dt[3]   = sd_cs;
+    assign pSd_Dt[2:1] = 2'bzz;
+    assign pSd_Dt[0]   = 1'bz;      // input only (MISO)
 
     qbus_mem u_mem (
         .cpu_clk  (cpu_clk_n),      // ROM/IO wait FSM advances on the inverted CPU clock

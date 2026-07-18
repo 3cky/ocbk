@@ -34,6 +34,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE src/cpu_sdram_dp.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/mem_mapper.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/qbus_mem.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/smk_ide.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/sd_backend.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/ps2_rx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/kbd_ps2bk.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/bk_kbd014.sv
@@ -92,6 +93,16 @@ set_location_assignment PIN_60 -to pDip[7]
 # Reset button = the slot RESET net (external pull-up; esemsx3 uses it the same
 # way). Doubles as the slot RESET pin if the cartridge-slot seam is ever enabled.
 set_location_assignment PIN_153 -to pSltRst_n
+# SD card / megasd slot (esemsx3 emsx_top_common.qsf pins 61-66; Phase 8b).
+# SPI-mode roles: DAT3 = chip select, CMD = MOSI, DAT0 = MISO;
+# DAT1/DAT2 unused (weak pull-ups, driven Z)
+set_location_assignment PIN_61 -to pSd_Dt[1]
+set_location_assignment PIN_62 -to pSd_Dt[0]
+set_location_assignment PIN_63 -to pSd_Ck
+set_location_assignment PIN_64 -to pSd_Cm
+set_location_assignment PIN_65 -to pSd_Dt[3]
+set_location_assignment PIN_66 -to pSd_Dt[2]
+
 # PS/2 keyboard (esemsx3 emsx_top_common.qsf: pPs2Dat=PIN_67, pPs2Clk=PIN_68)
 set_location_assignment PIN_67 -to pPs2Dat
 set_location_assignment PIN_68 -to pPs2Clk
@@ -164,6 +175,20 @@ set_instance_assignment -name PCI_IO ON -to pLed[7]
 
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pLedPwr
 set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pLedPwr
+
+# SD card pins (weak pull-up + 4 mA on all six, mirrors esemsx3)
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pSd_Ck
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pSd_Ck
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pSd_Cm
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pSd_Cm
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pSd_Dt[0]
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pSd_Dt[0]
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pSd_Dt[1]
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pSd_Dt[1]
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pSd_Dt[2]
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pSd_Dt[2]
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pSd_Dt[3]
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pSd_Dt[3]
 
 # DIP switch inputs (weak pull-up; mirrors ocb-test / esemsx3)
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pDip[0]
