@@ -240,13 +240,35 @@ module boot_check_tb;
     // tie-off. +nomedia (DEBUG) reproduces the increment-(a) HARDWARE
     // condition - the SD backend does not exist yet, media tied off: the
     // drive stays absent (reads 0xFFFF) and the BIOS's RDY polls time out.
+    // +sdspi (increment (b)): the backend port is served by the REAL
+    // sd_backend + sd_model SPI stack (sd_harness) instead of the disk
+    // model - proves attach + the AltPro geometry parse through the full
+    // SD path under the real BIOS boot. Runtime-muxed (both backends see
+    // the requests; only the selected one's replies reach the engine) so
+    // one compile serves every leg.
     wire        smk_media = smk && !$test$plusargs("nomedia");
+    wire        use_sd    = $test$plusargs("sdspi") != 0;
     wire [15:0] ide_rdata;
-    wire        bk_req, bk_wr, bk_bank, bk_ack, bk_done, bk_error;
-    wire        bk_media_ok, bk_we;
-    wire [27:0] bk_sector, bk_total;
+    wire        bk_req, bk_wr, bk_bank, bk_we;
+    wire [27:0] bk_sector;
     wire [7:0]  bk_baddr;
     wire [15:0] bk_wdata, bk_rdata;
+    wire        dm_ack, dm_done, dm_error, dm_media_ok, dm_we;
+    wire [27:0] dm_total;
+    wire [7:0]  dm_baddr;
+    wire [15:0] dm_wdata;
+    wire        sd_ack, sd_done, sd_error, sd_media_ok, sd_we;
+    wire [27:0] sd_total;
+    wire [7:0]  sd_baddr;
+    wire [15:0] sd_wdata;
+    wire        bk_ack      = use_sd ? sd_ack      : dm_ack;
+    wire        bk_done     = use_sd ? sd_done     : dm_done;
+    wire        bk_error    = use_sd ? sd_error    : dm_error;
+    wire        bk_media_ok = use_sd ? sd_media_ok : dm_media_ok;
+    wire [27:0] bk_total    = use_sd ? sd_total    : dm_total;
+    assign      bk_baddr    = use_sd ? sd_baddr    : dm_baddr;
+    assign      bk_wdata    = use_sd ? sd_wdata    : dm_wdata;
+    assign      bk_we       = use_sd ? sd_we       : dm_we;
 
     smk_ide u_ide (
         .sclk(sys_clk), .reset(~dclo), .enable(smk),
@@ -261,16 +283,28 @@ module boot_check_tb;
 
     ide_disk_model #(.MAX_SECTORS(640), .LATENCY(24)) u_disk (
         .sclk(sys_clk), .rst(~dclo),
-        .media_in(smk_media), .total_in(28'd640),
+        .media_in(smk_media && !use_sd), .total_in(28'd640),
         .bk_req(bk_req), .bk_wr(bk_wr), .bk_sector(bk_sector),
-        .bk_bank(bk_bank), .bk_ack(bk_ack), .bk_done(bk_done),
-        .bk_error(bk_error), .bk_media_ok(bk_media_ok), .bk_total(bk_total),
-        .bk_baddr(bk_baddr), .bk_wdata(bk_wdata), .bk_we(bk_we),
+        .bk_bank(bk_bank), .bk_ack(dm_ack), .bk_done(dm_done),
+        .bk_error(dm_error), .bk_media_ok(dm_media_ok), .bk_total(dm_total),
+        .bk_baddr(dm_baddr), .bk_wdata(dm_wdata), .bk_we(dm_we),
         .bk_rdata(bk_rdata)
     );
 
-    initial if ($test$plusargs("smk"))
+    sd_harness #(.MAX_SECTORS(640), .LATENCY(24)) u_sd (
+        .sclk(sys_clk), .rst(~dclo),
+        .media_in(smk_media && use_sd), .total_in(28'd640),
+        .bk_req(bk_req), .bk_wr(bk_wr), .bk_sector(bk_sector),
+        .bk_bank(bk_bank), .bk_ack(sd_ack), .bk_done(sd_done),
+        .bk_error(sd_error), .bk_media_ok(sd_media_ok), .bk_total(sd_total),
+        .bk_baddr(sd_baddr), .bk_wdata(sd_wdata), .bk_we(sd_we),
+        .bk_rdata(bk_rdata)
+    );
+
+    initial if ($test$plusargs("smk")) begin
         $readmemh("ide/ide_image.hex", u_disk.disk);
+        $readmemh("ide/ide_image.hex", u_sd.u_card.card);
+    end
 
     // +fastdelay: DEBUG aid for +smk iteration - NOP the BIOS's startup SOB
     // (CPU 166406 = image byte 0o6406) so the ~100 ms delay loop runs once,

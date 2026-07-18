@@ -6,6 +6,12 @@
 # transcribes BkEmu IdeControllerTest + the SmkIdeController bus packing;
 # see sim/ide/smk_ide_tb.v for the leg list.
 #
+# SECOND PASS (increment (b)): the SAME tb legs re-run with -DSD_STACK,
+# swapping ide_disk_model for sd_harness = the REAL sd_backend + sd_model
+# SPI stack (+sdsc personality: CSDv1 encodes the tb's totals exactly) -
+# every transcribed BkEmu leg, incl. the every-sector CHS sweep and the
+# DCLO geometry replays, must pass over the full SPI path. Slower (~2 min).
+#
 # MUTATION-TESTED (each applied by hand to src/smk_ide.sv, each must FAIL):
 #   1 inversion drop            : ide_rdata <= blk ? rd_word : 0
 #   2 COMP_0 packing byte-swap  : rd_word[0] = {status, dar}
@@ -33,3 +39,18 @@ vvp -n "$SP/ide.vvp" | tee "$SP/out.txt" | grep -E "IDE-ERROR|COSIM" || true
 
 grep -q '^COSIM PASS$' "$SP/out.txt" || { echo "ide unit cosim: FAIL" >&2; exit 1; }
 echo "ide unit cosim: PASS"
+
+iverilog -g2012 -DSD_STACK -o "$SP/ide_sd.vvp" -s smk_ide_tb \
+   ../../src/smk_ide.sv ../../src/sd_backend.sv \
+   sd_model.v sd_harness.v smk_ide_tb.v 2>&1 \
+   | grep -v 'sorry:' || true
+
+vvp -n "$SP/ide_sd.vvp" +sdsc | tee "$SP/out_sd.txt" \
+   | grep -E "IDE-ERROR|SD-ERROR|COSIM" || true
+
+grep -q '^COSIM PASS$' "$SP/out_sd.txt" \
+   || { echo "ide unit cosim (SD stack): FAIL" >&2; exit 1; }
+# the tb's verdict counts its own errors; card protocol errors fail here
+grep -q 'SD-ERROR' "$SP/out_sd.txt" \
+   && { echo "ide unit cosim (SD stack): FAIL (card protocol)" >&2; exit 1; }
+echo "ide unit cosim (SD stack): PASS"

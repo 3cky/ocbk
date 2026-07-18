@@ -31,6 +31,11 @@
 # drive-engine contract is pinned by sim/ide, and the real BIOS reading a
 # real image is the increment-(b) hardware milestone.
 #
+# ./run_boot_check.sh +smk +sdspi (increment (b)) swaps the disk model for
+# the REAL sd_backend + sd_model SPI stack (sim/ide/sd_harness.v): the
+# attach-time sector-7 geometry read rides the full card init + SPI path
+# under the real BIOS boot. Same pass conditions as +smk.
+#
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -47,6 +52,7 @@ iverilog -g2012 -o "$SP/boot.vvp" -s boot_check_tb \
    ../src/qbus_pkg.sv ../src/va_037_sync.sv ../src/cpu_sdram_dp.sv \
    ../src/sdram_arbiter.sv ../src/sdram_ctrl.sv ../src/mem_mapper.sv ../src/qbus_mem.sv \
    ../src/bk_kbd014.sv ../src/smk_ide.sv ide/ide_disk_model.v \
+   ../src/sd_backend.sv ide/sd_model.v ide/sd_harness.v \
    ../src/fb_video.sv ../src/palette_apply.sv ../src/fb_readout.sv \
    ../src/fb_linebuf.sv ../src/vga_out.sv ../src/vga_timing.sv \
    sdram_model.sv boot_check_tb.v 2>&1 | grep -v 'sorry:' || true

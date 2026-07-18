@@ -47,6 +47,19 @@ module smk_ide_tb;
     localparam CYLS = 10, HEADS = 4, SECS = 16;
     localparam TOTAL = CYLS * HEADS * SECS;         // 640
 
+    // -DSD_STACK (run.sh second pass): u_disk becomes sd_harness = the REAL
+    // sd_backend + sd_model SPI stack; attach then rides a full card init +
+    // SPI sector-7 read, so the attach waits and the watchdog scale up.
+`ifdef SD_STACK
+    `define DISK u_disk.u_card.card
+    localparam AWAIT0 = 60000, AWAIT = 60000;
+    localparam WDOG_NS = 400_000_000;
+`else
+    `define DISK u_disk.disk
+    localparam AWAIT0 = 3000, AWAIT = 8000;
+    localparam WDOG_NS = 60_000_000;
+`endif
+
     logic sclk = 0; always #5 sclk = ~sclk;         // ~100 MHz sys_clk stand-in
 
     // Q-bus (inverted); the tb is the only bus master
@@ -79,7 +92,11 @@ module smk_ide_tb;
         .bk_rdata(bk_rdata)
     );
 
+`ifdef SD_STACK
+    sd_harness     #(.MAX_SECTORS(TOTAL), .LATENCY(24)) u_disk (
+`else
     ide_disk_model #(.MAX_SECTORS(TOTAL), .LATENCY(24)) u_disk (
+`endif
         .sclk(sclk), .rst(reset),
         .media_in(media), .total_in(total_in),
         .bk_req(bk_req), .bk_wr(bk_wr), .bk_sector(bk_sector),
@@ -290,10 +307,10 @@ module smk_ide_tb;
                     chk(sv[7:0], 8'h58, "mid-block status");
                 end
                 r_word(A_DATA, dv);
-                if (dv !== u_disk.disk[sec * 256 + w]) begin
+                if (dv !== `DISK[sec * 256 + w]) begin
                     errors = errors + 1;
                     $display("IDE-ERROR sector %0d word %0d: %04x != %04x",
-                             sec, w, dv, u_disk.disk[sec * 256 + w]);
+                             sec, w, dv, `DISK[sec * 256 + w]);
                 end
             end
         end
@@ -318,14 +335,14 @@ module smk_ide_tb;
     integer fails_at;
 
     initial begin
-        $readmemh("ide_image.hex", u_disk.disk);
+        $readmemh("ide_image.hex", `DISK);
 
         // ---- leg 0: attach + reset snapshot -----------------------------
         media = 1'b1;
         repeat (10) @(posedge sclk);
         reset = 1'b0;
         // geometry parse: fetch + ~800 cycles; wait generously
-        repeat (3000) @(posedge sclk);
+        repeat (AWAIT0) @(posedge sclk);
 
         r_word(A_COMP0, v);
         chk(v[7:0], 8'h40, "reset STATUS");
@@ -432,10 +449,10 @@ module smk_ide_tb;
             poll_idle;
             r_word(A_COMP0, v); chk(v[7:0], 8'h50, "write end status");
             for (i = 0; i < 256; i = i + 1)
-                if (u_disk.disk[s * 256 + i] !== wpat(s, i)) begin
+                if (`DISK[s * 256 + i] !== wpat(s, i)) begin
                     errors = errors + 1;
                     $display("IDE-ERROR wr sector %0d word %0d: %04x != %04x",
-                             s, i, u_disk.disk[s * 256 + i], wpat(s, i));
+                             s, i, `DISK[s * 256 + i], wpat(s, i));
                 end
         end
         // read-back round trip (bus-inversion pair closes)
@@ -459,7 +476,7 @@ module smk_ide_tb;
         r_word(A_COMP0, v); chk(v[7:0], 8'h50, "multi-write end status");
         for (s = 16; s < 24; s = s + 1)
             for (i = 0; i < 256; i = i + 1)
-                if (u_disk.disk[s * 256 + i] !== wpat(s, i)) begin
+                if (`DISK[s * 256 + i] !== wpat(s, i)) begin
                     errors = errors + 1;
                     $display("IDE-ERROR mwr sector %0d word %0d", s, i);
                 end
@@ -480,12 +497,12 @@ module smk_ide_tb;
         // (leg 9, data-hold, rides inside every r_word)
         reset = 1'b1; media = 1'b0;
         repeat (10) @(posedge sclk);
-        $readmemh("ide_image.hex", u_disk.disk);        // pristine image
-        $readmemh("ide_sector7_bad.hex", u_disk.disk, 7 * 256, 7 * 256 + 255);
+        $readmemh("ide_image.hex", `DISK);              // pristine image
+        $readmemh("ide_sector7_bad.hex", `DISK, 7 * 256, 7 * 256 + 255);
         total_in = 2016;                        // default C = 2016/1008 = 2
         media = 1'b1;
         reset = 1'b0;
-        repeat (8000) @(posedge sclk);          // parse + C-divide loop
+        repeat (AWAIT) @(posedge sclk);         // parse + C-divide loop
         r_word(A_COMP0, v);
         chk(v[7:0], 8'h40, "fallback attach STATUS");
         run_identify(2, 16, 63, 2016);
@@ -497,7 +514,7 @@ module smk_ide_tb;
         total_in = 640;
         media = 1'b1;
         reset = 1'b0;
-        repeat (8000) @(posedge sclk);
+        repeat (AWAIT) @(posedge sclk);
         r_word(A_COMP0, v); chk(v, 16'h0000, "zero-C attach fails: absent");
         w_word(A_COMP0, 16'h00EC);
         repeat (50) @(posedge sclk);
@@ -510,7 +527,8 @@ module smk_ide_tb;
     end
 
     initial begin
-        #60_000_000;                            // 60 ms sim (clean run ~27 ms)
+        #WDOG_NS;                               // clean runs: ~27 ms disk-model,
+                                                // SPI-real in the SD pass
         $display("IDE-ERROR watchdog timeout");
         $display("COSIM FAIL");
         $finish;
