@@ -25,6 +25,9 @@ same image attaches to BkEmu for cross-validation.
 Outputs (word-per-line hex, $readmemh):
   ide_image.hex       : the full image, TOTAL_SECTORS*256 words; sector s
                         word w = pattern(s, w) except sector 7 = the table
+  ide_image.bin       : the same image as raw little-endian bytes - the
+                        dd-able form for the increment-(b) SD card
+                        (dd if=ide_image.bin of=/dev/sdX) and BkEmu attach
   ide_sector7_bad.hex : 256 words - sector 7 with the checksum broken (the
                         C word bit-flipped, checksum NOT recomputed). The
                         unit tb overlays it for the fallback-geometry leg
@@ -131,6 +134,8 @@ def main():
     with open(f"{outdir}/ide_image.hex", "w") as f:
         for w in img:
             f.write(f"{w:04x}\n")
+    with open(f"{outdir}/ide_image.bin", "wb") as f:
+        f.write(b"".join(bytes((w & 0xFF, w >> 8)) for w in img))
     with open(f"{outdir}/ide_sector7_bad.hex", "w") as f:
         for w in bad7:
             f.write(f"{w:04x}\n")

@@ -27,6 +27,7 @@ sim:
 	./sim/smk/run.sh
 	./sim/ide/run.sh
 	./sim/ide/run_soc.sh
+	./sim/ide/run_sd.sh
 	./sim/romwr/run.sh
 	./sim/ref037/run.sh
 	./sim/ref014/run.sh

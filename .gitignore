@@ -56,6 +56,7 @@ sim/romwr/romwr_ram.hex
 # Local MCP servers
 .mcp.json
 sim/ide/ide_image.hex
+sim/ide/ide_image.bin
 sim/ide/ide_sector7_bad.hex
 sim/ide/ide_page6.hex
 sim/ide/ide_bios.hex
