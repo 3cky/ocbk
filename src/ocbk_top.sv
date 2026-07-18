@@ -638,6 +638,44 @@ module ocbk_top (
     logic [1:0] tape_sr = '0;
     always_ff @(posedge cpu_clk_n) tape_sr <= {tape_sr[0], tape_lvl};
 
+    // ---- SMK512 IDE controller (Phase-8 IDE increment (a)) ----------------
+    // A sibling peripheral like u_kbd: it snoops the shared bus itself and
+    // never drives it - qbus_mem's sel_ide decode owns the RPLY and merges
+    // ide_rdata at its reply point. All sclk; reset is DCLO-only (BkEmu
+    // resets the IDE on hardware reset only - the 5th deliberate nINIT
+    // exception; software resets ride the SRST control-register bit).
+    // The backend sector port is the increment-(b) SD/SPI seam: tied off
+    // "no media" on hardware for now, so the drive reports cleanly ABSENT
+    // (task-file reads 0xFFFF) instead of the old bus-timeout probes -
+    // the intended behaviour change, DIP-8-gated.
+    logic [15:0] ide_rdata;
+    logic        ide_act;
+    smk_ide u_ide (
+        .sclk       (sys_clk),
+        .reset      (~dclo_n),
+        .enable     (smk_en && model_bk11),
+        .ad_n       (ad_n),
+        .sync_n     (sync_n),
+        .din_n      (din_n),
+        .dout_n     (dout_n),
+        .wtbt_n     (wtbt_n),
+        .ide_rdata  (ide_rdata),
+        .ide_act    (ide_act),
+        .bk_req     (),
+        .bk_wr      (),
+        .bk_sector  (),
+        .bk_bank    (),
+        .bk_ack     (1'b0),
+        .bk_done    (1'b0),
+        .bk_error   (1'b0),
+        .bk_media_ok(1'b0),         // no backend yet: drive absent
+        .bk_total   (28'd0),
+        .bk_baddr   (8'd0),
+        .bk_wdata   (16'd0),
+        .bk_we      (1'b0),
+        .bk_rdata   ()
+    );
+
     qbus_mem u_mem (
         .cpu_clk  (cpu_clk_n),      // ROM/IO wait FSM advances on the inverted CPU clock
         .reset    (~dclo_n),
@@ -650,6 +688,7 @@ module ocbk_top (
                                     //   hold above -> quasi-static here)
         .smk_en   (smk_en),         // DIP-8 SMK512 enable (same DCLO-hold latch
                                     //   as the model select above)
+        .ide_rdata(ide_rdata),      // SMK IDE read-word merge (u_ide below)
         .boot_active(mem_boot_active),
         .bw_req   (mem_bw_req),
         .bw_addr  (mem_bw_addr),
@@ -858,9 +897,18 @@ module ocbk_top (
     // in reset). Dark only during the ~200 us SDRAM init at power-on.
     wire boot_fail = boot_done && !boot_ok;
     assign pLedPwr = boot_fail ? hb[22] : init_done;
-    // pLed[7]: PLL heartbeat.  pLed[1]: CMT tape-in mode (Scroll Lock; lit =
-    // right jack is the cassette port).  pLed[0]: BK speaker activity (solid
-    // while a tone plays; audio bring-up tap).  pLed[6:2]: unused.
-    assign pLed    = {hb[24], 5'b0, cmt_mode, spk_active};
+    // pLed[2]: SMK IDE drive-access LED - ide_act (a command/backend op in
+    // flight in smk_ide, sclk domain) stretched to ~87 ms (2^23 sys_clk) so
+    // even a single-sector op is visible; re-armed while activity persists.
+    logic [22:0] ide_led_cnt = '0;
+    always_ff @(posedge sys_clk) begin
+        if (ide_act)               ide_led_cnt <= '1;
+        else if (ide_led_cnt != 0) ide_led_cnt <= ide_led_cnt - 1'b1;
+    end
+    // pLed[7]: PLL heartbeat.  pLed[2]: SMK IDE drive access (stretched).
+    // pLed[1]: CMT tape-in mode (Scroll Lock; lit = right jack is the
+    // cassette port).  pLed[0]: BK speaker activity (solid while a tone
+    // plays; audio bring-up tap).  pLed[6:3]: unused.
+    assign pLed    = {hb[24], 4'b0, |ide_led_cnt, cmt_mode, spk_active};
 
 endmodule

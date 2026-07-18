@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+#
+# Phase-8 IDE unit oracle: src/smk_ide.sv (the SMK512 IDE register block +
+# ATA engine + AltPro geometry parse) against the behavioral ide_disk_model
+# loaded with mem/gen_ide_image.py's synthetic AltPro image. The tb
+# transcribes BkEmu IdeControllerTest + the SmkIdeController bus packing;
+# see sim/ide/smk_ide_tb.v for the leg list.
+#
+# MUTATION-TESTED (each applied by hand to src/smk_ide.sv, each must FAIL):
+#   1 inversion drop            : ide_rdata <= blk ? rd_word : 0
+#   2 COMP_0 packing byte-swap  : rd_word[0] = {status, dar}
+#   3 COMMAND accepted at 741   : drop the !w_a0 guard on the dispatch
+#   4 DRQ chain break           : E_DRAIN end always stops (no E_LBA1 re-arm)
+#   5 CHS advance off-by-one    : x_snum wrap compares > instead of >=
+#   6 1-based snum drop         : MRET_LBA1 omits the "- 28'd1" on mul_acc
+#   7 checksum loop bound       : G_SUM ends at g_ptr 254 (skips the C word)
+#   8 checksum seed             : compare against 012700
+#   9 DHR 0xA0 forcing drop     : dhr <= w_inv[7:0] (no | DHR_FIXED)
+#
+set -euo pipefail
+cd "$(dirname "$0")"
+
+python3 ../../mem/gen_ide_image.py .
+
+SP="$(mktemp -d)"
+trap 'rm -rf "$SP"' EXIT
+
+iverilog -g2012 -o "$SP/ide.vvp" -s smk_ide_tb \
+   ../../src/smk_ide.sv ide_disk_model.v smk_ide_tb.v 2>&1 \
+   | grep -v 'sorry:' || true
+
+vvp -n "$SP/ide.vvp" | tee "$SP/out.txt" | grep -E "IDE-ERROR|COSIM" || true
+
+grep -q '^COSIM PASS$' "$SP/out.txt" || { echo "ide unit cosim: FAIL" >&2; exit 1; }
+echo "ide unit cosim: PASS"

@@ -25,6 +25,8 @@ sim:
 	./sim/bk10/run.sh
 	./sim/bk11/run.sh
 	./sim/smk/run.sh
+	./sim/ide/run.sh
+	./sim/ide/run_soc.sh
 	./sim/romwr/run.sh
 	./sim/ref037/run.sh
 	./sim/ref014/run.sh

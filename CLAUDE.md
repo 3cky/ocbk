@@ -23,9 +23,16 @@ current result. **Phase 8 (SMK512) is in progress**: increment 1 (the 512 KB
 segmented RAM extension on **DIP 8**, BK-0011M only) and increment 2 (the
 SMK BIOS ROM + the SYS register-space boot overlay — **DIP-8-ON boots the
 SMK BIOS, confirmed on hardware 2026-07-17: it shows its banner**) are done;
-the IDE/SD engine is next (with no drive the BIOS's probes bus-time-out, so
-nothing happens past the banner; see the SMK512 bullet). Remaining open item:
-BK-0011M cycle-accuracy vs a reference (deferred, reference-tb-first).
+**IDE increment (a) — the drive engine (`src/smk_ide.sv`: task file, ATA
+engine, AltPro geometry parse, tb-backed sector port) plus the 177130/132
+КНГМД register stub — is done, CONFIRMED ON HARDWARE 2026-07-18**: with no
+drive the BIOS boots, times out its HDD and FDD probes cleanly and exits
+to its command line exactly like a real driveless SMK (the stub fixed a
+crash-restart at the FDD boot attempt). The SD/SPI backend is increment
+(b): the sector port is tied off, so the drive reports absent; pLed[2]
+is the drive-access LED (see the SMK512 bullet). Remaining
+open item: BK-0011M cycle-accuracy vs a reference (deferred,
+reference-tb-first).
 
 ## Build & test
 
@@ -131,7 +138,8 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   whole contract on the real SoC stack (smk_en=1, /24 rate, port-2
   contention, a **1<<19-word sdram_model**): the 177130 write reply +
   no-commit-without-arm, the BIOS windows (one image both windows, writes →
-  trap 4, 177130 read = BIOS under SYS / trap 4 elsewhere), the I/O-page
+  trap 4, 177130/177132 reads replied everywhere — the КНГМД stub: BIOS
+  word merged under SYS, 0 elsewhere), the I/O-page
   OR-merge (177714 pure-BIOS, 177776 BIOS-only, 177716 masked-merged) with
   the kbd (177660 → trap 4) and vm1-internal (177712 self-served, X-monitor
   tripwire) carve-outs, SYS/RAM10 fill/verify with cross-mode aliasing, the
@@ -153,6 +161,40 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   **Mutation-tested ×8 at the SoC level** (see the run.sh header — incl.
   the increment-1 documented masked mutation, now KILLED by the reworked
   issued-legs done-gate).
+- `sim/ide/run.sh` — the Phase-8 **SMK512 IDE unit oracle**: `src/smk_ide.sv`
+  (the task-file register block + ATA engine + AltPro geometry parse)
+  driven with Q-bus-shaped transactions against the behavioral
+  `ide_disk_model` loaded with `mem/gen_ide_image.py`'s synthetic AltPro
+  image (C/H/S 10/4/16 = 640 sectors, valid sector-7 partition table +
+  checksum). Transcribes **BkEmu `IdeControllerTest`** + the
+  `SmkIdeController` bus packing: the reset snapshot through the ~
+  inversion (plus one raw-inversion pin so a dropped inversion can't
+  cancel out), SRST assert/release, the absent slave (bus 0xFFFF, command
+  writes ignored), the 740/742 exact-byte-address lane rules (COMMAND only
+  at 177740; control register only via byte 177743), DHR |0xA0 forcing,
+  IDENTIFY with the full word map + the per-word 0x58-during/0x50-after
+  status contract, single-sector READ of **every** sector via CHS
+  auto-advance (wrap boundaries register-checked), multi-sector chains
+  (COUNT=0 ⇒ 256), WRITEs verified against the model's backing store + a
+  read-back round trip, ABRT for unsupported opcodes AND the LBA bit (the
+  documented CHS-only deviation), data hold across the DIN window, and
+  the geometry legs (valid parse; broken checksum ⇒ raw defaults 63/16;
+  default C = total/1008 == 0 ⇒ attach fails, drive absent).
+  **Mutation-tested ×9** (see the run.sh header — inversion drop, packing
+  swap, lane rule, DRQ chain break, CHS off-by-one, 1-based snum drop,
+  checksum bound/seed, 0xA0 drop — all fail).
+- `sim/ide/run_soc.sh` — the Phase-8 **IDE SoC functional oracle**
+  (sim/smk conventions: real boot mechanism, /24 rate, port-2 contention,
+  parks 001004/001012, `COSIM PASS`): the `mem/gen_ide_test.py` program
+  drives the task file through the real qbus_mem reply machinery — the
+  SYS rom7|device OR-merge at 177752 (both contributions visible in one
+  exact compare), IDENTIFY/READ/WRITE end-to-end with the **BSY commit
+  phase**, ABRT + LBA + SRST recovery, the **HLT10 write-only-extent
+  broadcast** (a task-file write lands in SMK RAM AND the device; the
+  read back rides the sel_ide-only reply), the ALL-mode seg-3 alias
+  readback + extent|device merged read, and the absent slave.
+  **Mutation-tested ×3 at the SoC level** (run_soc.sh header: qbus_mem
+  merge-term drop, write-claim drop, command lane swap — all fail).
 - `sim/bk11/run.sh` — the Phase-7 BK-0011M SoC **functional** oracle
   (data-checking, NOT a timing golden — ref037 keeps the timing-reference
   meaning): the `mem/gen_bk11_test.py` program (pinned parks: success
@@ -236,10 +278,21 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   (`+warmreset` is bk10-only). `VID_TARGET`/the 60 ms bound are noted
   tunables if BOS's real startup profile needs them. **`+smk`** (Phase 8)
   cold-boots the real SMK512 BIOS: the +bk11 stack with smk_en=1 and the
-  43008-word blob (BIOS at SDRAM 0x3A000); requires the merged 166400 start
-  vector (the SYS rom7 register-space overlay | SEL1) and ≥200 DIN fetches
-  from the rom6 window (the BIOS EXECUTING from ROM), no X. Deliberately
-  modest — no IDE engine yet, so no screen/disk activity is required.
+  43008-word blob (BIOS at SDRAM 0x3A000) — since the IDE increment plus
+  the **live `smk_ide`** fronted by the behavioral disk model loaded with
+  `gen_ide_image.py`'s AltPro image; requires the merged 166400 start
+  vector (the SYS rom7 register-space overlay | SEL1; the raw word also
+  carries the idle-kbd 0o100 bit — the PC masks with 177400), ≥200 DIN
+  fetches from the rom6 window (the BIOS EXECUTING from ROM), and the
+  BIOS's own **banner** (its 177662 write + the video-RAM burst — after
+  its ~150 ms SOB startup delay, hence the 400 ms +smk time bound), no X
+  with the sel_ide decode active. The BIOS's DRIVE probe is deliberately
+  NOT required: smk64.mac (doc/) routes every boot path through INIT →
+  EMT 0 = the full BOS re-init incl. the multi-second БК memory test
+  before ZAGHDD/BOOT0 touch the task file — out of sim reach (the tb's
+  `+fastdelay`/`+idetrace` debug aids exist for exploring that flow); the
+  drive contract is `sim/ide`'s, and the real BIOS reading a real image
+  is the increment-(b) hardware milestone.
 
 Any change touching the core, the Q-bus, memory, video, or clocking must keep all
 of it passing. When tuning bus/RPLY timing, trace the **reference** waveform first
@@ -505,10 +558,11 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   — it beat MiSTer on every divergence (reset default = **SYS** not STD11;
   strobe arming compares the low NIBBLE; byte writes lane-masked per
   `Computer.writeMemory`: odd byte = value<<8). Contract: register
-  **0177130** (the floppy control register, "ab-used"; write-only), inside
-  the ROM window so its write reply is a positive decode carved from
-  `sel_rom` in qbus_mem (`sel_smkreg`, fixed `N_SMKREG` placeholder) — NOT an
-  nSEL; two-phase strobe (`(value & 017) == 06` arms, the FOLLOWING write
+  **0177130** (the floppy control register, "ab-used"), inside the ROM
+  window so its reply is a positive decode carved from `sel_rom` in
+  qbus_mem (since the IDE increment: `sel_fdd`, the КНГМД-stub block
+  177130/177132 replying BOTH directions at the fixed `N_SMKREG`
+  placeholder — see the FDD-stub note below) — NOT an nSEL; two-phase strobe (`(value & 017) == 06` arms, the FOLLOWING write
   commits mode `v[6:4]` + 32 KB page `{v0,v3,v2,v10}`); 8 modes × 8 4 KB
   segments (seg = `addr[14:12]`, rel = seg ^ 4 in SYS/ALL) per the BkEmu
   table incl. the BOS/second-window deselects → MK_NONE. SMK RAM = **`MK_EXT`**:
@@ -543,22 +597,69 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   HALT-entry stores land in SMK RAM and the HALT vector comes from 160002/4
   = SMK RAM seg 6), others capped → MK_NONE. All the per-mode window/extent
   flags are decode-at-commit registers next to `seg_*` (the STA rule). The
-  **refined 177130 invariant**: the mapper never claims the WRITE reply
-  there — `sel_smkreg` is the sole write owner (under SYS the READ side is
-  BIOS ROM; in HLT modes the extent-write u_dp leg issues on the pre-commit
-  translate = BkEmu's memory-then-device order, so a mode write can't
-  re-map its own cycle); SMK-off keeps it plain ROM (sim/romwr contract).
+  **177130/177132 КНГМД (FDD-controller) stub** (IDE-increment hardware
+  fix): the SMK board carries a REAL floppy controller, so both registers
+  reply BOTH directions REGARDLESS of layout — BkEmu's SMK config always
+  attaches FloppyController, whose no-drive control read is 0. qbus_mem's
+  `sel_fdd` reproduces that (reads reply 0-merged — under SYS the rom7
+  BIOS word still ORs in; the mapper stays the layout-write snooper, never
+  the reply owner; in HLT modes the extent u_dp write leg still posts to
+  SMK RAM on the pre-commit translate = BkEmu's memory-then-device order,
+  so a mode write can't re-map its own cycle). The increment-2 "reads
+  trap 4 outside SYS" was OUR simplification, not BkEmu's — the real
+  BIOS's FDD boot attempt (which follows a failed HDD boot) trapped on
+  its status polls and CRASH-RESTARTED the machine (hardware 2026-07-18).
+  SMK-off keeps 177130 plain ROM (sim/romwr contract).
   TIMING: I/O-page MK_EXT accesses take the `N_ROM` count, NOT `N_EXT` —
   the 037's start-vector assist replies EARLY at 177716 (wire-AND) and the
   vm1's data-sample point sits a fixed distance after that assert; the
   `N_EXT` count landed the merged word too late (found in sim). The FSM
   done-gate keys on the legs u_dp actually ISSUES (an smk_wo read / smk_ro
   write never issues — gating on raw `sel_ext` would hold RPLY forever
-  where `sel_io` coexists). **Deferred to the IDE increment:** the IDE/SD
-  engine (drive probes bus-time-out for now), bk10+SMK, the SMK-RAM
-  `ram_init` pattern, and `N_EXT`/`N_SMKREG` recalibration
-  (reference-tb-first). Oracles: `sim/run_mapper.sh` + `sim/smk/run.sh`
-  (see the sim list) + `sim/run_boot_check.sh +smk` (the real BIOS).
+  where `sel_io` coexists). **IDE increment (a) — the drive engine
+  (`src/smk_ide.sv`), done in sim:** the SMK IDE task file at word
+  addresses **0177740–0177756** (BkEmu `SmkIdeController` over
+  `IdeController` is the contract; `IdeControllerTest` the transcribed
+  oracle) — ALL data bit-inverted **both** directions at the bus adapter
+  (~; the backing store holds TRUE data = a **raw AltPro image**, the
+  same bytes BkEmu attaches), the composite registers 177740 (read
+  {drive-addr, status}, write-at-exact-740 = COMMAND, byte 741 ignored)
+  and 177742 (read {alt-status, DHR |0xA0}, write-at-exact-742 = DHR,
+  byte 743 = the control register / SRST), ONE master drive (the absent
+  slave reads bus 0xFFFF), **CHS only** (the DHR LBA bit ⇒ ABRT — a
+  documented deviation, BkEmu supports LBA), commands **IDENTIFY /
+  READ 0x20-21 / WRITE 0x30-31**, everything else BkEmu's own ABRT
+  default (0x41/0x04). Geometry parses **in hardware from image sector 7**
+  (the AltPro partition table: inverted words, checksum seed 012701,
+  records growing down from byte 0770; fallback = BkEmu raw defaults
+  S=63 H=16 C=total/1008, C==0 ⇒ attach fails ⇒ absent). Status shows
+  **SR_BSY while the backend works** (fetch gaps / write commits) — a
+  required deviation from BkEmu's instantaneous model (a !BSY poll after
+  the last data word must not see command-complete mid-commit); end
+  status is BkEmu's 0x50 exactly. The device is an `ocbk_top` **sibling**
+  (all sclk, snoops the bus, never drives it): qbus_mem's `sel_ide`
+  decode owns the RPLY both directions (fixed `N_IDE` = N_ROM-family
+  placeholder) and ORs the registered `ide_rdata` into its reply-point
+  merge — BkEmu `Computer.readMemory`'s memory|device OR (under SYS the
+  rom7 BIOS bytes merge in; extent-mode writes still broadcast to SMK
+  RAM). Reset is **DCLO-only — the 5th deliberate nINIT exception**
+  (BkEmu resets the IDE on hardware reset only; software resets ride
+  SRST). The 2-bank 512×16 sector buffer (2 M4Ks) + the backend sector
+  port (req/ack/done, 28-bit LBA, bank field, all sclk) are the
+  **increment-(b) SD/SPI seam** — ping-pong-ready for tier-1 prefetch
+  overlap, strictly sequential in (a). **pLed[2] = drive-access LED**:
+  `ide_act` (command/backend in flight — DRQ phases, backend ops, the
+  attach-time geometry read; register pokes alone don't light it)
+  stretched to ~87 ms in `ocbk_top`. On hardware the port is tied off
+  "no media" until (b): DIP-8-ON now shows the BIOS a cleanly ABSENT
+  drive (task-file reads 0xFFFF) instead of the old bus-timeout probes —
+  the intended behavior change. **Still deferred:** the SD/SPI backend
+  (increment (b): megasd pins PIN_61–66, not yet in the QSF), prefetch
+  overlap, bk10+SMK, the SMK-RAM `ram_init` pattern, and
+  `N_EXT`/`N_SMKREG`/`N_IDE` recalibration (reference-tb-first).
+  Oracles: `sim/run_mapper.sh` + `sim/smk/run.sh` + `sim/ide/run.sh` +
+  `sim/ide/run_soc.sh` (see the sim list) + `sim/run_boot_check.sh +smk`
+  (the real BIOS must now DETECT the drive).
 - **Framebuffer conventions** (mirrored by `fb_video_tb`/`gen_expected.py`
   alike): FB = 512 slots/line × 4-bit colour nibble × 256 lines, 128
   words/line, slot `s` of a word at bits `[4s+3:4s]`, LSB-first in beam order;

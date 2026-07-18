@@ -210,8 +210,14 @@ def build_stage2():
         cmp_mem_imm(a, seg(n) + OFF_S, pat_s(n))
     cmp_mem_imm(a, 0o176776, B7PAT)
     expect_trap4(a, lambda: a.emit(0o005737, 0o177000))   # the cap: trap 4
-    # write-only again outside SYS: no BIOS at 177130, read -> trap 4
-    expect_trap4(a, lambda: a.emit(0o013700, REG))
+    # outside SYS there is no BIOS word at 177130, but the КНГМД (FDD
+    # controller) stub still replies - a real SMK's floppy controller
+    # always does; the no-drive control read is 0 (BkEmu FloppyController.
+    # readControlRegister with no selected drive). Was expect_trap4 before
+    # the FDD stub - OUR simplification, not BkEmu's; the real BIOS's FDD
+    # boot attempt crash-restarted on it (hardware 2026-07-18).
+    cmp_mem_imm(a, REG, 0)
+    cmp_mem_imm(a, REG + 2, 0)                  # 177132 data reg: ditto
     # no overlay outside SYS: 177716 is the plain SEL1 register again
     cmp_reg_imm(a, 0o177716, 0o140000, VOLATILE)
     # plant the ALL-extent probes at abs P+3 (RAM10 seg3 = P+3): the ALL

@@ -33,6 +33,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE src/va_037_sync.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/cpu_sdram_dp.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/mem_mapper.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/qbus_mem.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/smk_ide.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/ps2_rx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/kbd_ps2bk.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/bk_kbd014.sv

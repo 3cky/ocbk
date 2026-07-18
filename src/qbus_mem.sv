@@ -65,6 +65,13 @@ module qbus_mem #(
                                     // hold (quasi-static); BK-0011M only - every
                                     // consumer gates it with model_bk11
 
+    // ---- SMK512 IDE read data (Phase-8 IDE increment) ---------------------
+    // smk_ide's registered TRUE-bus-value word: ~packed register data inside
+    // its 0177740-0177757 decode, 0 outside it. OR-ed into the reply-point
+    // merge latch below (gated on sel_ide, so a tie-to-0 in non-SMK tbs is
+    // behaviour-identical). The device itself never drives ad_n/rply_n.
+    input  logic [15:0] ide_rdata,
+
     // ---- SDRAM domain ---------------------------------------------------
     input  logic        sclk,       // sys_clk (96.65 MHz)
     input  logic        srst_n,     // SDRAM-domain reset (PLL locked), active low
@@ -248,23 +255,45 @@ module qbus_mem #(
     wire sel_vreg = model_bk11 && !sync_n
                     && (addr[15:1] == 15'(16'o177662 >> 1));
 
-    // ---- 177130: SMK512 memory-layout register (Phase 8) ------------------
-    // The positive decode the Phase-8 note above anticipated, carved out of
-    // the ROM window exactly like sel_vreg: with the SMK present a WRITE to
-    // 177130/1 is replied (fixed N_SMKREG) and snooped by mem_mapper.
-    // The refined increment-2 invariant: the mapper never claims the WRITE
-    // reply at 177130 - this decode is the sole write owner. The READ side is
-    // mode-dependent: under SYS the rom7 BIOS window covers it (MK_ROM, reads
-    // return BIOS data); in the HLT modes the write-only extent covers it
-    // (MK_EXT+smk_wo, reads NOT replied); everywhere else the capped extent
-    // leaves it MK_NONE - reads bus-time-out -> trap 4 (BkEmu: register
-    // read = BUS_ERROR, memory per layout). A HLT-mode commit write also
-    // posts to SMK RAM through u_dp on the PRE-commit translate (BkEmu's
-    // memory-then-device write order), so a mode write can never re-map its
-    // own in-flight cycle. With the SMK absent the decode is dead and 177130
-    // stays plain ROM: reads return the MSTD word, writes trap (sim/romwr).
-    wire sel_smkreg = model_bk11 && smk_en && !sync_n
-                      && (addr[15:1] == 15'(16'o177130 >> 1));
+    // ---- 177130/177132: the SMK's КНГМД (FDD controller) register block ----
+    // (Phase 8; the layout register 177130 is the FDD control register the
+    // SMK "ab-uses" - mem_mapper snoops its writes independently of this
+    // decode.) The SMK board carries a REAL floppy controller, so BOTH
+    // registers reply BOTH directions REGARDLESS of the memory layout -
+    // BkEmu's SMK configuration always attaches FloppyController, and its
+    // no-selected-drive/no-disk control read returns 0 (FloppyController.
+    // readControlRegister). This stub reproduces exactly that: reads reply
+    // with a 0 contribution (under SYS the rom7 BIOS word still merges in -
+    // BkEmu ORs memory and device reads; in the HLT modes the write-only
+    // extent still posts writes to SMK RAM through u_dp), writes reply and
+    // are otherwise ignored (177130's are layout-snooped by the mapper).
+    // WITHOUT this reply the real BIOS's FDD boot attempt (after a failed
+    // HDD boot) trapped through vector 4 on its status polls and crash-
+    // restarted the machine - found on hardware 2026-07-18; a real SMK
+    // never bus-errors there. The increment-2 "reads trap 4 outside SYS"
+    // behaviour was OUR simplification, not BkEmu's. Fixed reply count =
+    // N_SMKREG (placeholder family). A HLT-mode commit write still posts
+    // to SMK RAM on the PRE-commit translate (BkEmu's memory-then-device
+    // write order), so a mode write can never re-map its own in-flight
+    // cycle. With the SMK absent the decode is dead and 177130 stays plain
+    // ROM: reads return the MSTD word, writes trap (sim/romwr).
+    wire sel_fdd = model_bk11 && smk_en && !sync_n
+                   && (addr[15:2] == 14'(16'o177130 >> 2));
+
+    // ---- 177740-177757: SMK512 IDE task file (Phase-8 IDE increment) ------
+    // The smk_ide sibling module owns the registers (it snoops the bus
+    // itself); THIS decode owns the RPLY, both directions, and merges the
+    // device's read word at the reply point - reproducing BkEmu
+    // Computer.readMemory/writeMemory, where the device read ORs with
+    // whatever the memory layout returns (under SYS that is rom7 BIOS
+    // bytes - the BIOS probes from a mode where the range is MK_NONE) and
+    // a write is broadcast to device AND memory (the HLT-mode extent write
+    // still posts to SMK RAM through u_dp; this decode just adds the
+    // reply). The block sits outside cpu_blk/kbd_blk, so the carve-outs
+    // are not involved. Reply = fixed N_IDE (N_ROM family per the I/O-page
+    // rule; placeholder - see qbus_pkg).
+    wire sel_ide = model_bk11 && smk_en && !sync_n
+                   && (addr[15:4] == 12'hFFE);
 
     // ROM reads are always served from SDRAM through cpu_sdram_dp (port 0).
     wire sel_romx = sel_rom;
@@ -417,7 +446,12 @@ module qbus_mem #(
     // overlay/extent replies out of the vm1-internal and kbd-owned addresses.
     wire selected = (sel_rom & is_read & ovl_rd_ok) | sel_io
                   | (sel_ext & ((is_read  & ~m_smk_wo & ovl_rd_ok)
-                               |(is_write & ~m_smk_ro & ovl_wr_ok)));
+                               |(is_write & ~m_smk_ro & ovl_wr_ok)))
+                  | sel_ide     // IDE task file: reads AND writes replied
+                                // (BkEmu device semantics; the ROM/extent
+                                // coexistence keeps its own terms above)
+                  | sel_fdd;    // КНГМД stub: ditto (a real SMK's floppy
+                                // controller always replies there)
 
     always_ff @(posedge cpu_clk) begin
         fetch_stb <= 1'b0;
@@ -430,7 +464,7 @@ module qbus_mem #(
                     drive_data <= 1'b0;
                     reply      <= 1'b0;
                     if (!sync_n && ((selected && (is_read || is_write))
-                                    || ((sel_vreg || sel_smkreg) && is_write))) begin
+                                    || (sel_vreg && is_write))) begin
                         // 177716 bit-2 write-flag: set at THIS detection edge,
                         // not the reply point - the vm1 self-replies every
                         // write in the 177700-177717 block, so the DOUT window
@@ -454,9 +488,14 @@ module qbus_mem #(
                         // that assert - the N_EXT count landed the merged
                         // word AFTER the sample (found in sim: the ALL-mode
                         // 177716 read returned only the AD15 bit).
+                        // sel_fdd ranks BELOW the mem-region extent term:
+                        // in the HLT/ALL modes an extent-covered 177130-133
+                        // access keeps its N_EXT count (the FDD stub only
+                        // claims what nothing else replies to)
                         wcnt  <= sel_vreg   ? 3'(N_VREG-2)
-                               : sel_smkreg ? 3'(N_SMKREG-2)
+                               : sel_ide    ? 3'(N_IDE-2)
                                : (sel_ext && !ovl_zone) ? 3'(N_EXT-2)
+                               : sel_fdd    ? 3'(N_SMKREG-2)
                                : 3'(N_ROM-2);
                         state <= S_WAIT;
                     end
@@ -505,7 +544,8 @@ module qbus_mem #(
                                 rdata      <= rd_romio
                                             | (((sel_romx | (sel_ext & ~m_smk_wo))
                                                 & ovl_zone)
-                                               ? ram_rdata : 16'h0000);
+                                               ? ram_rdata : 16'h0000)
+                                            | (sel_ide ? ide_rdata : 16'h0000);
                                 // SDRAM ROM/SMK data: u_dp drives; I/O incl.
                                 // the merged overlay reads: this FSM
                                 drive_data <= !((sel_romx || sel_ext) && !ovl_zone);

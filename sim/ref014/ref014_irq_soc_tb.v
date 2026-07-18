@@ -135,6 +135,7 @@ module ref014_irq_soc_tb;
     qbus_mem u_ms (
         .cpu_clk  (~clk),
         .reset    (~dclo),
+        .ide_rdata(16'h0000),  // no SMK IDE device in this tb
         .init_n   (init),
         .kbd_down (key_down),
         .tape_in  (1'b0),            // no tape signal in this oracle

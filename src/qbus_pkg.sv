@@ -78,6 +78,25 @@ package qbus_pkg;
    // 037).
    localparam int unsigned N_SMKREG = N_ROM;
 
+   // SMK512 IDE task file 0177740-0177756 (Phase-8 IDE increment; BkEmu
+   // SmkIdeController is the reference). Eight word registers - DATA 177756,
+   // ERROR/FEATURES 177754, SECTOR COUNT 177752, SECTOR NUMBER 177750,
+   // CYL LOW 177746, CYL HIGH 177744, COMP_1 177742 (read {alt-status,
+   // drive/head}, write-at-exact-742 = drive/head, byte 177743 = control
+   // register), COMP_0 177740 (read {drive-addr, status}, write-at-exact-740
+   // = command, byte 177741 ignored). ALL data is bit-inverted on the bus
+   // (~ both directions - the active-low Q-bus convention); the backing
+   // store holds TRUE data (raw AltPro image). The block sits INSIDE the
+   // seg-7 extent / rom7 zone, so reads OR-merge with whatever the mapper
+   // translation returns there, exactly as BkEmu Computer.readMemory ORs
+   // memory and device reads; the device (sel_ide) owns the RPLY both
+   // directions. Fixed reply count, N_ROM family per the I/O-page rule
+   // (the 037's early start-vector-assist argument; see the N_ROM-not-N_EXT
+   // comment in qbus_mem). PLACEHOLDER like N_SMKREG: recalibrate
+   // reference-tb-first.
+   localparam logic [15:0] SMK_IDE_BASE = 16'o177740;
+   localparam int unsigned N_IDE = N_ROM;
+
    // 177662 write register (BK-0011M only; MiSTer rtl/video.sv is the
    // reference - BkEmu's handling is simplified). Fixed reply count for the
    // qbus_mem write-only reply path. PLACEHOLDER like N_EXT: recalibrate

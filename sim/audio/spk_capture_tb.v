@@ -45,6 +45,7 @@ module spk_capture_tb;
     qbus_mem dut (
         .cpu_clk   (cclk),
         .reset     (reset),
+        .ide_rdata(16'h0000),  // no SMK IDE device in this tb
         .init_n    (init_n),
         .kbd_down  (1'b0),
         .tape_in   (tape_in),

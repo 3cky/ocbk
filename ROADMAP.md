@@ -638,12 +638,49 @@ register/behaviour reference for the exact bit fields):
 
 **SMK512 — design notes.** The SMK512 is *three* devices on one board, so Phase 8
 is not a single peripheral:
-- **IDE/HDD interface** — a standard ATA task-file, memory-mapped as a small
-  block of registers in the I/O page. `SECTOR_SIZE = 512`, so the ATA LBA maps
-  1:1 onto SD's native sector — the disk image is just an SD-resident sector
-  range. The heavy part is an ATA command engine (BSY/DRQ handshake,
-  READ/WRITE SECTOR(S), IDENTIFY) with a one-sector buffer; the CPU-visible
-  data port is **bit-inverted** on the bus. This part is nearly memory-layout-free.
+- **IDE/HDD interface** — ✅ **increment (a) — the drive engine — DONE,
+  CONFIRMED ON HARDWARE 2026-07-18** (with no drive the BIOS times out its
+  probes and exits to its command line like a real driveless SMK;
+  `src/smk_ide.sv`; the SD/SPI backend is increment (b)).
+  The standard ATA task-file at word addresses **0177740–0177756** (BkEmu
+  `SmkIdeController`/`IdeController` is the contract, `IdeControllerTest`
+  the transcribed oracle): ALL data **bit-inverted** both directions at the
+  bus adapter — the backing store holds TRUE data, a **raw AltPro image**
+  (user-settled: same bytes BkEmu attaches, dd-able to the card in (b)) —
+  composite registers 177740 (rd {drive-addr, status} / wr-at-exact-740 =
+  COMMAND) and 177742 (rd {alt-status, DHR|0xA0} / wr-742 = DHR / byte 743
+  = control incl. SRST), ONE master drive (absent slave = bus 0xFFFF),
+  **CHS only** (LBA bit ⇒ ABRT, documented deviation), commands
+  **IDENTIFY / READ 0x20-21 / WRITE 0x30-31** + BkEmu's own ABRT default.
+  Geometry parsed **in hardware from image sector 7** (the AltPro
+  partition table, checksum 012701; fallback 63/16/total÷1008, C==0 ⇒
+  absent). Status shows **BSY during backend work** — a required deviation
+  from BkEmu's zero-latency model. Bus seam: an `ocbk_top` sibling that
+  never drives the bus; qbus_mem's `sel_ide` decode owns RPLY both ways
+  (fixed `N_IDE`, N_ROM family) and ORs `ide_rdata` into the reply-point
+  merge (BkEmu's memory|device OR). Reset DCLO-only (the 5th nINIT
+  exception). The 2-bank sector buffer (2 M4Ks) + the req/ack/done sector
+  port are the (b) seam — ping-pong-ready for prefetch overlap (tier 1:
+  fetch N+1 while the CPU drains N; tier 2: SD multi-block; tier 3
+  speculative cross-command read-ahead only if the measured command mix
+  wants it), strictly sequential in (a). LBA math rides a serial
+  shift-add multiplier (single-cycle products broke sys_clk closure; the
+  engine has bus-scale time budgets). Hardware ships (a) with the port
+  tied "no media": DIP-8-ON now shows the BIOS a cleanly ABSENT drive
+  instead of bus-timeout probes. Includes the **177130/177132 КНГМД
+  (FDD-controller) register stub** (hardware fix 2026-07-18: the BIOS's
+  FDD boot attempt — which follows a failed HDD boot — crash-restarted
+  the machine when its status polls bus-timed-out; a real SMK's floppy
+  controller always replies, no-drive reads = 0 per BkEmu
+  FloppyController) and a **drive-access LED on pLed[2]** (~87 ms
+  stretch). Oracles: `sim/ide/run.sh` (unit,
+  mutation-tested ×9) + `sim/ide/run_soc.sh` (SoC, ×3) +
+  `sim/run_boot_check.sh +smk` (the real BIOS boots to its banner with
+  the LIVE smk_ide + disk model attached, no X; its actual drive probe
+  sits behind the multi-second EMT-0/БК memory test — smk64.mac-traced,
+  out of sim reach — so real-BIOS drive I/O is the (b) hardware
+  milestone; the BIOS driver's PARTRD/RWSEC command sequences are the
+  same contract sim/ide transcribes from BkEmu).
 - **512 KB segmented RAM extension** — ✅ **increment 1 DONE IN SIM 2026-07-17**
   (BK-0011M only, enable = **DIP 8**, DCLO-hold-latched like DIP 1). The
   memory-layout piece, and it *was* the Phase-7 coupling: 8 × 4 KB segments

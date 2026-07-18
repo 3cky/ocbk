@@ -40,12 +40,23 @@
 // +smk (Phase 8): cold-boot the REAL SMK512 BIOS - +bk11 stack plus
 // smk_en=1, the 43008-word blob incl. the BIOS image at SDRAM 0x3A000, a
 // deepened SDRAM model (SMK RAM at 0x40000+, left zeroed - real hardware
-// powers on garbage there). Checks the boot hack end-to-end: the first
-// 177716 read must carry the merged 166400 vector (rom7 register-space
-// overlay | SEL1), then >= SMK_FETCH_TARGET DIN fetches from the rom6
-// window (the BIOS EXECUTING from ROM), no X throughout. DELIBERATELY
-// MODEST: no IDE engine exists yet, the BIOS's drive probes bus-time-out,
-// so no screen/disk activity is required (the IDE increment raises this).
+// powers on garbage there), and - since the IDE increment - the LIVE
+// smk_ide + ide_disk_model with the gen_ide_image.py AltPro image
+// attached. Checks the boot end-to-end: the first 177716 read must carry
+// the merged 166400 vector (rom7 register-space overlay | SEL1), then
+// >= SMK_FETCH_TARGET DIN fetches from the rom6 window (the BIOS
+// EXECUTING from ROM), then the BIOS's OWN banner (its 177662 write +
+// the video-RAM burst - lands after its ~150 ms SOB startup delay, hence
+// the longer +smk time bound), no X throughout with the sel_ide decode
+// active. The BIOS's actual DRIVE probe is deliberately NOT required:
+// smk64.mac routes every boot path through INIT -> EMT 0 = the full BOS
+// re-init incl. the multi-second БК memory test BEFORE ZAGHDD/BOOT0
+// touch the task file - out of reach for a sim oracle (>400 ms sim even
+// with the +fastdelay ROM patch). The drive-engine contract is pinned by
+// sim/ide (the same PARTRD/RWSEC sequences, transcribed from BkEmu); the
+// real BIOS reading a real image is the increment-(b) HARDWARE milestone.
+// Debug aids: +fastdelay NOPs the startup SOB (ROM-patching - never part
+// of a check), +idetrace prints I/O-page accesses + a 1 ms PC sampler.
 //
 // Prints BOOTCHK-* lines; run_boot_check.sh greps for the final verdict.
 //
@@ -59,9 +70,8 @@ module boot_check_tb;
     localparam int DW = 16;
     localparam integer VID_TARGET = 200;    // video-RAM writes to declare victory
     localparam integer TRACE_N    = 5000;   // bus transactions to dump
-    // +smk: DIN fetches from the rom6 BIOS window to declare victory (the
-    // modest criterion - with no IDE engine the BIOS's drive probes just
-    // bus-time-out, so no screen/disk activity is required)
+    // +smk: DIN fetches from the rom6 BIOS window required (with the banner
+    // checks - see the header; the drive probe itself is out of sim reach)
     localparam integer SMK_FETCH_TARGET = 200;
 
     // ---- model select (+bk11 = BK-0011M BOS boot; +smk = BK-0011M + SMK512,
@@ -153,6 +163,9 @@ module boot_check_tb;
 
     // ---- keyboard controller (Phase 6; MONITOR polls 177660/177662) ------------
     // Key events idle: the boot smoke checks the register/no-X behaviour only.
+    // (An earlier attempt injected a held boot key under +smk to reach the
+    // BIOS's HDD probe - see the +smk note in the header: the probe sits
+    // behind the multi-second EMT-0 memory test, out of sim reach.)
     bk_kbd014 u_kbd (
         .clk_fsm(~clk), .clk_p(clk), .init_n(init),
         .ad_n(ad), .sync_n(sync), .din_n(din), .dout_n(dout),
@@ -220,6 +233,77 @@ module boot_check_tb;
         .err_line_ovr()
     );
 
+    // ---- SMK512 IDE device + tb disk (live under +smk) -----------------------
+    // The Phase-8 IDE increment: the real smk_ide fronted by the behavioral
+    // disk model loaded with the synthetic AltPro image (gen_ide_image.py).
+    // Under +bk11/bk10 enable=0 keeps ide_rdata at 0 - identical to the old
+    // tie-off. +nomedia (DEBUG) reproduces the increment-(a) HARDWARE
+    // condition - the SD backend does not exist yet, media tied off: the
+    // drive stays absent (reads 0xFFFF) and the BIOS's RDY polls time out.
+    wire        smk_media = smk && !$test$plusargs("nomedia");
+    wire [15:0] ide_rdata;
+    wire        bk_req, bk_wr, bk_bank, bk_ack, bk_done, bk_error;
+    wire        bk_media_ok, bk_we;
+    wire [27:0] bk_sector, bk_total;
+    wire [7:0]  bk_baddr;
+    wire [15:0] bk_wdata, bk_rdata;
+
+    smk_ide u_ide (
+        .sclk(sys_clk), .reset(~dclo), .enable(smk),
+        .ad_n(ad), .sync_n(sync), .din_n(din), .dout_n(dout), .wtbt_n(wtbt),
+        .ide_rdata(ide_rdata), .ide_act(),
+        .bk_req(bk_req), .bk_wr(bk_wr), .bk_sector(bk_sector),
+        .bk_bank(bk_bank), .bk_ack(bk_ack), .bk_done(bk_done),
+        .bk_error(bk_error), .bk_media_ok(bk_media_ok), .bk_total(bk_total),
+        .bk_baddr(bk_baddr), .bk_wdata(bk_wdata), .bk_we(bk_we),
+        .bk_rdata(bk_rdata)
+    );
+
+    ide_disk_model #(.MAX_SECTORS(640), .LATENCY(24)) u_disk (
+        .sclk(sys_clk), .rst(~dclo),
+        .media_in(smk_media), .total_in(28'd640),
+        .bk_req(bk_req), .bk_wr(bk_wr), .bk_sector(bk_sector),
+        .bk_bank(bk_bank), .bk_ack(bk_ack), .bk_done(bk_done),
+        .bk_error(bk_error), .bk_media_ok(bk_media_ok), .bk_total(bk_total),
+        .bk_baddr(bk_baddr), .bk_wdata(bk_wdata), .bk_we(bk_we),
+        .bk_rdata(bk_rdata)
+    );
+
+    initial if ($test$plusargs("smk"))
+        $readmemh("ide/ide_image.hex", u_disk.disk);
+
+    // +fastdelay: DEBUG aid for +smk iteration - NOP the BIOS's startup SOB
+    // (CPU 166406 = image byte 0o6406) so the ~100 ms delay loop runs once,
+    // AND shrink the RDY drive-readiness timeout (MOV #1500,R5 at CPU
+    // 166230 -> #2: the nested 1500x1500 SOB wait becomes ~instant - the
+    // no-drive path's 2-3.7 s timeouts are what make the real flow take
+    // ~10 s). Never use for the real check (it edits the ROM under test).
+    initial if ($test$plusargs("fastdelay")) begin
+        #1;
+        u_mem.mem['h3A000 + (16'o6406 >> 1)] = 16'o000240;
+        u_mem.mem['h3A000 + (16'o6232 >> 1)] = 16'o000002;
+    end
+
+    // +idetrace: DEBUG aid - I/O-page accesses (capped) + a 1 ms
+    // where-is-it-executing sampler off the latched bus address.
+    integer itr_n = 0;
+    initial if ($test$plusargs("idetrace")) fork
+        forever @(negedge din)
+            if (~sync && addr >= 16'o177000 && itr_n < 400) begin
+                itr_n = itr_n + 1;
+                $display("IDETRC R %06o t=%0t", addr, $time);
+            end
+        forever @(negedge dout)
+            if (~sync && addr >= 16'o177000 && itr_n < 400) begin
+                itr_n = itr_n + 1;
+                $display("IDETRC W %06o <= %06o t=%0t", addr, ~ad, $time);
+            end
+        forever begin
+            #1_000_000;
+            $display("IDETRC PC~ %06o t=%0t", addr, $time);
+        end
+    join
+
     // ---- integration module + SDRAM model ------------------------------------------
     wire s_cke, s_cs_n, s_ras_n, s_cas_n, s_we_n;
     wire [1:0]  s_ba, s_dqm;
@@ -229,6 +313,7 @@ module boot_check_tb;
     qbus_mem u_ms (
         .cpu_clk  (~clk),
         .reset    (~dclo),
+        .ide_rdata(ide_rdata),
         .init_n   (init),            // peripheral-register reset (Phase 6)
         .kbd_down (1'b0),            // keyboard idle in the boot smoke
         .tape_in  (1'b0),            // no tape signal in this oracle
@@ -344,7 +429,10 @@ module boot_check_tb;
             $display("BOOTCHK-VEC-ERROR: 177716 read = %06o, no 140000 vector", ~ad);
             xerrs = xerrs + 1;
         end else if (model11)
-            $display("BOOTCHK: 177716 start-vector read = %06o", ~ad);
+            // the raw word is the merged SEL1 read (start | wflag | idle-kbd
+            // 0o100 | tape); the CPU's start PC masks it with 177400
+            $display("BOOTCHK: 177716 start-vector read = %06o (PC %06o)",
+                     ~ad, (~ad) & 16'o177400);
     end
 
     // ---- +smk check: the BIOS must EXECUTE from the rom6 window ---------------
@@ -356,8 +444,35 @@ module boot_check_tb;
             if (bios_fetches == 1 || bios_fetches == SMK_FETCH_TARGET)
                 $display("BOOTCHK: SMK BIOS fetch #%0d at %06o", bios_fetches, addr);
         end
-    always @(bios_fetches) begin
-        if (smk && bios_fetches >= SMK_FETCH_TARGET) begin
+
+    // ---- +smk IDE observables (Phase-8 IDE increment; LOG-ONLY) ---------------
+    // The device command byte is the RAW inverted bus low byte (invValue =
+    // ad_n), so READ shows as 0x20/0x21 here (the BIOS writes #337).
+    // NOT part of the pass condition: the BIOS's drive probe (ZAGHDD/BOOT0
+    // -> PARTRD) runs only AFTER INIT's EMT 0 = the full BOS re-init incl.
+    // the multi-second БК memory test - out of reach for a sim oracle (the
+    // sweep alone is >400 ms sim even with +fastdelay). The drive-engine
+    // contract is pinned by sim/ide (the same PARTRD/RWSEC command
+    // sequences, transcribed from BkEmu); the real-BIOS-reads-the-drive
+    // milestone lands on hardware with the increment-(b) SD backend.
+    integer ide_data_reads = 0;
+    integer ide_cmds       = 0;
+    always @(negedge dout)
+        if (aclo === 1'b1 && smk && ~sync && addr == 16'o177740) begin
+            ide_cmds = ide_cmds + 1;
+            $display("BOOTCHK: IDE command %02x at 177740", ad[7:0]);
+        end
+    always @(negedge din)
+        if (aclo === 1'b1 && smk && ~sync && addr == 16'o177756)
+            ide_data_reads = ide_data_reads + 1;
+
+    // +smk pass: the merged start vector + the BIOS executing from rom6 +
+    // the BIOS's own banner (662 write + the video-RAM burst) - all with
+    // the LIVE smk_ide attached (media present), so the whole boot runs
+    // against the sel_ide decode with the no-X monitors armed.
+    always @(posedge clk) begin
+        if (smk && bios_fetches >= SMK_FETCH_TARGET
+            && saw_662w && vid_writes >= VID_TARGET) begin
             if (!vec_checked) begin
                 $display("BOOTCHK-VEC-ERROR: BIOS ran but 177716 never read");
                 xerrs = xerrs + 1;
@@ -394,9 +509,12 @@ module boot_check_tb;
     end
 
     // finish as soon as the screen clear is well underway (twice in +warmreset;
-    // +bk11 additionally requires the 177662 write to have been seen)
+    // +bk11 additionally requires the 177662 write to have been seen).
+    // NOT the +smk exit: the SMK BIOS draws its banner BEFORE it probes the
+    // drive, so this path would declare victory ahead of the IDE-detection
+    // evidence - +smk finishes only through the drive-detection block above.
     always @(vid_writes or saw_662w) begin
-        if (vid_writes >= VID_TARGET && warm_phase != 1
+        if (!smk && vid_writes >= VID_TARGET && warm_phase != 1
             && (!model11 || saw_662w)) begin
             if (warmreset && warm_phase == 0) begin
                 warm_phase = 1;
@@ -463,9 +581,19 @@ module boot_check_tb;
     end
 
     initial begin
-        #60_000_000;                         // 60 ms bound
+        // +smk needs a much longer leash: the real SMK BIOS opens with a
+        // SOB-counted startup delay (~5.6k iterations of a 10-word loop at
+        // 166362 - ~100 ms at the /24 rate) BEFORE anything visible;
+        // 60 ms stays the bound for the bk10/bk11 boots. +longbound (DEBUG)
+        // stretches to 2 s for exploring the post-EMT-0 boot flow.
+        if ($test$plusargs("longbound"))    #2_000_000_000;
+        else if ($test$plusargs("smk"))     #400_000_000;
+        else                                #60_000_000;
         $display("BOOTCHK-TIMEOUT: only %0d video-RAM writes (%0d X errors)",
                  vid_writes, xerrs);
+        if (smk)
+            $display("BOOTCHK-TIMEOUT: IDE cmds=%0d data_reads=%0d",
+                     ide_cmds, ide_data_reads);
         $display("BOOTCHK: FAIL");
         $fclose(tracef);
         $finish;
