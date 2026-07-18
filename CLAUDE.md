@@ -28,11 +28,14 @@ engine, AltPro geometry parse, tb-backed sector port) plus the 177130/132
 КНГМД register stub — is done, CONFIRMED ON HARDWARE 2026-07-18**: with no
 drive the BIOS boots, times out its HDD and FDD probes cleanly and exits
 to its command line exactly like a real driveless SMK (the stub fixed a
-crash-restart at the FDD boot attempt). The SD/SPI backend is increment
-(b): the sector port is tied off, so the drive reports absent; pLed[2]
-is the drive-access LED (see the SMK512 bullet). Remaining
-open item: BK-0011M cycle-accuracy vs a reference (deferred,
-reference-tb-first).
+crash-restart at the FDD boot attempt). **Increment (b) — the SD/SPI
+backend (`src/sd_backend.sv`) — is done, CONFIRMED ON HARDWARE
+2026-07-18: the BIOS detects the SD-backed drive and BOOTS AN OS from
+the HDD image** (a raw AltPro image dd'd at card LBA 0, megasd slot
+PIN_61–66); pLed[2] is the drive-access LED (see the SMK512 bullet).
+Remaining open items: prefetch/multi-block, bk10+SMK, the SMK-RAM
+`ram_init` pattern, `N_*` recalibration, and BK-0011M cycle-accuracy
+vs a reference (deferred, reference-tb-first).
 
 ## Build & test
 
@@ -195,6 +198,25 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   readback + extent|device merged read, and the absent slave.
   **Mutation-tested ×3 at the SoC level** (run_soc.sh header: qbus_mem
   merge-term drop, write-claim drop, command lane swap — all fail).
+- `sim/ide/run_sd.sh` — the increment-(b) **SD backend unit oracle**:
+  `src/sd_backend.sv` (the SPI-mode SD host serving the backend sector
+  port) against the protocol-checking `sd_model.v` card (CRCs, CMD55
+  pairing, SDSC 512-alignment, init ordering — card protocol errors
+  fail the run) loaded with the same AltPro image. Legs: the exact
+  init transcript (>=74 dummy clocks, CMD0/CMD8/ACMD41-with-HCS/CMD58/
+  CMD16-iff-SDSC/CMD9) for BOTH personalities (SDHC/CSDv2 and +sdsc
+  v1/CSDv1 — both capacity formulas land exact in bk_total), reads
+  data-exact incl. past-image sectors, oob completing with ZERO SPI
+  traffic, write/store-check/readback, and the +noinit/+rderr/+wrrej
+  injection legs — at the REAL dividers (/256 init, /8 data).
+  **Mutation-tested ×9** (run_sd.sh header: SDSC ×512, CMD8 CRC, HCS,
+  capacity off-by-one both formulas, LE byte swap, commit settle, R1
+  poll, oob guard, dummy clocks — all fail). `sim/ide/run.sh`
+  additionally re-runs the ENTIRE smk_ide_tb leg set with `-DSD_STACK`
+  (`sd_harness` swaps the disk model for the real sd_backend+sd_model
+  stack; sim-speed /2 dividers there — the ratios are run_sd.sh's job;
+  +sdsc because CSDv1 encodes the tb totals 640/2016 exactly) — the
+  decisive engine+backend integration pass.
 - `sim/bk11/run.sh` — the Phase-7 BK-0011M SoC **functional** oracle
   (data-checking, NOT a timing golden — ref037 keeps the timing-reference
   meaning): the `mem/gen_bk11_test.py` program (pinned parks: success
@@ -292,7 +314,11 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   before ZAGHDD/BOOT0 touch the task file — out of sim reach (the tb's
   `+fastdelay`/`+idetrace` debug aids exist for exploring that flow); the
   drive contract is `sim/ide`'s, and the real BIOS reading a real image
-  is the increment-(b) hardware milestone.
+  was the increment-(b) hardware milestone — **achieved 2026-07-18**.
+  **`+smk +sdspi`** swaps the disk model for the real
+  `sd_backend`+`sd_model` SPI stack (a runtime mux in the tb): attach +
+  the AltPro geometry parse ride the full card-init + SPI path under
+  the real BIOS boot, same pass conditions.
 
 Any change touching the core, the Q-bus, memory, video, or clocking must keep all
 of it passing. When tuning bus/RPLY timing, trace the **reference** waveform first
@@ -650,16 +676,38 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   overlap, strictly sequential in (a). **pLed[2] = drive-access LED**:
   `ide_act` (command/backend in flight — DRQ phases, backend ops, the
   attach-time geometry read; register pokes alone don't light it)
-  stretched to ~87 ms in `ocbk_top`. On hardware the port is tied off
-  "no media" until (b): DIP-8-ON now shows the BIOS a cleanly ABSENT
-  drive (task-file reads 0xFFFF) instead of the old bus-timeout probes —
-  the intended behavior change. **Still deferred:** the SD/SPI backend
-  (increment (b): megasd pins PIN_61–66, not yet in the QSF), prefetch
-  overlap, bk10+SMK, the SMK-RAM `ram_init` pattern, and
-  `N_EXT`/`N_SMKREG`/`N_IDE` recalibration (reference-tb-first).
-  Oracles: `sim/run_mapper.sh` + `sim/smk/run.sh` + `sim/ide/run.sh` +
-  `sim/ide/run_soc.sh` (see the sim list) + `sim/run_boot_check.sh +smk`
-  (the real BIOS must now DETECT the drive).
+  stretched to ~87 ms in `ocbk_top`. **Increment (b) — the SD/SPI
+  backend (`src/sd_backend.sv`) — DONE, CONFIRMED ON HARDWARE
+  2026-07-18: the BIOS boots an OS from the SD-backed HDD image.** The
+  card in the megasd slot (PIN_61–66, esemsx3 SPI-mode pin roles:
+  DAT3 = CS — push-pull per the virq_n lone-Z rule — CMD = MOSI,
+  DAT0 = MISO, DAT1/DAT2 pad-only Z with QSF weak pull-ups, the
+  pDac_SR class of intentional pad tri-state) holds the raw AltPro
+  image dd'd at card LBA 0 (`gen_ide_image.py` also emits the dd-able
+  `ide_image.bin`); `bk_total` = the FULL card capacity from the CSD.
+  Init ladder CMD0/CMD8/ACMD41(HCS)/CMD58/(CMD16)/CMD9 at /256 =
+  377 kHz, then /8 = 12.08 MHz data (the epcs_boot shifter idiom:
+  mode 0, MSB first, launch at the fall, sample late-high); SDSC
+  byte- AND SDHC/SDXC block addressing, both CSD capacity formulas;
+  CMD17/CMD24 single-block; SPI-default CRC policy (real CRCs only on
+  CMD0/CMD8). All sys_clk — no CDC on the seam; reset DCLO-only like
+  the engine (card re-init at power-on AND warm reset = "insert card,
+  press reset" — the slot has NO card-detect pin); enable-gated, so a
+  stock machine never clocks the card. A failed/absent-card init parks
+  media-absent = exactly the old increment-(a) tie-off; data-op errors
+  complete done+error (the engine ignores them — the BkEmu rc rule;
+  only the attach-time geometry read honors `bk_error`). BYTE-FSM RULE
+  (a design-review catch — the bug would have shifted every command
+  frame): a state asserts the byte engine's `x_go`/`x_tx` only in
+  NON-`x_done` cycles, so a state change never launches the next byte
+  with the old state's data. **Still deferred:** prefetch overlap / SD
+  multi-block (CMD18/25), bk10+SMK, the SMK-RAM `ram_init` pattern,
+  real data CRC16, MMC cards, and `N_EXT`/`N_SMKREG`/`N_IDE`
+  recalibration (reference-tb-first).
+  Oracles: `sim/run_mapper.sh` + `sim/smk/run.sh` + `sim/ide/run.sh`
+  (BOTH passes — disk model AND the `-DSD_STACK` real SPI stack) +
+  `sim/ide/run_soc.sh` + `sim/ide/run_sd.sh` (see the sim list) +
+  `sim/run_boot_check.sh +smk` / `+smk +sdspi`.
 - **Framebuffer conventions** (mirrored by `fb_video_tb`/`gen_expected.py`
   alike): FB = 512 slots/line × 4-bit colour nibble × 256 lines, 128
   words/line, slot `s` of a word at bits `[4s+3:4s]`, LSB-first in beam order;

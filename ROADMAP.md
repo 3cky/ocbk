@@ -634,14 +634,17 @@ register/behaviour reference for the exact bit fields):
 - Emulate the **SMK512** controller — the mainstream BK HDD/storage controller —
   backing its disk operations with an SD card (reuse the esemsx3 SD/SPI
   infrastructure). BkEmu is the authoritative behaviour reference.
-- **Milestone:** boot the SMK BIOS and load/run programs from an SD-backed HDD image.
+- **Milestone:** boot the SMK BIOS and load/run programs from an SD-backed HDD
+  image — ✅ **ACHIEVED 2026-07-18: the SMK BIOS boots an OS from the SD card
+  on the board.**
 
 **SMK512 — design notes.** The SMK512 is *three* devices on one board, so Phase 8
 is not a single peripheral:
 - **IDE/HDD interface** — ✅ **increment (a) — the drive engine — DONE,
   CONFIRMED ON HARDWARE 2026-07-18** (with no drive the BIOS times out its
   probes and exits to its command line like a real driveless SMK;
-  `src/smk_ide.sv`; the SD/SPI backend is increment (b)).
+  `src/smk_ide.sv`; the SD/SPI backend is increment (b) — ✅ done, see the
+  next bullet).
   The standard ATA task-file at word addresses **0177740–0177756** (BkEmu
   `SmkIdeController`/`IdeController` is the contract, `IdeControllerTest`
   the transcribed oracle): ALL data **bit-inverted** both directions at the
@@ -665,9 +668,10 @@ is not a single peripheral:
   speculative cross-command read-ahead only if the measured command mix
   wants it), strictly sequential in (a). LBA math rides a serial
   shift-add multiplier (single-cycle products broke sys_clk closure; the
-  engine has bus-scale time budgets). Hardware ships (a) with the port
-  tied "no media": DIP-8-ON now shows the BIOS a cleanly ABSENT drive
-  instead of bus-timeout probes. Includes the **177130/177132 КНГМД
+  engine has bus-scale time budgets). Hardware shipped (a) with the port
+  tied "no media" (DIP-8-ON showed the BIOS a cleanly ABSENT drive
+  instead of bus-timeout probes) — superseded by (b): with a card
+  present the drive attaches. Includes the **177130/177132 КНГМД
   (FDD-controller) register stub** (hardware fix 2026-07-18: the BIOS's
   FDD boot attempt — which follows a failed HDD boot — crash-restarted
   the machine when its status polls bus-timed-out; a real SMK's floppy
@@ -678,9 +682,38 @@ is not a single peripheral:
   `sim/run_boot_check.sh +smk` (the real BIOS boots to its banner with
   the LIVE smk_ide + disk model attached, no X; its actual drive probe
   sits behind the multi-second EMT-0/БК memory test — smk64.mac-traced,
-  out of sim reach — so real-BIOS drive I/O is the (b) hardware
-  milestone; the BIOS driver's PARTRD/RWSEC command sequences are the
-  same contract sim/ide transcribes from BkEmu).
+  out of sim reach — so real-BIOS drive I/O was the (b) hardware
+  milestone, achieved 2026-07-18; the BIOS driver's PARTRD/RWSEC command
+  sequences are the same contract sim/ide transcribes from BkEmu).
+- **SD/SPI backend** — ✅ **increment (b) DONE, CONFIRMED ON HARDWARE
+  2026-07-18 — the Phase-8 milestone: the SMK BIOS detects the drive and
+  boots an OS from the SD-backed HDD image on the board.**
+  `src/sd_backend.sv`: an SPI-mode SD host on sys_clk serving the (a)
+  sector port — megasd slot PIN_61–66, esemsx3 SPI-mode pin roles
+  (DAT3 = CS, CMD = MOSI, DAT0 = MISO; the "reuse esemsx3 SD/SPI"
+  reality check: megasd.v is a Z80-mapped single-byte shifter with ALL
+  SD protocol in MSX firmware, so the pin map + the two-speed regime
+  were the reusable parts and the host FSM is new, in the epcs_boot
+  shifter idiom). Init ladder CMD0/CMD8/ACMD41(HCS)/CMD58/(CMD16)/CMD9
+  at /256 = 377 kHz then /8 = 12.08 MHz data; **SDSC and SDHC/SDXC**
+  (byte vs block addressing, CSDv1 AND CSDv2 capacity → bk_total = the
+  full card capacity); CMD17/CMD24 single-block read/write, SPI-default
+  CRC policy. The **raw AltPro image is dd'd at card LBA 0**
+  (`gen_ide_image.py` emits the dd-able `ide_image.bin`; any
+  BkEmu-attachable image works as-is). Reset DCLO-only = card re-init at
+  power-on AND warm reset (no card-detect pin: insert card, press
+  reset); a failed/absent-card init parks media-absent — the (a)
+  behaviour exactly. Oracles: `sim/ide/run_sd.sh` (unit: the
+  protocol-checking `sd_model` card, both personalities, injection
+  legs, **mutation-tested ×9**), the `sim/ide/run.sh` **`-DSD_STACK`
+  second pass** (EVERY transcribed BkEmu smk_ide_tb leg re-run over the
+  real SPI stack via `sd_harness` — the decisive integration oracle)
+  and `sim/run_boot_check.sh +smk +sdspi` (the real BIOS boot with
+  attach riding the full card-init + SPI path). Fit 6,767 LE (56 %),
+  STA met TNS 0 (worst +0.077 ns on the quasi-static
+  model_bk11→mapper cone; no SDC exception — the SEED-3 rule).
+  **Deferred to later increments:** the prefetch/multi-block tiers,
+  real data CRC16, MMC cards.
 - **512 KB segmented RAM extension** — ✅ **increment 1 DONE IN SIM 2026-07-17**
   (BK-0011M only, enable = **DIP 8**, DCLO-hold-latched like DIP 1). The
   memory-layout piece, and it *was* the Phase-7 coupling: 8 × 4 KB segments
