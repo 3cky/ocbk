@@ -33,9 +33,11 @@ backend (`src/sd_backend.sv`) — is done, CONFIRMED ON HARDWARE
 2026-07-18: the BIOS detects the SD-backed drive and BOOTS AN OS from
 the HDD image** (a raw AltPro image dd'd at card LBA 0, megasd slot
 PIN_61–66); pLed[2] is the drive-access LED (see the SMK512 bullet).
-**Tier-1 READ prefetch is done in sim** (fetch sector N+1 while the CPU
-drains N — the 2-bank buffer split with an E_FLUSH mid-command interlock;
-`src/smk_ide.sv` + the `sim/ide` oracles). Remaining open items: SD
+**Tier-1 READ prefetch is done, CONFIRMED ON HARDWARE 2026-07-19**
+(fetch sector N+1 while the CPU drains N — the 2-bank buffer split with
+an E_FLUSH mid-command interlock; `src/smk_ide.sv` + the `sim/ide`
+oracles; the board boots and multi-sector loads run faster).
+Remaining open items: SD
 multi-block (CMD18/25), bk10+SMK, the SMK-RAM `ram_init` pattern, `N_*`
 recalibration, and BK-0011M cycle-accuracy vs a reference (deferred,
 reference-tb-first).
@@ -686,8 +688,9 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   (BkEmu resets the IDE on hardware reset only; software resets ride
   SRST). The 2-bank 512×16 sector buffer (2 M4Ks) + the backend sector
   port (req/ack/done, 28-bit LBA, bank field, all sclk) are the SD/SPI
-  seam AND the tier-1 prefetch ping-pong. **Tier-1 READ prefetch (done in
-  sim):** `bank_drain` (CPU-facing: drain / E_FILL / E_COMMIT) and
+  seam AND the tier-1 prefetch ping-pong. **Tier-1 READ prefetch
+  (CONFIRMED ON HARDWARE 2026-07-19):** `bank_drain` (CPU-facing: drain /
+  E_FILL / E_COMMIT) and
   `bank_fetch` (backend-fill) split the buffer; at each READ sector's
   drain-start (E_FETCH's bk_done for sector 0, the E_DRAIN bank swap for
   the rest) the engine issues `bk_sector+1` (= the CHS auto-advance, so no

@@ -663,7 +663,8 @@ is not a single peripheral:
   (fixed `N_IDE`, N_ROM family) and ORs `ide_rdata` into the reply-point
   merge (BkEmu's memory|device OR). Reset DCLO-only (the 5th nINIT
   exception). The 2-bank sector buffer (2 M4Ks) + the req/ack/done sector
-  port are the ping-pong seam. **Tier-1 READ prefetch is DONE IN SIM:**
+  port are the ping-pong seam. **Tier-1 READ prefetch is DONE, CONFIRMED
+  ON HARDWARE 2026-07-19 (the board boots, multi-sector loads faster):**
   the buffer splits into a CPU-facing `bank_drain` and a backend-fill
   `bank_fetch`, so sector N+1 (= bk_sector+1, the CHS auto-advance)
   prefetches into the idle bank while the CPU drains N — the inter-sector
@@ -721,7 +722,7 @@ is not a single peripheral:
   STA met TNS 0 (worst +0.077 ns on the quasi-static
   model_bk11→mapper cone; no SDC exception — the SEED-3 rule).
   **Deferred to later increments:** SD multi-block (tiers 2/3; tier-1
-  READ prefetch is done in sim), real data CRC16, MMC cards.
+  READ prefetch is done, confirmed on hardware), real data CRC16, MMC cards.
 - **512 KB segmented RAM extension** — ✅ **increment 1 DONE IN SIM 2026-07-17**
   (BK-0011M only, enable = **DIP 8**, DCLO-hold-latched like DIP 1). The
   memory-layout piece, and it *was* the Phase-7 coupling: 8 × 4 KB segments
