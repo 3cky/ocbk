@@ -16,12 +16,24 @@
 #   1 inversion drop            : ide_rdata <= blk ? rd_word : 0
 #   2 COMP_0 packing byte-swap  : rd_word[0] = {status, dar}
 #   3 COMMAND accepted at 741   : drop the !w_a0 guard on the dispatch
-#   4 DRQ chain break           : E_DRAIN end always stops (no E_LBA1 re-arm)
+#   4 E_DRAIN swap branch gone  : ptr==256 always completes -> leg 6's
+#                                 second DRQ poll times out (chain stops)
 #   5 CHS advance off-by-one    : x_snum wrap compares > instead of >=
 #   6 1-based snum drop         : MRET_LBA1 omits the "- 28'd1" on mul_acc
 #   7 checksum loop bound       : G_SUM ends at g_ptr 254 (skips the C word)
 #   8 checksum seed             : compare against 012700
 #   9 DHR 0xA0 forcing drop     : dhr <= w_inv[7:0] (no | DHR_FIXED)
+#  --- tier-1 prefetch (each traced to a catching leg) ---
+#  10 prefetch lands in drain bank : drop bank_fetch<=~bank_fetch -> 6/6b
+#                                    data compare
+#  11 swap without pf_ready        : E_DRAIN swaps unconditionally -> 6c
+#                                    stale-bank data (+ BSY-window check)
+#  12 dispatch flush removed       : no E_FLUSH on bk_busy -> 6d d1 wrong
+#                                    data / d3 dropped fill words
+#  13 CHS advanced at prefetch-done: bump snum on the prefetch bk_done ->
+#                                    6b mid-drain SNUM check
+#  14 scount!=1 guard dropped      : issue a prefetch past chain end ->
+#                                    6b ack_cnt (5 != 4)
 #
 set -euo pipefail
 cd "$(dirname "$0")"

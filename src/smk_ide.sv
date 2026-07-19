@@ -46,9 +46,18 @@
 //
 //  Backend sector port (the increment-(b) SD/SPI seam; a behavioral tb
 //  disk model in (a)): request/ack/done handshake, 28-bit sector index,
-//  a bank field + the 2-bank sector buffer making tier-1 prefetch overlap
-//  a later drop-in (increment (a) runs strictly sequential). All on sclk -
-//  the SD engine is sys_clk too, so there is no CDC on this seam.
+//  a bank field + the 2-bank sector buffer. TIER-1 READ PREFETCH is live:
+//  the buffer is split into a CPU-facing bank_drain and a backend-fill
+//  bank_fetch, so while the CPU drains sector N the engine prefetches N+1
+//  into the other bank (bk_sector+1 == the CHS auto-advance, in-range).
+//  The visible task-file registers still advance at each sector's
+//  DRAIN-START (E_FETCH's bk_done for the first sector, the E_DRAIN bank
+//  swap for the rest) - never at a prefetch's own bk_done - so the
+//  BkEmu-faithful mid-transfer CHS view is unchanged. A same-cycle new
+//  COMMAND/SRST while a prefetch is in flight routes through E_FLUSH,
+//  which waits out the outstanding op (bk_out) before re-pinning both
+//  banks. WRITE and SD multi-block (CMD18/25) stay strictly sequential.
+//  All on sclk - the SD engine is sys_clk too, so there is no CDC here.
 // ============================================================================
 
 module smk_ide (
@@ -77,7 +86,7 @@ module smk_ide (
     output logic        bk_req,      // level; hold until bk_ack
     output logic        bk_wr,       // 0 = read sector into bank, 1 = commit
     output logic [27:0] bk_sector,
-    output logic        bk_bank,
+    output wire         bk_bank,     // = bank_fetch (backend ignores it)
     input  logic        bk_ack,      // backend accepted the request
     input  logic        bk_done,     // 1-cycle pulse: transfer complete
     input  logic        bk_error,    // with bk_done; data ops IGNORE it
@@ -135,6 +144,15 @@ module smk_ide (
     logic [4:0]  x_head;        //   registers; advanced per BkEmu's inverse
     logic [8:0]  x_snum;        //   setCurrentSectorNumber for in-range CHS)
 
+    // ---- tier-1 READ prefetch (2-bank ping-pong) --------------------------
+    logic        bank_drain;    // CPU-facing bank (drain / E_FILL / E_COMMIT)
+    logic        bank_fetch;    // backend-fill bank (geometry + prefetch)
+    logic        bk_out;        // a backend op is outstanding (ack..done)
+    logic        pf_pend;       // the outstanding op is this chain's prefetch
+    logic        pf_ready;      // a prefetched sector waits in bank_fetch
+    assign bk_bank = bank_fetch;
+    wire  bk_busy = bk_req || bk_ack || bk_out;
+
     // ---- sector buffer: 2 banks x 256 x 16 = 2 M4Ks -----------------------
     // The fb_linebuf "plainest RAM" shape: ONE write-always block, ONE
     // registered-read-always block, same width both ports. Write sources
@@ -165,7 +183,8 @@ module smk_ide (
         E_FETCH,                // backend read -> bank
         E_DRAIN,                // DRQ high, CPU reads words (buffer/identify)
         E_FILL,                 // DRQ high, CPU writes words
-        E_COMMIT                // backend commit <- bank
+        E_COMMIT,               // backend commit <- bank
+        E_FLUSH                 // mid-command: wait out a stale prefetch op
     } est_t;
     est_t st;
 
@@ -298,34 +317,38 @@ module smk_ide (
         ide_act <= drq || bk_req
                    || (st == E_LBA1) || (st == E_MUL) || (st == E_FETCH)
                    || (st == E_DRAIN) || (st == E_FILL) || (st == E_COMMIT)
-                   || (st == G_FETCH7);
+                   || (st == E_FLUSH) || (st == G_FETCH7);
 
     // ---- buffer port muxing (FSM-state-exclusive users) -------------------
     wire fill_wr = w_pend && dout_n && blk && (w_idx == 3'd7)
                    && (st == E_FILL) && drq;
     always_comb begin
-        // write port: backend fetch owns it in the FETCH states, the CPU
-        // data-fill otherwise (E_FILL only)
-        if (st == E_FETCH || st == G_FETCH7) begin
-            sb_waddr = {bk_bank, bk_baddr};
+        // write port: the backend fetch owns it whenever a read op is in
+        // flight (E_FETCH/G_FETCH7 explicitly, plus any outstanding read op
+        // via bk_out - so a prefetch streaming during E_DRAIN, or a stale
+        // stream during E_FLUSH, lands in bank_fetch); the CPU data-fill
+        // otherwise (E_FILL only, into bank_drain)
+        if (st == E_FETCH || st == G_FETCH7 || (bk_out && !bk_wr)) begin
+            sb_waddr = {bank_fetch, bk_baddr};
             sb_wdata = bk_wdata;
             sb_we    = bk_we;
         end else begin
-            sb_waddr = {bk_bank, ptr[7:0]};
+            sb_waddr = {bank_drain, ptr[7:0]};
             // stored = invValue (BkEmu writeNextDataWord stores the ~bus
             // word): the CPU writes ~D to store D - the image round-trips
             // TRUE data, the inversion pair living entirely on the bus side
             sb_wdata = w_inv;
             sb_we    = fill_wr;
         end
-        // read port: geometry parse in the G states, backend commit during
-        // E_COMMIT, the CPU drain pointer otherwise
+        // read port: geometry parse in the G states (bank 1), the backend
+        // write-commit during E_COMMIT (bank_drain, the filled bank), the
+        // CPU drain pointer otherwise (bank_drain, the current sector)
         if (st == G_NLD0 || st == G_NLD1 || st == G_SUM || st == G_GEO)
             sb_raddr = {1'b1, g_ptr[7:0]};
-        else if (st == E_COMMIT)
-            sb_raddr = {bk_bank, bk_baddr};
+        else if (st == E_COMMIT || (bk_out && bk_wr))
+            sb_raddr = {bank_drain, bk_baddr};
         else
-            sb_raddr = {bk_bank, ptr[7:0]};
+            sb_raddr = {bank_drain, ptr[7:0]};
     end
 
     // ---- the engine + register file (one sclk process) --------------------
@@ -341,7 +364,9 @@ module smk_ide (
             dhr <= DHR_FIXED; slave_sel <= 1'b0; ctrl_srst <= 1'b0;
             attached <= 1'b0; drq <= 1'b0; xfer_ident <= 1'b0; xfer_wr <= 1'b0;
             ptr <= '0; st <= G_WAIT; bk_req <= 1'b0; bk_wr <= 1'b0;
-            bk_bank <= 1'b0; bk_sector <= '0;
+            bk_sector <= '0;
+            bank_drain <= 1'b0; bank_fetch <= 1'b0; bk_out <= 1'b0;
+            pf_pend <= 1'b0; pf_ready <= 1'b0;
             g_cyls <= '0; g_heads <= '0; g_secs <= '0; g_capacity <= '0;
             lba_a <= '0; g_ptr <= '0; g_end <= '0; g_sum <= '0; g_nld <= '0;
             mul_a <= '0; mul_acc <= '0; mul_b <= '0; mul_ret <= MRET_LBA1;
@@ -349,12 +374,24 @@ module smk_ide (
             w_pend <= 1'b0; r_pend <= 1'b0; din_q <= 1'b1;
             w_inv <= '0; w_a0 <= 1'b0; w_byte <= 1'b0; w_idx <= '0;
         end else begin
+            // ---------------- global backend handshake ----------------
+            // Records every accepted op as outstanding (bk_out) and, at its
+            // done, promotes a pending prefetch to ready. Runs BEFORE the
+            // FSM/bus-write blocks so a same-edge new issue (bk_req<=1) or an
+            // SRST bk_req<=0 wins - yet the ack still records into bk_out, so
+            // the mid-fetch SRST race can't lose an in-flight op.
+            if (bk_ack)  begin bk_req <= 1'b0; bk_out <= 1'b1; end
+            if (bk_done) begin
+                bk_out <= 1'b0;
+                if (pf_pend) begin pf_pend <= 1'b0; pf_ready <= 1'b1; end
+            end
+
             // ---------------- engine FSM ----------------
             unique case (st)
                 // ---- geometry init (BkEmu attachDrive + setupGeometry) ----
                 G_WAIT: if (bk_media_ok) begin
                     if (bk_total > 28'd7) begin
-                        bk_req <= 1'b1; bk_wr <= 1'b0; bk_bank <= 1'b1;
+                        bk_req <= 1'b1; bk_wr <= 1'b0; bank_fetch <= 1'b1;
                         bk_sector <= 28'd7;
                         st <= G_FETCH7;
                     end else begin              // no sector 7 -> raw default
@@ -363,7 +400,6 @@ module smk_ide (
                     end
                 end
                 G_FETCH7: begin
-                    if (bk_ack) bk_req <= 1'b0;
                     if (bk_done) begin
                         if (bk_error) begin     // unreadable -> raw default
                             lba_a <= bk_total; g_cyls <= '0;
@@ -514,7 +550,6 @@ module smk_ide (
                     end
                 end
                 E_FETCH: begin
-                    if (bk_ack) bk_req <= 1'b0;
                     if (bk_done) begin
                         // BkEmu readSector: DRQ up, CHS registers advance to
                         // the NEXT sector (visible mid-transfer), count--
@@ -537,6 +572,15 @@ module smk_ide (
                             x_snum <= x_snum + 1'b1;
                             snum <= x_snum[7:0] + 1'b1;
                         end
+                        // this sector drains from bank_fetch (=0, pinned at
+                        // dispatch); prefetch the next into the other bank
+                        // when the chain has one (post-decrement != 0)
+                        bank_drain <= bank_fetch;
+                        if (!xfer_wr && scount != 9'd1) begin
+                            bank_fetch <= ~bank_fetch;
+                            bk_sector  <= bk_sector + 28'd1;
+                            bk_wr <= 1'b0; bk_req <= 1'b1; pf_pend <= 1'b1;
+                        end
                         st <= E_DRAIN;
                     end
                 end
@@ -548,10 +592,39 @@ module smk_ide (
                             if (!xfer_ident) error <= 8'h00;
                             ptr <= '0;
                             st <= E_IDLE;       // stopTransfer
+                        end else if (pf_ready) begin
+                            // the bank swap IS the next sector's drain-start:
+                            // the SAME visible-register bundle E_FETCH's
+                            // bk_done performs (CHS advance, DRQ up, count--).
+                            // No E_LBA1 re-entry - every non-final drain-start
+                            // has a prefetch (pf_ready) waiting by design.
+                            pf_ready <= 1'b0;
+                            bank_drain <= bank_fetch;
+                            status <= SR_DRDY | SR_DSC | SR_DRQ; drq <= 1'b1;
+                            error <= 8'h00; ptr <= '0;
+                            scount <= scount - 1'b1;
+                            if (x_snum >= {1'b0, g_secs}) begin
+                                x_snum <= 9'd1; snum <= 8'd1;
+                                if (x_head + 1'b1 >= g_heads) begin
+                                    x_head <= '0;
+                                    x_cyl <= x_cyl + 1'b1;
+                                    {cyl_hi, cyl_lo} <= x_cyl + 1'b1;
+                                    dhr[3:0] <= 4'h0;
+                                end else begin
+                                    x_head <= x_head + 1'b1;
+                                    dhr[3:0] <= x_head[3:0] + 1'b1;
+                                end
+                            end else begin
+                                x_snum <= x_snum + 1'b1;
+                                snum <= x_snum[7:0] + 1'b1;
+                            end
+                            if (scount != 9'd1) begin   // issue the next one
+                                bank_fetch <= ~bank_fetch;
+                                bk_sector  <= bk_sector + 28'd1;
+                                bk_wr <= 1'b0; bk_req <= 1'b1; pf_pend <= 1'b1;
+                            end
                         end else begin
-                            status <= SR_BSY; drq <= 1'b0;  // fetching next
-                            error <= 8'h00;     // readSector re-entry
-                            st <= E_LBA1;
+                            status <= SR_BSY; drq <= 1'b0;  // prefetch in flight
                         end
                     end
                 end
@@ -563,7 +636,6 @@ module smk_ide (
                     end
                 end
                 E_COMMIT: begin
-                    if (bk_ack) bk_req <= 1'b0;
                     if (bk_done) begin
                         // commit done: CHS advance + count--, then re-arm
                         // DRQ for the next block or finish
@@ -592,6 +664,16 @@ module smk_ide (
                             st <= E_FILL;
                         end
                     end
+                end
+                E_FLUSH: if (!bk_busy) begin
+                    // a stale prefetch has drained (bk_out cleared); it is now
+                    // safe to re-pin both banks and launch the new command
+                    bank_drain <= 1'b0; bank_fetch <= 1'b0;
+                    if (xfer_wr) begin          // WRITE's DRQ was deferred here
+                        status <= SR_DRDY | SR_DSC | SR_DRQ; drq <= 1'b1;
+                        st <= E_FILL;
+                    end else
+                        st <= E_LBA1;
                 end
                 default: st <= E_IDLE;
             endcase
@@ -623,7 +705,11 @@ module smk_ide (
                             status <= SR_DRDY | SR_DSC | SR_DRQ; drq <= 1'b1;
                             xfer_ident <= 1'b1; xfer_wr <= 1'b0;
                             ptr <= '0;
-                            bk_bank <= 1'b0;
+                            // drains identify_word, not the buffer: no flush,
+                            // no bank_fetch touch (a stale stream may target
+                            // it harmlessly); just clear the prefetch flags
+                            bank_drain <= 1'b0;
+                            pf_pend <= 1'b0; pf_ready <= 1'b0;
                             st <= E_DRAIN;
                         end else if ((w_inv[7:0] == 8'h20 || w_inv[7:0] == 8'h21
                                       || w_inv[7:0] == 8'h30 || w_inv[7:0] == 8'h31)
@@ -643,20 +729,29 @@ module smk_ide (
                             x_head <= {1'b0, dhr[3:0]};
                             x_snum <= {1'b0, snum};
                             ptr <= '0;
-                            // the whole command runs in bank 0: pinned HERE
-                            // (a WRITE fills BEFORE E_LBA2 runs - the bank
-                            // must not be geometry's stale bank 1)
-                            bk_bank <= 1'b0;
-                            if (w_inv[4]) begin // DRQ first for a WRITE
-                                status <= SR_DRDY | SR_DSC | SR_DRQ;
-                                drq <= 1'b1;
-                                st <= E_FILL;
-                            end else
-                                st <= E_LBA1;
+                            pf_pend <= 1'b0; pf_ready <= 1'b0;
+                            // if a prefetch from a previous chain is still in
+                            // flight, drain its done first (E_FLUSH) before
+                            // re-pinning the banks; otherwise start straight
+                            // away (bit-identical to the pre-prefetch path,
+                            // the whole command in bank 0 - a WRITE fills
+                            // BEFORE E_LBA2 runs, so the bank must not be
+                            // geometry's stale bank 1)
+                            if (bk_busy) st <= E_FLUSH;
+                            else begin
+                                bank_drain <= 1'b0; bank_fetch <= 1'b0;
+                                if (w_inv[4]) begin // DRQ first for a WRITE
+                                    status <= SR_DRDY | SR_DSC | SR_DRQ;
+                                    drq <= 1'b1;
+                                    st <= E_FILL;
+                                end else
+                                    st <= E_LBA1;
+                            end
                         end else begin
                             // abortCommand (BkEmu default; incl. LBA-bit)
                             status <= SR_DRDY | SR_ERR; drq <= 1'b0;
                             error <= ER_ABRT;
+                            pf_pend <= 1'b0; pf_ready <= 1'b0;
                             st <= E_IDLE;
                         end
                     end
@@ -678,7 +773,11 @@ module smk_ide (
                                     dhr <= DHR_FIXED;
                                     drq <= 1'b0; ptr <= '0;
                                     xfer_ident <= 1'b0;
-                                    bk_req <= 1'b0;   // abandon any in-flight
+                                    // stop re-requesting; any op already
+                                    // accepted completes into bk_out and the
+                                    // next dispatch flushes it (E_FLUSH)
+                                    bk_req <= 1'b0;
+                                    pf_pend <= 1'b0; pf_ready <= 1'b0;
                                     st <= E_IDLE;
                                 end
                             end

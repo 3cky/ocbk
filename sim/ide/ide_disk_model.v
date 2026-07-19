@@ -43,6 +43,8 @@ module ide_disk_model #(
                M_WR3 = 5, M_DONE = 6;
     integer   mst = M_IDLE;
     integer   lat, widx;
+    integer   lat_extra = 0;        // tb-pokable: slow the backend so a
+                                    // drain can outrun a prefetch (leg 6c)
     reg        r_wr;
     reg [27:0] r_sector;
     reg        oob;
@@ -61,7 +63,7 @@ module ide_disk_model #(
                     r_sector <= bk_sector;
                     oob      <= (bk_sector >= total_in)
                                 || (bk_sector >= MAX_SECTORS);
-                    lat      <= LATENCY;
+                    lat      <= LATENCY + lat_extra;
                     mst      <= M_WAIT;
                 end
                 M_WAIT: begin

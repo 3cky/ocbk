@@ -26,6 +26,8 @@ Sections:
            is sel_ide alone)
   4 (RAM11) READ sector 2 (CHS 0/0/3): 4 pattern words checked exactly,
            drain, end status
+  4b (RAM11) READ COUNT=2 (sectors 2-3): the tier-1 prefetch bank swap
+           under real pacing - both sectors' patterns checked, end status
   5 (RAM11) WRITE sector 5, completion poll (BSY phase!), read back and
            verify all 256 words (the write/read bus-inversion pair closes
            program-side: values written = values read back)
@@ -168,6 +170,27 @@ def build_stage2():
     for w in range(4):
         cmp_mem_imm(a, R_DATA, pat_bus(2, w))
     drain(a, 252)
+    cmp_mem_imm(a, R_COMP0, ST_DONE)
+
+    # --- 4b (RAM11): READ COUNT=2 (sectors 2-3), crosses a bank swap ---------
+    # the tier-1 prefetch: sector 2 drains while sector 3 prefetches into the
+    # other bank; the second DRQ (the swap) must serve sector 3's data under
+    # real vm1/qbus_mem pacing (the fast disk model beats the CPU drain)
+    a.emit(0o012737, V0, R_CYLLO)
+    a.emit(0o012737, V0, R_CYLHI)
+    a.emit(0o012737, V0, R_COMP1)
+    a.emit(0o012737, inv(3), R_SNUM)        # snum 3 -> index 2
+    a.emit(0o012737, inv(2), R_COUNT)       # COUNT=2
+    a.emit(0o012737, CMD_READ, R_COMP0)
+    poll_drq(a)
+    for w in range(4):
+        cmp_mem_imm(a, R_DATA, pat_bus(2, w))
+    drain(a, 252)
+    poll_drq(a)                             # the bank swap re-raises DRQ
+    for w in range(4):
+        cmp_mem_imm(a, R_DATA, pat_bus(3, w))
+    drain(a, 252)
+    poll_done(a)
     cmp_mem_imm(a, R_COMP0, ST_DONE)
 
     # --- 5 (RAM11): WRITE sector 5 + read back ------------------------------

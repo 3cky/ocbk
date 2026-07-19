@@ -663,10 +663,17 @@ is not a single peripheral:
   (fixed `N_IDE`, N_ROM family) and ORs `ide_rdata` into the reply-point
   merge (BkEmu's memory|device OR). Reset DCLO-only (the 5th nINIT
   exception). The 2-bank sector buffer (2 M4Ks) + the req/ack/done sector
-  port are the (b) seam — ping-pong-ready for prefetch overlap (tier 1:
-  fetch N+1 while the CPU drains N; tier 2: SD multi-block; tier 3
+  port are the ping-pong seam. **Tier-1 READ prefetch is DONE IN SIM:**
+  the buffer splits into a CPU-facing `bank_drain` and a backend-fill
+  `bank_fetch`, so sector N+1 (= bk_sector+1, the CHS auto-advance)
+  prefetches into the idle bank while the CPU drains N — the inter-sector
+  BSY gap collapses to ~0 when the CPU is the slower side; the visible
+  task-file registers still advance at each sector's drain-start (never at
+  a prefetch's own bk_done), and a mid-command new COMMAND/SRST routes
+  through `E_FLUSH`, which waits out the outstanding op (`bk_out`) before
+  re-pinning both banks. (tier 2: SD multi-block CMD18/25; tier 3
   speculative cross-command read-ahead only if the measured command mix
-  wants it), strictly sequential in (a). LBA math rides a serial
+  wants it — both still deferred.) LBA math rides a serial
   shift-add multiplier (single-cycle products broke sys_clk closure; the
   engine has bus-scale time budgets). Hardware shipped (a) with the port
   tied "no media" (DIP-8-ON showed the BIOS a cleanly ABSENT drive
@@ -677,8 +684,9 @@ is not a single peripheral:
   the machine when its status polls bus-timed-out; a real SMK's floppy
   controller always replies, no-drive reads = 0 per BkEmu
   FloppyController) and a **drive-access LED on pLed[2]** (~87 ms
-  stretch). Oracles: `sim/ide/run.sh` (unit,
-  mutation-tested ×9) + `sim/ide/run_soc.sh` (SoC, ×3) +
+  stretch). Oracles: `sim/ide/run.sh` (unit, incl. the tier-1 prefetch
+  legs 6b/6c/6d, mutation-tested ×14) + `sim/ide/run_soc.sh` (SoC, incl.
+  the COUNT=2 bank-crossing leg, ×3) +
   `sim/run_boot_check.sh +smk` (the real BIOS boots to its banner with
   the LIVE smk_ide + disk model attached, no X; its actual drive probe
   sits behind the multi-second EMT-0/БК memory test — smk64.mac-traced,
@@ -712,8 +720,8 @@ is not a single peripheral:
   attach riding the full card-init + SPI path). Fit 6,767 LE (56 %),
   STA met TNS 0 (worst +0.077 ns on the quasi-static
   model_bk11→mapper cone; no SDC exception — the SEED-3 rule).
-  **Deferred to later increments:** the prefetch/multi-block tiers,
-  real data CRC16, MMC cards.
+  **Deferred to later increments:** SD multi-block (tiers 2/3; tier-1
+  READ prefetch is done in sim), real data CRC16, MMC cards.
 - **512 KB segmented RAM extension** — ✅ **increment 1 DONE IN SIM 2026-07-17**
   (BK-0011M only, enable = **DIP 8**, DCLO-hold-latched like DIP 1). The
   memory-layout piece, and it *was* the Phase-7 coupling: 8 × 4 KB segments

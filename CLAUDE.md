@@ -33,9 +33,12 @@ backend (`src/sd_backend.sv`) — is done, CONFIRMED ON HARDWARE
 2026-07-18: the BIOS detects the SD-backed drive and BOOTS AN OS from
 the HDD image** (a raw AltPro image dd'd at card LBA 0, megasd slot
 PIN_61–66); pLed[2] is the drive-access LED (see the SMK512 bullet).
-Remaining open items: prefetch/multi-block, bk10+SMK, the SMK-RAM
-`ram_init` pattern, `N_*` recalibration, and BK-0011M cycle-accuracy
-vs a reference (deferred, reference-tb-first).
+**Tier-1 READ prefetch is done in sim** (fetch sector N+1 while the CPU
+drains N — the 2-bank buffer split with an E_FLUSH mid-command interlock;
+`src/smk_ide.sv` + the `sim/ide` oracles). Remaining open items: SD
+multi-block (CMD18/25), bk10+SMK, the SMK-RAM `ram_init` pattern, `N_*`
+recalibration, and BK-0011M cycle-accuracy vs a reference (deferred,
+reference-tb-first).
 
 ## Build & test
 
@@ -182,10 +185,21 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   read-back round trip, ABRT for unsupported opcodes AND the LBA bit (the
   documented CHS-only deviation), data hold across the DIN window, and
   the geometry legs (valid parse; broken checksum ⇒ raw defaults 63/16;
-  default C = total/1008 == 0 ⇒ attach fails, drive absent).
-  **Mutation-tested ×9** (see the run.sh header — inversion drop, packing
-  swap, lane rule, DRQ chain break, CHS off-by-one, 1-based snum drop,
-  checksum bound/seed, 0xA0 drop — all fail).
+  default C = total/1008 == 0 ⇒ attach fails, drive absent). **Tier-1
+  prefetch legs (6b/6c/6d):** 6b a COUNT=4 chain data-exact with a
+  mid-drain SNUM read pinning the visible CHS at drain-start (never at a
+  prefetch's own bk_done), no BSY window at the boundary (disk pass), and
+  exactly one backend op per sector (`ack_cnt`); 6c (disk pass) a slowed
+  backend so the drain outruns the prefetch → a real BSY window then the
+  swap DRQ; 6d the E_FLUSH mid-command interlock — a fresh COMMAND, an
+  SRST, and a WRITE each dispatched while a prefetch is in flight, all
+  recovering data-exact (the WRITE's backing-store check catches fill
+  words dropped into a backend-owned port). An `overlap_seen` spy asserts
+  the overlap actually occurred. **Mutation-tested ×14** (see the run.sh
+  header — inversion drop, packing swap, lane rule, E_DRAIN swap-branch
+  removed, CHS off-by-one, 1-based snum drop, checksum bound/seed, 0xA0
+  drop; + prefetch 10–14: bank-invert drop, unconditional swap, flush
+  removed, CHS-at-prefetch-done, scount-guard drop — all fail).
 - `sim/ide/run_soc.sh` — the Phase-8 **IDE SoC functional oracle**
   (sim/smk conventions: real boot mechanism, /24 rate, port-2 contention,
   parks 001004/001012, `COSIM PASS`): the `mem/gen_ide_test.py` program
@@ -671,9 +685,23 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   RAM). Reset is **DCLO-only — the 5th deliberate nINIT exception**
   (BkEmu resets the IDE on hardware reset only; software resets ride
   SRST). The 2-bank 512×16 sector buffer (2 M4Ks) + the backend sector
-  port (req/ack/done, 28-bit LBA, bank field, all sclk) are the
-  **increment-(b) SD/SPI seam** — ping-pong-ready for tier-1 prefetch
-  overlap, strictly sequential in (a). **pLed[2] = drive-access LED**:
+  port (req/ack/done, 28-bit LBA, bank field, all sclk) are the SD/SPI
+  seam AND the tier-1 prefetch ping-pong. **Tier-1 READ prefetch (done in
+  sim):** `bank_drain` (CPU-facing: drain / E_FILL / E_COMMIT) and
+  `bank_fetch` (backend-fill) split the buffer; at each READ sector's
+  drain-start (E_FETCH's bk_done for sector 0, the E_DRAIN bank swap for
+  the rest) the engine issues `bk_sector+1` (= the CHS auto-advance, so no
+  `cur_lba` register) into the idle bank when `scount` says the chain
+  continues — the inter-sector BSY gap collapses to ~0 when the CPU is the
+  slower drainer, else E_DRAIN parks BSY until the prefetch's `pf_ready`.
+  A global ack/done handshake tracks the outstanding op in `bk_out`
+  (`bk_busy = bk_req||bk_ack||bk_out`); a mid-command new COMMAND/SRST
+  routes to **E_FLUSH**, which waits `!bk_busy` before re-pinning both
+  banks (so a stale prefetch stream can't corrupt the new command's bank —
+  the WRITE case defers its DRQ past the flush). The visible task-file
+  registers advance ONLY at drain-start, never at a prefetch's own bk_done
+  (the BkEmu mid-transfer CHS view). WRITE and SD multi-block stay
+  strictly sequential. **pLed[2] = drive-access LED**:
   `ide_act` (command/backend in flight — DRQ phases, backend ops, the
   attach-time geometry read; register pokes alone don't light it)
   stretched to ~87 ms in `ocbk_top`. **Increment (b) — the SD/SPI
@@ -700,10 +728,10 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   (a design-review catch — the bug would have shifted every command
   frame): a state asserts the byte engine's `x_go`/`x_tx` only in
   NON-`x_done` cycles, so a state change never launches the next byte
-  with the old state's data. **Still deferred:** prefetch overlap / SD
-  multi-block (CMD18/25), bk10+SMK, the SMK-RAM `ram_init` pattern,
-  real data CRC16, MMC cards, and `N_EXT`/`N_SMKREG`/`N_IDE`
-  recalibration (reference-tb-first).
+  with the old state's data. **Still deferred:** SD multi-block
+  (CMD18/25 — tier-1 READ prefetch is done, above), bk10+SMK, the
+  SMK-RAM `ram_init` pattern, real data CRC16, MMC cards, and
+  `N_EXT`/`N_SMKREG`/`N_IDE` recalibration (reference-tb-first).
   Oracles: `sim/run_mapper.sh` + `sim/smk/run.sh` + `sim/ide/run.sh`
   (BOTH passes — disk model AND the `-DSD_STACK` real SPI stack) +
   `sim/ide/run_soc.sh` + `sim/ide/run_sd.sh` (see the sim list) +
