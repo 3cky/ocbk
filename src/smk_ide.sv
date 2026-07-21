@@ -50,10 +50,13 @@
 //  the buffer is split into a CPU-facing bank_drain and a backend-fill
 //  bank_fetch, so while the CPU drains sector N the engine prefetches N+1
 //  into the other bank (bk_sector+1 == the CHS auto-advance, in-range).
-//  The visible task-file registers still advance at each sector's
-//  DRAIN-START (E_FETCH's bk_done for the first sector, the E_DRAIN bank
-//  swap for the rest) - never at a prefetch's own bk_done - so the
-//  BkEmu-faithful mid-transfer CHS view is unchanged. A same-cycle new
+//  The visible task-file registers point at the sector CURRENTLY in
+//  transfer (BkEmu last-read/written semantics): sector 0 is set at
+//  dispatch and held, then each later sector's DRAIN-START (the E_DRAIN
+//  bank swap for READ, E_COMMIT for WRITE) advances them to the sector it
+//  is about to transfer - never one ahead, and never at a prefetch's own
+//  bk_done - so after a COUNT=N run they rest on the last sector handled.
+//  A same-cycle new
 //  COMMAND/SRST while a prefetch is in flight routes through E_FLUSH,
 //  which waits out the outstanding op (bk_out) before re-pinning both
 //  banks. WRITE and SD multi-block (CMD18/25) stay strictly sequential.
@@ -551,27 +554,15 @@ module smk_ide (
                 end
                 E_FETCH: begin
                     if (bk_done) begin
-                        // BkEmu readSector: DRQ up, CHS registers advance to
-                        // the NEXT sector (visible mid-transfer), count--
+                        // BkEmu readSector: DRQ up for the first sector, count--.
+                        // The visible CHS registers already hold this sector
+                        // (set at dispatch) and must NOT advance - they point at
+                        // the sector currently in transfer (last-read semantics),
+                        // stepping forward only at each later sector's
+                        // drain-start (the E_DRAIN swap below).
                         status <= SR_DRDY | SR_DSC | SR_DRQ; drq <= 1'b1;
                         ptr <= '0;
                         scount <= scount - 1'b1;
-                        // increment+wrap == BkEmu's div/mod for in-range CHS
-                        if (x_snum >= {1'b0, g_secs}) begin
-                            x_snum <= 9'd1; snum <= 8'd1;
-                            if (x_head + 1'b1 >= g_heads) begin
-                                x_head <= '0;
-                                x_cyl <= x_cyl + 1'b1;
-                                {cyl_hi, cyl_lo} <= x_cyl + 1'b1;
-                                dhr[3:0] <= 4'h0;
-                            end else begin
-                                x_head <= x_head + 1'b1;
-                                dhr[3:0] <= x_head[3:0] + 1'b1;
-                            end
-                        end else begin
-                            x_snum <= x_snum + 1'b1;
-                            snum <= x_snum[7:0] + 1'b1;
-                        end
                         // this sector drains from bank_fetch (=0, pinned at
                         // dispatch); prefetch the next into the other bank
                         // when the chain has one (post-decrement != 0)
@@ -594,10 +585,13 @@ module smk_ide (
                             st <= E_IDLE;       // stopTransfer
                         end else if (pf_ready) begin
                             // the bank swap IS the next sector's drain-start:
-                            // the SAME visible-register bundle E_FETCH's
-                            // bk_done performs (CHS advance, DRQ up, count--).
-                            // No E_LBA1 re-entry - every non-final drain-start
-                            // has a prefetch (pf_ready) waiting by design.
+                            // DRQ up + count--, plus the CHS advance to the
+                            // sector now entering transfer (last-read view -
+                            // the FIRST sector's drain-start, E_FETCH's
+                            // bk_done, does NOT advance; every subsequent one
+                            // does, here). No E_LBA1 re-entry - every
+                            // non-final drain-start has a prefetch (pf_ready)
+                            // waiting by design.
                             pf_ready <= 1'b0;
                             bank_drain <= bank_fetch;
                             status <= SR_DRDY | SR_DSC | SR_DRQ; drq <= 1'b1;
@@ -637,23 +631,29 @@ module smk_ide (
                 end
                 E_COMMIT: begin
                     if (bk_done) begin
-                        // commit done: CHS advance + count--, then re-arm
-                        // DRQ for the next block or finish
+                        // commit done: count--, then re-arm DRQ for the next
+                        // block or finish. The visible CHS registers point at
+                        // the sector just written (last-written semantics), so
+                        // they advance ONLY when another block follows - to the
+                        // sector about to be filled; the final block leaves them
+                        // on the last sector written.
                         scount <= scount - 1'b1;
-                        if (x_snum >= {1'b0, g_secs}) begin
-                            x_snum <= 9'd1; snum <= 8'd1;
-                            if (x_head + 1'b1 >= g_heads) begin
-                                x_head <= '0;
-                                x_cyl <= x_cyl + 1'b1;
-                                {cyl_hi, cyl_lo} <= x_cyl + 1'b1;
-                                dhr[3:0] <= 4'h0;
+                        if (scount != 9'd1) begin
+                            if (x_snum >= {1'b0, g_secs}) begin
+                                x_snum <= 9'd1; snum <= 8'd1;
+                                if (x_head + 1'b1 >= g_heads) begin
+                                    x_head <= '0;
+                                    x_cyl <= x_cyl + 1'b1;
+                                    {cyl_hi, cyl_lo} <= x_cyl + 1'b1;
+                                    dhr[3:0] <= 4'h0;
+                                end else begin
+                                    x_head <= x_head + 1'b1;
+                                    dhr[3:0] <= x_head[3:0] + 1'b1;
+                                end
                             end else begin
-                                x_head <= x_head + 1'b1;
-                                dhr[3:0] <= x_head[3:0] + 1'b1;
+                                x_snum <= x_snum + 1'b1;
+                                snum <= x_snum[7:0] + 1'b1;
                             end
-                        end else begin
-                            x_snum <= x_snum + 1'b1;
-                            snum <= x_snum[7:0] + 1'b1;
                         end
                         if (scount == 9'd1) begin   // that was the last one
                             status <= SR_DRDY | SR_DSC; drq <= 1'b0;

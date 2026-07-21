@@ -185,16 +185,20 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   writes ignored), the 740/742 exact-byte-address lane rules (COMMAND only
   at 177740; control register only via byte 177743), DHR |0xA0 forcing,
   IDENTIFY with the full word map + the per-word 0x58-during/0x50-after
-  status contract, single-sector READ of **every** sector via CHS
-  auto-advance (wrap boundaries register-checked), multi-sector chains
+  status contract, single-sector READ of **every** sector with an
+  explicit per-sector CHS (the wrap boundaries data- and register-checked;
+  **last-read semantics** — a command leaves the registers on the sector
+  it just transferred, so there is NO cross-command auto-advance, and a
+  repeat READ with unchanged CHS re-reads the same sector — the leg-5
+  regression), multi-sector chains
   (COUNT=0 ⇒ 256), WRITEs verified against the model's backing store + a
   read-back round trip, ABRT for unsupported opcodes AND the LBA bit (the
   documented CHS-only deviation), data hold across the DIN window, and
   the geometry legs (valid parse; broken checksum ⇒ raw defaults 63/16;
   default C = total/1008 == 0 ⇒ attach fails, drive absent). **Tier-1
   prefetch legs (6b/6c/6d):** 6b a COUNT=4 chain data-exact with a
-  mid-drain SNUM read pinning the visible CHS at drain-start (never at a
-  prefetch's own bk_done), no BSY window at the boundary (disk pass), and
+  mid-drain SNUM read pinning the visible CHS at the CURRENT sector in
+  transfer (never advanced early at a prefetch's own bk_done), no BSY window at the boundary (disk pass), and
   exactly one backend op per sector (`ack_cnt`); 6c (disk pass) a slowed
   backend so the drain outruns the prefetch → a real BSY window then the
   swap DRQ; 6d the E_FLUSH mid-command interlock — a fresh COMMAND, an
@@ -707,7 +711,7 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   E_FILL / E_COMMIT) and
   `bank_fetch` (backend-fill) split the buffer; at each READ sector's
   drain-start (E_FETCH's bk_done for sector 0, the E_DRAIN bank swap for
-  the rest) the engine issues `bk_sector+1` (= the CHS auto-advance, so no
+  the rest) the engine issues `bk_sector+1` (a linear +1 index, so no
   `cur_lba` register) into the idle bank when `scount` says the chain
   continues — the inter-sector BSY gap collapses to ~0 when the CPU is the
   slower drainer, else E_DRAIN parks BSY until the prefetch's `pf_ready`.
@@ -715,10 +719,14 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   (`bk_busy = bk_req||bk_ack||bk_out`); a mid-command new COMMAND/SRST
   routes to **E_FLUSH**, which waits `!bk_busy` before re-pinning both
   banks (so a stale prefetch stream can't corrupt the new command's bank —
-  the WRITE case defers its DRQ past the flush). The visible task-file
-  registers advance ONLY at drain-start, never at a prefetch's own bk_done
-  (the BkEmu mid-transfer CHS view). WRITE and SD multi-block stay
-  strictly sequential. **pLed[2] = drive-access LED**:
+  the WRITE case defers its DRQ past the flush). **Last-read/written CHS
+  view:** the visible task-file registers point at the sector CURRENTLY in
+  transfer — set to sector 0 at dispatch and held, then advanced only at
+  each later sector's drain-start (the E_DRAIN swap for READ, E_COMMIT for
+  WRITE), never one-ahead and never at a prefetch's own bk_done — so a
+  COUNT=N run ends with them on the last sector handled (BkEmu-faithful
+  after the 2026-07-21 fix; the old code left them one past it). WRITE and
+  SD multi-block stay strictly sequential. **pLed[2] = drive-access LED**:
   `ide_act` (command/backend in flight — DRQ phases, backend ops, the
   attach-time geometry read; register pokes alone don't light it)
   stretched to ~87 ms in `ocbk_top`. **Increment (b) — the SD/SPI

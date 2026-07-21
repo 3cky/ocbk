@@ -24,9 +24,10 @@
 //       byte write to 741 ignored; SRST-release recovers
 //    4  IDENTIFY: per-word STATUS 0x58 before / 0x50 after the last, full
 //       word map vs an independent hand transcription of identify()
-//    5  single-sector READ of EVERY sector via CHS auto-advance (one CHS
-//       seed, then per-sector COUNT=1 + CMD 0x20), data vs the model array,
-//       CHS register spot-checks at the S and H wrap boundaries
+//    5  single-sector READ of EVERY sector (explicit per-sector CHS: no
+//       cross-command advance under last-read semantics), data vs the model
+//       array, CHS spot-checks that the registers rest on the sector just
+//       read + a repeat-read regression (unchanged CHS re-reads the same one)
 //    6  multi-sector READ: SNUM=2, COUNT=0 (=> 256 sectors), data vs model
 //    6b prefetch overlap: COUNT=4 chain, per-sector data-exact; a mid-drain
 //       SNUM read pins the visible CHS at drain-start (never at prefetch-
@@ -425,27 +426,47 @@ module smk_ide_tb;
         run_identify(CYLS, HEADS, SECS, TOTAL);
 
         // ---- leg 5: single-sector read of EVERY sector ------------------
-        w_word(A_CYLLO, 0); w_word(A_CYLHI, 0);
-        w_word(A_COMP1, 0); w_word(A_SNUM, 1);
+        // Last-read semantics: a command leaves the CHS registers on the
+        // sector it just transferred, NOT the next one - so consecutive
+        // single-sector reads must set CHS explicitly (there is no
+        // cross-command auto-advance). Each read is data-exact (proving the
+        // CHS->LBA map across the S and H wraps), and at the wrap boundaries
+        // the visible CHS is checked to still point at the sector just read.
         for (s = 0; s < TOTAL; s = s + 1) begin
+            w_word(A_CYLLO, (s / (SECS * HEADS)));
+            w_word(A_CYLHI, 0);
+            w_word(A_COMP1, (s / SECS) % HEADS);        // head
+            w_word(A_SNUM,  (s % SECS) + 1);            // 1-based sector
             w_word(A_COUNT, 1);
-            w_word(A_COMP0, 16'h0020);          // READ
+            w_word(A_COMP0, 16'h0020);                  // READ
             poll_drq;
             drain_sector(s);
-            // CHS auto-advance spot checks at the wrap boundaries
-            if (s == 0) begin
-                r_word(A_SNUM, v); chk(v, 16'h0002, "CHS +1: snum");
-            end
-            if (s == SECS - 1) begin            // S-wrap: head 0 -> 1
-                r_word(A_SNUM, v);  chk(v, 16'h0001, "S-wrap snum");
-                r_word(A_COMP1, v); chk(v[7:0], 8'hA1, "S-wrap head");
-            end
-            if (s == SECS * HEADS - 1) begin    // H-wrap: cyl 0 -> 1
-                r_word(A_COMP1, v); chk(v[7:0], 8'hA0, "H-wrap head");
-                r_word(A_CYLLO, v); chk(v, 16'h0001, "H-wrap cyl");
+            // registers rest on the sector just read (last-read view)
+            if (s == 0 || s == SECS - 1 || s == SECS * HEADS - 1
+                       || s == TOTAL - 1) begin
+                r_word(A_SNUM, v);
+                chk(v, ((s % SECS) + 1), "leg5 SNUM = last-read sector");
+                r_word(A_COMP1, v);
+                chk(v[7:0], (8'hA0 | ((s / SECS) % HEADS)),
+                    "leg5 head = last-read sector");
+                r_word(A_CYLLO, v);
+                chk(v, (s / (SECS * HEADS)), "leg5 cyl = last-read sector");
             end
         end
         r_word(A_COMP0, v); chk(v[7:0], 8'h50, "read-all end status");
+
+        // regression for the last-sector fix: a second COUNT=1 READ with the
+        // CHS registers UNTOUCHED must re-read the SAME (last) sector - the
+        // old RTL advanced them one past it, which would have re-read the
+        // wrong sector / walked off the end here.
+        w_word(A_COUNT, 1);
+        w_word(A_COMP0, 16'h0020);
+        poll_drq;
+        drain_sector(TOTAL - 1);                        // same last sector
+        poll_idle;
+        r_word(A_SNUM,  v); chk(v, SECS,      "leg5 no cross-command advance");
+        r_word(A_COMP1, v); chk(v[7:0], 8'hA3, "leg5 head unchanged");
+        r_word(A_CYLLO, v); chk(v, (CYLS - 1), "leg5 cyl unchanged");
 
         // ---- leg 6: multi-sector read (COUNT=0 => 256) ------------------
         w_word(A_CYLLO, 0); w_word(A_CYLHI, 0);
@@ -462,10 +483,11 @@ module smk_ide_tb;
 
         // ---- leg 6b: prefetch overlap (COUNT=4 chain) -------------------
         // sector 0 drains from bank 0 while sector 1 prefetches into bank 1;
-        // the visible CHS must show sector 1 throughout (advanced at
-        // drain-start, NEVER at the prefetch's own bk_done), and (disk pass)
-        // there is no BSY window at the sector boundary since the fast disk
-        // model always beats the drain. Exactly ONE backend op per sector.
+        // the visible CHS must show sector 0 (the sector in transfer)
+        // throughout the drain - it must NOT advance at the sector-1
+        // prefetch's own bk_done, only at the sector-1 DRAIN-start. (disk
+        // pass) there is no BSY window at the sector boundary since the fast
+        // disk model always beats the drain. Exactly ONE backend op per sector.
         w_word(A_CYLLO, 0); w_word(A_CYLHI, 0);
         w_word(A_COMP1, 0); w_word(A_SNUM, 1);      // start sector 0 (index 0)
         ack_base = ack_cnt;
@@ -476,12 +498,12 @@ module smk_ide_tb;
         w_word(A_COMP0, 16'h0020);                  // READ
         poll_drq;
         // drain sector 0, checking SNUM mid-block: it must still read sector
-        // 1's value (2) even after the sector-1 prefetch has completed in
+        // 0's value (1) even after the sector-1 prefetch has completed in
         // the background - the "visible advance at prefetch-done" catch
         for (n = 0; n < 256; n = n + 1) begin
             if (n == 200) begin
                 r_word(A_SNUM, v);
-                chk(v, 16'h0002, "6b SNUM held at sector-1 value mid-drain");
+                chk(v, 16'h0001, "6b SNUM held at sector-0 value mid-drain");
             end
             r_word(A_DATA, dv);
             if (dv !== `DISK[0 * 256 + n]) begin
