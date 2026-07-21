@@ -5,8 +5,11 @@
 //  Mode-0 SPI slave (commands captured on the SCK rising edge, response
 //  bits presented on the falling edge, byte-aligned to the host's frame),
 //  decoding exactly the command set the host uses: CMD0/8/55/ACMD41/58/
-//  16/9/17/24, with R1/R3/R7 responses, data tokens, NCR gaps and a
-//  busy-byte phase after writes. The 16-bit word array `card` mirrors
+//  16/9/17/24 and the CMD18/CMD12 read-multiple pair, with R1/R3/R7
+//  responses, data tokens, NCR gaps and a busy-byte phase after writes.
+//  CMD18 streams sequential blocks on demand as the host keeps clocking
+//  (rsec_str auto-advances); CMD12 (recognised even mid-block on MOSI)
+//  stops the stream, replies R1 and a short busy. The 16-bit word array `card` mirrors
 //  ide_disk_model's `disk` (the tb $readmemh's the SAME ide_image.hex;
 //  on the wire the LOW byte of each word travels first - the raw-image
 //  little-endian convention).
@@ -57,6 +60,7 @@ module sd_model #(
     integer cmd_total;
     integer cmd0_cnt, cmd8_cnt, cmd55_cnt, acmd41_cnt, cmd58_cnt;
     integer cmd16_cnt, cmd9_cnt, rd_cnt, wr_cnt;
+    integer cmd18_cnt, cmd12_cnt;   // read-multiple + stop-transmission
     integer cmd16_sdhc;             // CMD16 seen on an SDHC card (must stay 0)
     integer prot_errors;
 
@@ -65,6 +69,8 @@ module sd_model #(
     reg        init_done;
     reg        app_pend;            // CMD55 seen, next command is ACMDxx
     integer    acmd_tries;
+    reg        reading_multi;       // inside a CMD18 read-multiple stream
+    reg [31:0] rsec_str;            // next sector the stream will deliver
 
     initial begin
         sdhc       = !$test$plusargs("sdsc");
@@ -75,8 +81,10 @@ module sd_model #(
         dummy_clocks = 0; cmd_total = 0;
         cmd0_cnt = 0; cmd8_cnt = 0; cmd55_cnt = 0; acmd41_cnt = 0;
         cmd58_cnt = 0; cmd16_cnt = 0; cmd9_cnt = 0; rd_cnt = 0; wr_cnt = 0;
+        cmd18_cnt = 0; cmd12_cnt = 0;
         cmd16_sdhc = 0; prot_errors = 0;
         idle_state = 0; init_done = 0; app_pend = 0; acmd_tries = 0;
+        reading_multi = 0; rsec_str = 0;
     end
 
     task prot_err(input [8*64-1:0] msg);
@@ -125,6 +133,7 @@ module sd_model #(
         if (rst) begin
             idle_state = 0; init_done = 0; app_pend = 0; acmd_tries = 0;
             mstate = MS_IDLE; oq_rd = 0; oq_wr = 0; miso_r = 1'b1;
+            reading_multi = 0; rsec_str = 0;
         end
     end
 
@@ -147,6 +156,17 @@ module sd_model #(
     always @(negedge ck) begin
         if (!cs) begin
             if (in_bits == 0) begin
+                // CMD18 read-multiple: when the queue drains and the host
+                // keeps clocking, stream the next sequential block on demand.
+                // The rsec_str<capacity guard suppresses the benign one-past
+                // refill on the CMD12-close clock (the host reads no data
+                // there); a genuine past-capacity access is caught elsewhere.
+                if (oq_rd == oq_wr && reading_multi
+                    && rsec_str < capacity && rsec_str < MAX_SECTORS) begin
+                    oq_rd = 0; oq_wr = 0;
+                    push_read_block(rsec_str);
+                    rsec_str = rsec_str + 1;
+                end
                 if (oq_rd < oq_wr) begin
                     out_byte = oq[oq_rd];
                     oq_rd = oq_rd + 1;
@@ -258,6 +278,27 @@ module sd_model #(
         end
     endtask
 
+    // push one read data block (NAC fill, token, 512 bytes LOW-first, CRC)
+    // or the error token under +rderr; capacity-checked per block so a
+    // CMD18 stream running past the card is caught
+    task push_read_block(input [31:0] sec);
+        begin
+            if (sec >= capacity || sec >= MAX_SECTORS)
+                prot_err("read sector out of capacity");
+            if (inj_rderr)
+                oq_push(8'h09);                 // error token: range+error
+            else begin
+                for (i = 0; i < NAC_FILL; i = i + 1) oq_push(8'hFF);
+                oq_push(8'hFE);
+                for (i = 0; i < 256; i = i + 1) begin
+                    oq_push(card[sec*256 + i][7:0]);   // LOW byte first
+                    oq_push(card[sec*256 + i][15:8]);
+                end
+                oq_push(8'h55); oq_push(8'h55);
+            end
+        end
+    endtask
+
     task exec_cmd(input [7:0] crcb);
         reg [31:0] sec;
         reg        was_app;
@@ -265,6 +306,9 @@ module sd_model #(
             cmd_total = cmd_total + 1;
             was_app   = app_pend;
             app_pend  = 0;
+            // only CMD12 is legal while a read-multiple stream is open
+            if (reading_multi && cur_cmd != 6'd12)
+                prot_err("non-CMD12 command during a read-multiple stream");
             case (cur_cmd)
                 6'd0: begin
                     cmd0_cnt = cmd0_cnt + 1;
@@ -341,20 +385,28 @@ module sd_model #(
                     cmd_sector(arg, sec);
                     if (!init_done)
                         prot_err("CMD17 before init complete");
-                    if (sec >= capacity || sec >= MAX_SECTORS)
-                        prot_err("CMD17 sector out of capacity");
                     push_r1(8'h00);
-                    if (inj_rderr) begin
-                        oq_push(8'h09);             // error token: range+error
-                    end else begin
-                        for (i = 0; i < NAC_FILL; i = i + 1) oq_push(8'hFF);
-                        oq_push(8'hFE);
-                        for (i = 0; i < 256; i = i + 1) begin
-                            oq_push(card[sec*256 + i][7:0]);   // LOW byte first
-                            oq_push(card[sec*256 + i][15:8]);
-                        end
-                        oq_push(8'h55); oq_push(8'h55);
-                    end
+                    push_read_block(sec);
+                end
+                6'd18: begin                        // read multiple block
+                    cmd18_cnt = cmd18_cnt + 1;
+                    cmd_sector(arg, sec);
+                    if (!init_done)
+                        prot_err("CMD18 before init complete");
+                    push_r1(8'h00);
+                    push_read_block(sec);           // first block now
+                    reading_multi = 1;              // stream the rest on demand
+                    rsec_str = sec + 1;
+                end
+                6'd12: begin                        // stop transmission
+                    cmd12_cnt = cmd12_cnt + 1;
+                    if (!reading_multi)
+                        prot_err("CMD12 outside a read-multiple stream");
+                    reading_multi = 0;
+                    oq_rd = 0; oq_wr = 0;           // drop the streaming block
+                    push_r1(8'h00);                 // stuff byte(s) + R1
+                    for (i = 0; i < BUSY_BYTES; i = i + 1)
+                        oq_push(8'h00);             // busy, then FF (empty q)
                 end
                 6'd24: begin
                     wr_cnt = wr_cnt + 1;

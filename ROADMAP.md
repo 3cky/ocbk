@@ -672,9 +672,11 @@ is not a single peripheral:
   task-file registers still advance at each sector's drain-start (never at
   a prefetch's own bk_done), and a mid-command new COMMAND/SRST routes
   through `E_FLUSH`, which waits out the outstanding op (`bk_out`) before
-  re-pinning both banks. (tier 2: SD multi-block CMD18/25; tier 3
-  speculative cross-command read-ahead only if the measured command mix
-  wants it — both still deferred.) LBA math rides a serial
+  re-pinning both banks. (**Tier-2 SD multi-block READ (CMD18) is DONE,
+  CONFIRMED ON HARDWARE 2026-07-21** — a contiguous read run is coalesced backend-only into one
+  CMD18 read-multiple stream closed by CMD12; the engine is untouched so
+  tier-1 stays bit-identical. CMD25 write-multiple and tier-3 speculative
+  cross-command read-ahead remain deferred.) LBA math rides a serial
   shift-add multiplier (single-cycle products broke sys_clk closure; the
   engine has bus-scale time budgets). Hardware shipped (a) with the port
   tied "no media" (DIP-8-ON showed the BIOS a cleanly ABSENT drive
@@ -714,15 +716,25 @@ is not a single peripheral:
   reset); a failed/absent-card init parks media-absent — the (a)
   behaviour exactly. Oracles: `sim/ide/run_sd.sh` (unit: the
   protocol-checking `sd_model` card, both personalities, injection
-  legs, **mutation-tested ×9**), the `sim/ide/run.sh` **`-DSD_STACK`
-  second pass** (EVERY transcribed BkEmu smk_ide_tb leg re-run over the
-  real SPI stack via `sd_harness` — the decisive integration oracle)
-  and `sim/run_boot_check.sh +smk +sdspi` (the real BIOS boot with
-  attach riding the full card-init + SPI path). Fit 6,767 LE (56 %),
-  STA met TNS 0 (worst +0.077 ns on the quasi-static
+  legs, plus the **tier-2 CMD18 read-multiple leg** — **mutation-tested
+  ×12**), the `sim/ide/run.sh` **`-DSD_STACK` second pass** (EVERY
+  transcribed BkEmu smk_ide_tb leg re-run over the real SPI stack via
+  `sd_harness` — the decisive integration oracle, leg 6b there now also
+  asserting the COUNT=4 chain is coalesced into a CMD18 stream with
+  `ack_cnt` still 4) and `sim/run_boot_check.sh +smk +sdspi` (the real
+  BIOS boot with attach riding the full card-init + SPI path). Fit 6,767
+  LE (56 %), STA met TNS 0 (worst +0.077 ns on the quasi-static
   model_bk11→mapper cone; no SDC exception — the SEED-3 rule).
-  **Deferred to later increments:** SD multi-block (tiers 2/3; tier-1
-  READ prefetch is done, confirmed on hardware), real data CRC16, MMC cards.
+  **Tier-2 SD multi-block READ (CMD18) is DONE, CONFIRMED ON HARDWARE
+  2026-07-21 (the board boots):** a contiguous read run is coalesced
+  backend-only into one CMD18 stream closed by CMD12 (escalate-on-second,
+  lazy CMD12 close; the engine is untouched). Fit 6,957 LE (58 %), STA
+  met setup +0.330 ns / TNS 0 on sys_clk (hold +0.822) — the CMD18 states
+  first pushed sd_backend's 32-bit `wait_cnt` decrement to a −0.646 ns
+  setup violation, fixed by narrowing `wait_cnt` to 20 bits (the
+  sdram_ctrl counter-split cure). **Deferred to
+  later increments:** SD multi-block WRITE (CMD25), tier-3 cross-command
+  read-ahead, real data CRC16, MMC cards.
 - **512 KB segmented RAM extension** — ✅ **increment 1 DONE IN SIM 2026-07-17**
   (BK-0011M only, enable = **DIP 8**, DCLO-hold-latched like DIP 1). The
   memory-layout piece, and it *was* the Phase-7 coupling: 8 × 4 KB segments

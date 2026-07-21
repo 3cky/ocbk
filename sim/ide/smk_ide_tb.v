@@ -130,6 +130,7 @@ module smk_ide_tb;
     // backend op - snapshot ack_base before a chain to count its ops.
     reg     overlap_seen = 1'b0;
     integer ack_cnt = 0, ack_base = 0;
+    integer cmd18_base = 0;             // SD stack: CMD18 count before a chain
     always @(posedge sclk) begin
         if (bk_req && dut.drq) overlap_seen <= 1'b1;
         if (bk_ack)            ack_cnt <= ack_cnt + 1;
@@ -468,6 +469,9 @@ module smk_ide_tb;
         w_word(A_CYLLO, 0); w_word(A_CYLHI, 0);
         w_word(A_COMP1, 0); w_word(A_SNUM, 1);      // start sector 0 (index 0)
         ack_base = ack_cnt;
+`ifdef SD_STACK
+        cmd18_base = u_disk.u_card.cmd18_cnt;
+`endif
         w_word(A_COUNT, 4);
         w_word(A_COMP0, 16'h0020);                  // READ
         poll_drq;
@@ -496,6 +500,13 @@ module smk_ide_tb;
         poll_idle;
         r_word(A_COMP0, v); chk(v[7:0], 8'h50, "6b end status");
         chk(ack_cnt - ack_base, 4, "6b backend op count (one per sector)");
+`ifdef SD_STACK
+        // tier-2: the contiguous 4-sector chain must be coalesced into a
+        // CMD18 read-multiple stream on the wire (not four separate CMD17s),
+        // while the engine still issues one bk_req per sector (ack_cnt == 4)
+        chk((u_disk.u_card.cmd18_cnt > cmd18_base) ? 1 : 0, 1,
+            "6b chain coalesced into a CMD18 stream");
+`endif
 
 `ifndef SD_STACK
         // ---- leg 6c: drain-finishes-first (slow backend) ----------------

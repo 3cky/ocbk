@@ -25,6 +25,13 @@
 //    3 write+readback : buffer word -> CMD24 -> model backing store
 //        checked word-exact -> CMD17 round trip; then a re-read of
 //        sector 0 (the backend serves normally after every leg).
+//    4 CMD18 multi-block : a run of contiguous reads is coalesced - the
+//        second contiguous read opens ONE CMD18, further contiguous reads
+//        skip the command frame (data still exact per block), a
+//        non-contiguous read closes the stream with ONE CMD12 then a
+//        fresh CMD17, and an isolated read never opens CMD18. Counted via
+//        the model's cmd18_cnt/cmd12_cnt/rd_cnt. (Leg 1 already opens+
+//        closes a CMD18 incidentally via the 0->1 read pair.)
 //  Error-injection runs (each a separate vvp invocation):
 //    +noinit : ACMD41 never ready -> bk_media_ok stays 0, no bk_done.
 //    +rderr  : read answers an error token -> bk_done+bk_error, no
@@ -191,6 +198,7 @@ module sd_backend_tb;
 
     // ---- main -------------------------------------------------------------------
     integer i, ct;
+    integer c18, c12, c17;
     reg [15:0] save;
     initial begin
         sdsc   = $test$plusargs("sdsc");
@@ -292,6 +300,26 @@ module sd_backend_tb;
                 w = 256;
             end
         bk_op(0, 0, 0); cmp_ref(0);     // still serving normally
+
+        // ---- leg 4: CMD18 read-multiple (contiguous run coalesced) ----
+        c18 = u_card.cmd18_cnt;
+        c12 = u_card.cmd12_cnt;
+        c17 = u_card.rd_cnt;
+        bk_op(0, 20, 0); cmp_ref(20);   // isolated -> CMD17
+        bk_op(0, 21, 0); cmp_ref(21);   // 2nd contiguous -> opens ONE CMD18
+        bk_op(0, 22, 0); cmp_ref(22);   // continuation -> no command frame
+        bk_op(0, 23, 0); cmp_ref(23);   // continuation
+        bk_op(0, 24, 0); cmp_ref(24);   // continuation
+        bk_op(0, 40, 0); cmp_ref(40);   // non-contiguous -> CMD12 + fresh CMD17
+        check(u_card.cmd18_cnt - c18 == 1, "run did not open exactly one CMD18");
+        check(u_card.cmd12_cnt - c12 == 1, "stream not closed by one CMD12");
+        check(u_card.rd_cnt   - c17 == 2, "CMD17 count wrong (only 20 and 40)");
+        // an isolated read afterwards stays CMD17 (no dangling / new stream)
+        c18 = u_card.cmd18_cnt;
+        c17 = u_card.rd_cnt;
+        bk_op(0, 50, 0); cmp_ref(50);   // 50 != 40+1 -> plain CMD17
+        check(u_card.cmd18_cnt == c18, "isolated read wrongly opened CMD18");
+        check(u_card.rd_cnt - c17 == 1, "isolated read not a single CMD17");
 
         finish_report;
     end

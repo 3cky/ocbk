@@ -25,7 +25,13 @@
 //  Data ops: CMD17 single-block read (0xFE token -> 512 bytes assembled
 //  as 256 little-endian words into the engine's sector-buffer bank via
 //  bk_baddr/bk_wdata/bk_we - first byte of a pair is the LOW byte, the
-//  raw-image/BkEmu convention), CMD24 single-block write (buffer words
+//  raw-image/BkEmu convention). A run of contiguous reads (the engine
+//  issues one bk_req per sector at N, N+1, N+2 ...) is coalesced into a
+//  single CMD18 read-multiple stream: the second contiguous read opens
+//  CMD18, further contiguous reads skip the command frame and just poll
+//  the next data token, and CMD12 (STOP_TRANSMISSION) closes the stream
+//  before any non-contiguous op or on a mid-stream error. Isolated reads
+//  stay CMD17. CMD24 single-block write (buffer words
 //  fetched with the registered-bk_rdata settle, data-response check,
 //  busy-wait). CRC policy is the SPI-mode default: real CRCs only on
 //  CMD0/CMD8, dummy CRC16 on writes, read CRC ignored. Errors complete
@@ -155,6 +161,7 @@ module sd_backend #(
         // serving loop
         A_IDLE, A_DISPATCH,
         A_RCMD_R, A_RTOK, A_RDATA, A_RCRC,
+        A_STOP_R, A_STOP_BUSY,
         A_WCMD_R, A_WGAP, A_WTOKEN, A_WFETCH, A_WWAIT, A_WSAMP,
         A_WLO, A_WHI, A_WCRC, A_WRESP, A_WBUSY,
         A_TAIL, A_FIN
@@ -189,7 +196,12 @@ module sd_backend #(
     logic         v2;                // CMD8 answered -> v2 card
     logic         sdhc;              // OCR CCS -> block addressing
     logic [3:0]   cmd0_try;
-    logic [31:0]  wait_cnt;          // shared settle/ACMD41/token/busy budget
+    // shared settle/ACMD41/token/busy budget. 20 bits holds the largest
+    // default (BUSY_POLLS=400000 < 2^19) with margin; the full 32-bit width
+    // made the decrement ripple the sys_clk critical path (a -0.646 ns setup
+    // violation once the CMD18 states added load sites) - narrowing is
+    // behaviour-identical since every assigned budget fits.
+    logic [19:0]  wait_cnt;
     logic [4:0]   ccnt;              // CSD byte count
     logic [127:0] csd;
 
@@ -214,6 +226,13 @@ module sd_backend #(
     logic [7:0]  lo_byte;
     logic [15:0] wword;              // write: latched buffer word
 
+    // CMD18 read-multiple stream tracking (READ only; writes stay CMD24)
+    logic        stream_active;      // a CMD18 read stream is open (needs CMD12)
+    logic [27:0] stream_next;        // next LBA the open stream will deliver
+    logic [27:0] last_lba;           // previous completed op's sector
+    logic        last_read;          // previous completed op was a good read
+    st_t         stop_ret;           // where the CMD12 close returns afterward
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             st          <= S_SETTLE;
@@ -235,6 +254,11 @@ module sd_backend #(
             cmd0_try    <= '0;
             wait_cnt    <= SETTLE_CLKS;
             err         <= 1'b0;
+            stream_active <= 1'b0;
+            stream_next   <= '0;
+            last_lba      <= '0;
+            last_read     <= 1'b0;
+            stop_ret      <= A_FIN;
         end else begin
             // pulse/level defaults; byte states re-assert x_go in their
             // non-done cycles (see the header convention)
@@ -499,11 +523,34 @@ module sd_backend #(
                 end
                 A_DISPATCH: begin
                     err <= 1'b0;
-                    if (r_sector >= bk_total) begin
+                    if (stream_active && !r_wr && r_sector == stream_next) begin
+                        // continuation of the open CMD18 stream: the card is
+                        // already delivering block after block - no command
+                        // frame, just poll the next data token
+                        wait_cnt <= TOK_POLLS;
+                        st       <= A_RTOK;
+                    end else if (stream_active) begin
+                        // non-continuation while a stream is open (write / LBA
+                        // gap / oob / geometry): close it with CMD12, then
+                        // re-dispatch this same request as a fresh op
+                        cmd_op   <= 6'd12;
+                        cmd_arg  <= 32'h0000_0000;
+                        cmd_crc  <= 8'h01;
+                        want_ext <= 1'b0;
+                        ret_st   <= A_STOP_R;
+                        stop_ret <= A_DISPATCH;
+                        st       <= F_LEAD;
+                    end else if (r_sector >= bk_total) begin
                         err <= 1'b1;            // oob: complete, no SPI traffic
                         st  <= A_FIN;
                     end else begin
-                        cmd_op   <= r_wr ? 6'd24 : 6'd17;
+                        // second contiguous read opens a CMD18 read-multiple
+                        // stream (sectors 3..N then skip the command frame);
+                        // isolated reads stay CMD17, writes stay CMD24
+                        if (!r_wr && last_read && r_sector == last_lba + 28'd1)
+                            cmd_op <= 6'd18;
+                        else
+                            cmd_op <= r_wr ? 6'd24 : 6'd17;
                         // SDHC: block address; SDSC: byte address (sector*512)
                         cmd_arg  <= sdhc ? {4'b0000, r_sector}
                                          : {r_sector[22:0], 9'b0};
@@ -517,12 +564,18 @@ module sd_backend #(
                     end
                 end
 
-                // read: CMD17 -> token -> 512 bytes -> 2 CRC bytes
+                // read: CMD17/CMD18 -> token -> 512 bytes -> 2 CRC bytes.
+                // For CMD18 the card streams blocks until CMD12; a
+                // continuation op re-enters at A_RTOK, skipping A_RCMD_R.
                 A_RCMD_R: begin
                     wait_cnt <= TOK_POLLS;
-                    if (r1 == 8'h00)
+                    if (r1 == 8'h00) begin
+                        // CMD18 accepted -> the card is now read-multiple
+                        // streaming (needs a CMD12 to stop)
+                        if (cmd_op == 6'd18)
+                            stream_active <= 1'b1;
                         st <= A_RTOK;
-                    else begin
+                    end else begin
                         err <= 1'b1;
                         st  <= A_TAIL;
                     end
@@ -535,7 +588,17 @@ module sd_backend #(
                             st      <= A_RDATA;
                         end else if (x_rx != 8'hFF || wait_cnt == 0) begin
                             err <= 1'b1;        // error token / timeout
-                            st  <= A_TAIL;
+                            if (stream_active) begin
+                                // abandon the stream cleanly: CMD12, then finish
+                                cmd_op   <= 6'd12;
+                                cmd_arg  <= 32'h0000_0000;
+                                cmd_crc  <= 8'h01;
+                                want_ext <= 1'b0;
+                                ret_st   <= A_STOP_R;
+                                stop_ret <= A_FIN;
+                                st       <= F_LEAD;
+                            end else
+                                st <= A_TAIL;
                         end else
                             wait_cnt <= wait_cnt - 1'b1;
                     end else begin
@@ -565,8 +628,36 @@ module sd_backend #(
                 A_RCRC: begin                   // discard the 2 CRC bytes
                     if (x_done) begin
                         have_lo <= ~have_lo;
-                        if (have_lo)
-                            st <= A_TAIL;
+                        if (have_lo) begin
+                            // block complete: advance the stream's expected LBA
+                            // and skip the A_TAIL byte - the card streams the
+                            // next block's data token back-to-back (possibly
+                            // with zero NAC gap), which A_TAIL would consume
+                            if (stream_active) begin
+                                stream_next <= r_sector + 28'd1;
+                                st <= A_FIN;
+                            end else
+                                st <= A_TAIL;
+                        end
+                    end else begin
+                        x_go <= 1'b1;
+                        x_tx <= 8'hFF;
+                    end
+                end
+
+                // CMD12 close: F_R1 already skipped the stuffing byte and
+                // captured R1; drain the busy window, then return
+                A_STOP_R: begin
+                    wait_cnt <= BUSY_POLLS;
+                    st       <= A_STOP_BUSY;
+                end
+                A_STOP_BUSY: begin
+                    if (x_done) begin
+                        if (x_rx == 8'hFF || wait_cnt == 0) begin
+                            stream_active <= 1'b0;
+                            st            <= stop_ret;
+                        end else
+                            wait_cnt <= wait_cnt - 1'b1;
                     end else begin
                         x_go <= 1'b1;
                         x_tx <= 8'hFF;
@@ -678,7 +769,11 @@ module sd_backend #(
                 A_FIN: begin
                     bk_done  <= 1'b1;
                     bk_error <= err;
-                    st       <= A_IDLE;
+                    // remember this op so the next contiguous read can escalate
+                    // to CMD18 (a failed op breaks the run)
+                    last_lba  <= r_sector;
+                    last_read <= (!r_wr) && (!err);
+                    st        <= A_IDLE;
                 end
 
                 // ---- parking states ----------------------------------------

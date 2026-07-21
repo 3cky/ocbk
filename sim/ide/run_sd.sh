@@ -24,6 +24,14 @@
 #     sector==bk_total request reaches the card -> model protocol error)
 #   9 dummy-clock cut       : S_SETTLE loads 8 instead of 80 (model counts
 #     <74 pre-CMD0 clocks)
+#  10 CMD18 never opened    : A_DISPATCH drops the second-contiguous CMD18
+#     branch (always CMD17) -> leg 4 sees cmd18_cnt==0
+#  11 CMD12 close skipped   : A_DISPATCH stream branch clears stream_active
+#     and re-dispatches WITHOUT sending CMD12 -> the model flags a non-CMD12
+#     command arriving during an open read-multiple stream
+#  12 stream_next off-by-one: A_RCRC sets stream_next<=r_sector (no +1) ->
+#     the continuation never matches, every block re-opens a CMD18 -> leg 4
+#     sees more than one CMD18 for the run
 #
 set -euo pipefail
 cd "$(dirname "$0")"

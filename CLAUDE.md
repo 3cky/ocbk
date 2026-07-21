@@ -37,8 +37,12 @@ PIN_61–66); pLed[2] is the drive-access LED (see the SMK512 bullet).
 (fetch sector N+1 while the CPU drains N — the 2-bank buffer split with
 an E_FLUSH mid-command interlock; `src/smk_ide.sv` + the `sim/ide`
 oracles; the board boots and multi-sector loads run faster).
-Remaining open items: SD
-multi-block (CMD18/25), bk10+SMK, the SMK-RAM `ram_init` pattern, `N_*`
+**Tier-2 SD multi-block READ (CMD18) is done, CONFIRMED ON HARDWARE
+2026-07-21: the board boots** (a contiguous read run is coalesced
+backend-only into one CMD18 read-multiple stream closed by CMD12; the
+engine is untouched — `src/sd_backend.sv` + the `sim/ide` SD oracles).
+Remaining open items: SD multi-block
+WRITE (CMD25), bk10+SMK, the SMK-RAM `ram_init` pattern, `N_*`
 recalibration, and BK-0011M cycle-accuracy vs a reference (deferred,
 reference-tb-first).
 
@@ -224,15 +228,25 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   v1/CSDv1 — both capacity formulas land exact in bk_total), reads
   data-exact incl. past-image sectors, oob completing with ZERO SPI
   traffic, write/store-check/readback, and the +noinit/+rderr/+wrrej
-  injection legs — at the REAL dividers (/256 init, /8 data).
-  **Mutation-tested ×9** (run_sd.sh header: SDSC ×512, CMD8 CRC, HCS,
-  capacity off-by-one both formulas, LE byte swap, commit settle, R1
-  poll, oob guard, dummy clocks — all fail). `sim/ide/run.sh`
+  injection legs — at the REAL dividers (/256 init, /8 data). **Leg 4 is
+  the tier-2 CMD18 read-multiple leg:** a contiguous read run is coalesced
+  into ONE CMD18 stream — the second contiguous read opens CMD18, further
+  contiguous reads skip the command frame (data still exact per block), a
+  non-contiguous read closes with ONE CMD12 then a fresh CMD17, and an
+  isolated read never opens CMD18 (counted via the model's `cmd18_cnt`/
+  `cmd12_cnt`/`rd_cnt`; leg 1's 0→1 pair also opens+closes a CMD18
+  incidentally). **Mutation-tested ×12** (run_sd.sh header: SDSC ×512,
+  CMD8 CRC, HCS, capacity off-by-one both formulas, LE byte swap, commit
+  settle, R1 poll, oob guard, dummy clocks; + tier-2: CMD18 never opened,
+  CMD12 close skipped, stream_next off-by-one — all fail). `sim/ide/run.sh`
   additionally re-runs the ENTIRE smk_ide_tb leg set with `-DSD_STACK`
   (`sd_harness` swaps the disk model for the real sd_backend+sd_model
   stack; sim-speed /2 dividers there — the ratios are run_sd.sh's job;
   +sdsc because CSDv1 encodes the tb totals 640/2016 exactly) — the
-  decisive engine+backend integration pass.
+  decisive engine+backend integration pass, and leg 6b there additionally
+  asserts the engine's COUNT=4 chain is coalesced into a CMD18 stream on
+  the wire (`u_disk.u_card.cmd18_cnt` up) while `ack_cnt` stays 4 (the
+  engine still issues one bk_req per sector — coalescing is backend-only).
 - `sim/bk11/run.sh` — the Phase-7 BK-0011M SoC **functional** oracle
   (data-checking, NOT a timing golden — ref037 keeps the timing-reference
   meaning): the `mem/gen_bk11_test.py` program (pinned parks: success
@@ -721,7 +735,26 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   mode 0, MSB first, launch at the fall, sample late-high); SDSC
   byte- AND SDHC/SDXC block addressing, both CSD capacity formulas;
   CMD17/CMD24 single-block; SPI-default CRC policy (real CRCs only on
-  CMD0/CMD8). All sys_clk — no CDC on the seam; reset DCLO-only like
+  CMD0/CMD8). **Tier-2 CMD18 read-multiple (CONFIRMED ON HARDWARE
+  2026-07-21 — the board boots):** a run of
+  contiguous read requests (the engine issues one bk_req per sector at
+  N, N+1, N+2 …) is coalesced backend-only into a single CMD18 stream —
+  the second contiguous read opens CMD18, further contiguous reads skip
+  the command frame and just poll the next data token (A_TAIL is skipped
+  between streaming blocks — a real card may send the token with zero NAC
+  gap), and CMD12 (STOP_TRANSMISSION) closes the stream before any
+  non-contiguous op or on a mid-stream error. Isolated/scattered reads
+  stay CMD17 (no dangling stream), WRITE stays single-block CMD24 (CMD25
+  a possible later increment). The engine (`smk_ide`) is UNTOUCHED — the
+  hardware-confirmed tier-1 prefetch, its unit legs, and `run_soc.sh`
+  stay bit-identical; the escalate-on-second policy and the CMD12 close
+  live entirely in `sd_backend` (`stream_active`/`stream_next`/`last_*`
+  regs, `A_STOP_R`/`A_STOP_BUSY` states). **STA gotcha (fixed):** the
+  CMD18 states added load sites to the 32-bit `wait_cnt`, making its
+  decrement ripple the sys_clk critical path (−0.646 ns setup) — narrowed
+  `wait_cnt` to 20 bits (holds the 400000 budget; behaviour-identical),
+  the same structural cure as the sdram_ctrl counter split; post-fix
+  setup +0.330 / TNS 0, 6,957 LE. All sys_clk — no CDC on the seam; reset DCLO-only like
   the engine (card re-init at power-on AND warm reset = "insert card,
   press reset" — the slot has NO card-detect pin); enable-gated, so a
   stock machine never clocks the card. A failed/absent-card init parks
@@ -731,8 +764,8 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   (a design-review catch — the bug would have shifted every command
   frame): a state asserts the byte engine's `x_go`/`x_tx` only in
   NON-`x_done` cycles, so a state change never launches the next byte
-  with the old state's data. **Still deferred:** SD multi-block
-  (CMD18/25 — tier-1 READ prefetch is done, above), bk10+SMK, the
+  with the old state's data. **Still deferred:** SD multi-block WRITE
+  (CMD25 — CMD18 read-multiple is done in sim, above), bk10+SMK, the
   SMK-RAM `ram_init` pattern, real data CRC16, MMC cards, and
   `N_EXT`/`N_SMKREG`/`N_IDE` recalibration (reference-tb-first).
   Oracles: `sim/run_mapper.sh` + `sim/smk/run.sh` + `sim/ide/run.sh`
