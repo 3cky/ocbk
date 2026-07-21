@@ -725,8 +725,10 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   each later sector's drain-start (the E_DRAIN swap for READ, E_COMMIT for
   WRITE), never one-ahead and never at a prefetch's own bk_done — so a
   COUNT=N run ends with them on the last sector handled (BkEmu-faithful
-  after the 2026-07-21 fix; the old code left them one past it). WRITE and
-  SD multi-block stay strictly sequential. **pLed[2] = drive-access LED**:
+  after the 2026-07-21 fix, CONFIRMED ON HARDWARE — the old code left them
+  one past it; no cross-command auto-advance, so consecutive single-sector
+  READs must set CHS explicitly). WRITE and SD multi-block stay strictly
+  sequential. **pLed[2] = drive-access LED**:
   `ide_act` (command/backend in flight — DRQ phases, backend ops, the
   attach-time geometry read; register pokes alone don't light it)
   stretched to ~87 ms in `ocbk_top`. **Increment (b) — the SD/SPI
