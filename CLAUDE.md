@@ -48,11 +48,13 @@ write-multiple stream (second contiguous write opens CMD25, further
 contiguous writes skip the command frame and send another 0xFC-tokened
 block, the 0xFD stop-tran token closes it before any non-contiguous op
 or on a mid-stream error); engine untouched, `smk_ide` bit-identical
-(`src/sd_backend.sv` + the `sim/ide` SD oracles, +4 mutations). STA has
-ONE known −0.230 ns setup violation on the **pseudo-static
-`model_bk11 → mapper win0_page[1]`** cone (frozen while the CPU runs, so
-a false path in practice — accepted and hardware-validated; the CMD25
-`wait_cnt` paths are all positive). Remaining open items: bk10+SMK, the
+(`src/sd_backend.sv` + the `sim/ide` SD oracles, +4 mutations).
+**The long-standing pseudo-static `model_bk11 → mapper` timing cone is
+FIXED 2026-07-22** by re-registering `model_bk11` inside `mem_mapper`
+for the `bank_wr` term (see the mapper bullet): sys_clk went
+−0.230 → **+0.420 ns, TNS 0, zero negative paths**, and the worst path
+is now an ordinary `sd_backend` register-to-register path.
+Remaining open items: bk10+SMK, the
 SMK-RAM `ram_init` pattern, `N_*` recalibration, and BK-0011M
 cycle-accuracy vs a reference (deferred, reference-tb-first).
 
@@ -610,7 +612,22 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   write-flag). **Map reset is DCLO-only — a deliberate exception to the
   nINIT peripheral-reset rule** (like the software-owned `spk_bit`): the
   RESET instruction must not swap the page under the running code (BkEmu
-  semantics; checked by the bk11 SoC oracle). **Window-1 banked RAM is a
+  semantics; checked by the bk11 SoC oracle). **`model_bk11` is
+  re-registered locally (`model_bk11_q`) for the `bank_wr` term (fix
+  2026-07-22):** it is quasi-static but high-fanout, and the route from
+  its `ocbk_top` DCLO latch into the `bank_wr` AND tree feeding
+  `win0_page`'s next-state LUT was the design's worst sys_clk path for
+  three builds running (+0.077 → −0.039 at the CHS fix → −0.230 at
+  CMD25). One local flop turns that long route into a plain flop-to-flop
+  path: sys_clk −0.230 → **+0.420 ns, TNS 0, zero negative paths**,
+  −2 LE, and the worst path moved back into `sd_backend`. The 1-cycle
+  latency is invisible — `model_bk11` changes ONLY during a DCLO hold
+  (CPU parked, map registers in reset, thousands of sclk before
+  release). Deliberately **NOT** used by the combinational translate:
+  that cone is already met, and `sim/run_mapper.sh` compares the decode
+  combinationally right after a model flip. bk10 stays bit-identical
+  (`model_bk11_q` ≡ 0 → `bank_wr` ≡ 0; all twelve ref037 goldens
+  byte-identical). **Window-1 banked RAM is a
   normal `MK_RAM037` access — 037-owned RPLY, cycle-stolen, done-gated on
   `mem_ready`, riding the `cpu_sdram_dp` port-0 path** (`phys` from the mapper
   = the win1 RAM page; `addr` kept for byte lanes), identical to the low 32K.
@@ -803,13 +820,10 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   NON-`x_done` cycles, so a state change never launches the next byte
   with the old state's data. **STA note (CMD25, 2026-07-22):** the
   A_WSTOP states added load/decrement sites to `wait_cnt` but its paths
-  stayed positive (+0.14 ns); the build's ONE −0.230 ns setup violation
-  is on the **pseudo-static `model_bk11 → mapper win0_page[1]`** cone
-  (frozen while the CPU runs = a false path in practice — this cone has
-  been persistently marginal, ≈+0.077 at the SD increment; +149 CMD25
-  LEs tipped its placement negative). Accepted as quasi-static and
-  HARDWARE-VALIDATED 2026-07-22 — the board boots and writes with it
-  (no SDC/seed churn — the SEED-3 discipline). 7,027 LE.
+  stayed positive (+0.14 ns); the build's one −0.230 ns setup violation
+  was the **pseudo-static `model_bk11 → mapper`** cone, since FIXED at
+  the source (see the mem_mapper bullet) — sys_clk now +0.420 ns / TNS 0
+  with the worst path back inside `sd_backend`. 7,025 LE.
   **Still deferred:** bk10+SMK, the SMK-RAM
   `ram_init` pattern, real data CRC16, MMC cards, and
   `N_EXT`/`N_SMKREG`/`N_IDE` recalibration (reference-tb-first).
@@ -908,6 +922,24 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   SYNC-framed and stable by D_DONE; ref037's goldens pin the cycle identity).
   Rule: keep translate outputs out of pad-OE cones — register the selection
   at issue, never re-check it live at the drive point.
+- **A quasi-static signal with big fanout still costs real setup time**
+  (Phase 8, fixed 2026-07-22). `model_bk11` (DIP 1, latched during a DCLO
+  hold, frozen while the CPU runs) fans out across the mapper, clkgen,
+  qbus_mem and the top-level video muxes, so the fitter routes it far;
+  landing that route in the `bank_wr` AND tree that feeds `win0_page`'s
+  next-state LUT made it the design's worst sys_clk path for three builds
+  (+0.077 → −0.039 → −0.230). "It's pseudo-static so the violation is
+  false" is TRUE but not a fix — it just re-litigates the same STA
+  judgement call on every increment, drifting further negative as the
+  design grows. **Cure: re-register the signal locally in the consuming
+  module** (one flop; the long route becomes a plain flop-to-flop path and
+  the logic downstream is fed from a flop the fitter places nearby). This
+  is the same structural-not-SDC philosophy as the `wait_cnt` narrowing and
+  the sdram_ctrl counter split — **never reach for an SDC exception**, which
+  is a fitter input and has broken the SEED-3 boot before. Safe only where
+  a 1-cycle latency provably cannot matter: verify the signal changes only
+  while the consumer is in reset / the CPU is parked, and keep the raw
+  signal on any cone whose oracle compares combinationally after a flip.
 - **A SINGLE-driver open-collector `tri1` net degenerates to stuck-ASSERTED in
   Quartus** (Cyclone I has no internal tri-state/pull-up). This bit the Phase-6
   keyboard on hardware: `bk_kbd014` was the *only* nVIRQ source, driving

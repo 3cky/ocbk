@@ -742,11 +742,13 @@ is not a single peripheral:
   (escalate-on-second, 0xFC block token, 0xFD stop-tran close — not
   CMD12), engine still bit-identical; `sim/ide/run_sd.sh` leg 5,
   mutation-tested ×16, both `-DSD_STACK` passes green. Fit 7,027 LE
-  (58 %); STA has ONE −0.230 ns setup violation on the same pseudo-static
-  model_bk11→mapper cone (accepted as benign, hardware-validated — the
-  CMD25 `wait_cnt` paths are all positive). **Deferred to later
-  increments:** tier-3 cross-command read-ahead, real data CRC16,
-  MMC cards.
+  (58 %). The −0.230 ns setup violation this build showed on the
+  pseudo-static model_bk11→mapper cone is **FIXED 2026-07-22** by
+  re-registering `model_bk11` inside `mem_mapper` for the `bank_wr`
+  term — sys_clk **+0.420 ns, TNS 0, zero negative paths**, 7,025 LE,
+  worst path back inside `sd_backend`; bk10 bit-identical (all twelve
+  ref037 goldens byte-identical). **Deferred to later increments:**
+  tier-3 cross-command read-ahead, real data CRC16, MMC cards.
 - **512 KB segmented RAM extension** — ✅ **increment 1 DONE IN SIM 2026-07-17**
   (BK-0011M only, enable = **DIP 8**, DCLO-hold-latched like DIP 1). The
   memory-layout piece, and it *was* the Phase-7 coupling: 8 × 4 KB segments

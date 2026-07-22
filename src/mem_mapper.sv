@@ -158,10 +158,27 @@ module mem_mapper #(
     // reading 000000 = HALT and boot-looping. Keep in sync with the blob.
     localparam logic [3:0] WIN1_ROM_PRESENT = 4'b0011; // banks 0,1 (BASIC) present
 
+    // model_bk11 is quasi-static (latched only during a DCLO hold, frozen
+    // while the CPU runs) but has large fanout across the whole design, so
+    // the route from its ocbk_top latch into the bank_wr AND tree was the
+    // design's worst sys_clk path for several builds running (-0.039 ns at
+    // the CHS fix, -0.230 ns at CMD25, into win0_page). Re-register it here:
+    // the long route becomes a plain flop-to-flop path and the bank_wr tree
+    // is fed from a flop the fitter can place next to the map registers.
+    // The 1-cycle latency is invisible - model_bk11 only ever changes while
+    // DCLO is held (CPU parked, map registers in reset, thousands of sclk
+    // before release), so it is stable for millions of cycles before any
+    // banking write. Deliberately NOT used by the combinational translate
+    // below (that cone is already met and its oracles compare decode
+    // combinationally right after a model flip).
+    logic model_bk11_q;
+    always_ff @(posedge sclk)
+        model_bk11_q <= model_bk11;
+
     // A banking write is a word write to 177716 with bit 11 set. Idempotent
     // across the multi-sclk DOUT window (like the spk_bit capture): the data
     // lines are stable for the whole window, so re-capturing is harmless.
-    assign bank_wr = model_bk11 && !sync_n && !dout_n && !sel1_n
+    assign bank_wr = model_bk11_q && !sync_n && !dout_n && !sel1_n
                      && !addr0 && wtbt_n && ad_true[11];
 
     always_ff @(posedge sclk) begin
