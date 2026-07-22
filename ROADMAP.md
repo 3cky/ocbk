@@ -743,7 +743,8 @@ is not a single peripheral:
   CMD12), engine still bit-identical; `sim/ide/run_sd.sh` leg 5,
   mutation-tested ×16, both `-DSD_STACK` passes green. Fit 7,027 LE
   (58 %). The −0.230 ns setup violation this build showed on the
-  pseudo-static model_bk11→mapper cone is **FIXED 2026-07-22** by
+  pseudo-static model_bk11→mapper cone is **FIXED, CONFIRMED ON
+  HARDWARE 2026-07-22** by
   re-registering `model_bk11` inside `mem_mapper` for the `bank_wr`
   term — sys_clk **+0.420 ns, TNS 0, zero negative paths**, 7,025 LE,
   worst path back inside `sd_backend`; bk10 bit-identical (all twelve

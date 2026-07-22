@@ -50,7 +50,8 @@ block, the 0xFD stop-tran token closes it before any non-contiguous op
 or on a mid-stream error); engine untouched, `smk_ide` bit-identical
 (`src/sd_backend.sv` + the `sim/ide` SD oracles, +4 mutations).
 **The long-standing pseudo-static `model_bk11 → mapper` timing cone is
-FIXED 2026-07-22** by re-registering `model_bk11` inside `mem_mapper`
+FIXED, CONFIRMED ON HARDWARE 2026-07-22** by re-registering
+`model_bk11` inside `mem_mapper`
 for the `bank_wr` term (see the mapper bullet): sys_clk went
 −0.230 → **+0.420 ns, TNS 0, zero negative paths**, and the worst path
 is now an ordinary `sd_backend` register-to-register path.
@@ -614,7 +615,7 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   RESET instruction must not swap the page under the running code (BkEmu
   semantics; checked by the bk11 SoC oracle). **`model_bk11` is
   re-registered locally (`model_bk11_q`) for the `bank_wr` term (fix
-  2026-07-22):** it is quasi-static but high-fanout, and the route from
+  CONFIRMED ON HARDWARE 2026-07-22):** it is quasi-static but high-fanout, and the route from
   its `ocbk_top` DCLO latch into the `bank_wr` AND tree feeding
   `win0_page`'s next-state LUT was the design's worst sys_clk path for
   three builds running (+0.077 → −0.039 at the CHS fix → −0.230 at
