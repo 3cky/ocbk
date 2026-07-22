@@ -5,9 +5,11 @@
 # protocol-checking sd_model.v card, loaded with mem/gen_ide_image.py's
 # AltPro image. Five vvp runs of one compile: SDHC personality, +sdsc
 # (v1 byte-addressed card), +noinit, +rderr, +wrrej - see the tb header
-# for the leg list. The card model checks the wire protocol itself
-# (CMD0/CMD8 CRCs, CMD55 pairing, SDSC 512-alignment, init ordering) and
-# its violations fail the run alongside the tb's data checks.
+# for the leg list (leg 4 = CMD18 read-multiple, leg 5 = CMD25 write-
+# multiple). The card model checks the wire protocol itself (CMD0/CMD8
+# CRCs, CMD55 pairing, SDSC 512-alignment, init ordering, the 0xFC/0xFD
+# write-multiple token sequence) and its violations fail the run
+# alongside the tb's data checks.
 #
 # MUTATION-TESTED (each applied by hand to src/sd_backend.sv, each must FAIL):
 #   1 SDSC x512 drop        : A_DISPATCH cmd_arg always the block address
@@ -32,6 +34,16 @@
 #  12 stream_next off-by-one: A_RCRC sets stream_next<=r_sector (no +1) ->
 #     the continuation never matches, every block re-opens a CMD18 -> leg 4
 #     sees more than one CMD18 for the run
+#  13 CMD25 never opened   : A_DISPATCH drops the write-escalate branch
+#     (always CMD24) -> leg 5 sees cmd25_cnt==0
+#  14 0xFD close skipped    : A_DISPATCH wstream_active close clears the flag
+#     and re-dispatches WITHOUT A_WSTOP_TOK -> the model sees a command byte
+#     in MS_WMTOK (garbage prot_err) / leg 5 wm_stop_cnt==0
+#  15 wstream_next off-by-one: A_WBUSY sets wstream_next<=r_sector (no +1) ->
+#     the continuation never matches, every block re-opens a CMD25 -> leg 5
+#     sees more than one CMD25 for the run
+#  16 wtok wrong           : A_WTOKEN always sends 0xFE -> the model's
+#     MS_WMTOK sees 0xFE (not 0xFC/0xFD) -> garbage prot_err
 #
 set -euo pipefail
 cd "$(dirname "$0")"

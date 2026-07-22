@@ -32,6 +32,13 @@
 //        fresh CMD17, and an isolated read never opens CMD18. Counted via
 //        the model's cmd18_cnt/cmd12_cnt/rd_cnt. (Leg 1 already opens+
 //        closes a CMD18 incidentally via the 0->1 read pair.)
+//    5 CMD25 multi-block : the write mirror of leg 4 - a contiguous write
+//        run is coalesced, the second contiguous write opens ONE CMD25,
+//        further contiguous writes skip the command frame (each 0xFC block
+//        committed to the backing store word-exact), and a following read
+//        closes the stream with ONE 0xFD stop-tran token then a fresh
+//        CMD17. Counted via cmd25_cnt/wr_cnt/wm_stop_cnt; store + readback
+//        checked against wpat().
 //  Error-injection runs (each a separate vvp invocation):
 //    +noinit : ACMD41 never ready -> bk_media_ok stays 0, no bk_done.
 //    +rderr  : read answers an error token -> bk_done+bk_error, no
@@ -123,6 +130,10 @@ module sd_backend_tb;
         filler = 16'hBEEF + idx;        // past-image SDHC sectors
     endfunction
 
+    function [15:0] wpat(input integer sec, input integer w);
+        wpat = (sec*7 + w*3 + 16'h1234) & 16'hFFFF;   // leg-5 write pattern
+    endfunction
+
     // ---- helpers ---------------------------------------------------------------
     task check(input cond, input [8*80-1:0] msg);
         if (!cond) begin
@@ -199,6 +210,7 @@ module sd_backend_tb;
     // ---- main -------------------------------------------------------------------
     integer i, ct;
     integer c18, c12, c17;
+    integer c25, cwr, cws, s;
     reg [15:0] save;
     initial begin
         sdsc   = $test$plusargs("sdsc");
@@ -320,6 +332,46 @@ module sd_backend_tb;
         bk_op(0, 50, 0); cmp_ref(50);   // 50 != 40+1 -> plain CMD17
         check(u_card.cmd18_cnt == c18, "isolated read wrongly opened CMD18");
         check(u_card.rd_cnt - c17 == 1, "isolated read not a single CMD17");
+
+        // ---- leg 5: CMD25 write-multiple (contiguous writes coalesced) ----
+        c25 = u_card.cmd25_cnt;
+        cwr = u_card.wr_cnt;
+        cws = u_card.wm_stop_cnt;
+        // the prior op was a read (sector 50), so the first write is
+        // non-contiguous and goes out as a single CMD24
+        for (w = 0; w < 256; w = w + 1) wbuf[w] = wpat(30, w);
+        bk_op(1, 30, 0);                // first write -> CMD24
+        for (w = 0; w < 256; w = w + 1) wbuf[w] = wpat(31, w);
+        bk_op(1, 31, 0);                // 2nd contiguous -> opens ONE CMD25
+        for (w = 0; w < 256; w = w + 1) wbuf[w] = wpat(32, w);
+        bk_op(1, 32, 0);                // continuation -> no command frame
+        for (w = 0; w < 256; w = w + 1) wbuf[w] = wpat(33, w);
+        bk_op(1, 33, 0);                // continuation
+        bk_op(0, 60, 0); cmp_ref(60);   // read -> closes stream (0xFD) + CMD17
+        check(u_card.cmd25_cnt   - c25 == 1, "run did not open exactly one CMD25");
+        check(u_card.wr_cnt      - cwr == 1, "CMD24 count wrong (only sector 30)");
+        check(u_card.wm_stop_cnt - cws == 1, "write stream not closed by one 0xFD");
+        // the backing store received all four sectors correctly
+        for (s = 30; s <= 33; s = s + 1)
+            for (w = 0; w < 256; w = w + 1)
+                if (u_card.card[s*256 + w] !== wpat(s, w)) begin
+                    errors = errors + 1;
+                    $display("SD-ERROR: tb: CMD25 store sec %0d word %0d: %04x != %04x",
+                             s, w, u_card.card[s*256 + w], wpat(s, w));
+                    w = 256; s = 34;
+                end
+        // readback round trip (these reads may themselves coalesce, fine)
+        for (s = 30; s <= 33; s = s + 1) begin
+            bk_op(0, s, 0);
+            check(we_count == 256, "CMD25 readback did not deliver 256 words");
+            for (w = 0; w < 256; w = w + 1)
+                if (rbuf[w] !== wpat(s, w)) begin
+                    errors = errors + 1;
+                    $display("SD-ERROR: tb: CMD25 readback sec %0d word %0d: %04x != %04x",
+                             s, w, rbuf[w], wpat(s, w));
+                    w = 256;
+                end
+        end
 
         finish_report;
     end

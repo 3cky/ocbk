@@ -675,8 +675,12 @@ is not a single peripheral:
   re-pinning both banks. (**Tier-2 SD multi-block READ (CMD18) is DONE,
   CONFIRMED ON HARDWARE 2026-07-21** — a contiguous read run is coalesced backend-only into one
   CMD18 read-multiple stream closed by CMD12; the engine is untouched so
-  tier-1 stays bit-identical. CMD25 write-multiple and tier-3 speculative
-  cross-command read-ahead remain deferred.) LBA math rides a serial
+  tier-1 stays bit-identical. **Tier-2 CMD25 write-multiple is DONE,
+  CONFIRMED ON HARDWARE 2026-07-22** — the write mirror: a contiguous
+  write run coalesced backend-only into one CMD25 stream, blocks tokened
+  0xFC and closed by the 0xFD stop-tran token (not CMD12); engine still
+  bit-identical. Tier-3 speculative cross-command read-ahead remains
+  deferred.) LBA math rides a serial
   shift-add multiplier (single-cycle products broke sys_clk closure; the
   engine has bus-scale time budgets). Hardware shipped (a) with the port
   tied "no media" (DIP-8-ON showed the BIOS a cleanly ABSENT drive
@@ -732,9 +736,17 @@ is not a single peripheral:
   met setup +0.330 ns / TNS 0 on sys_clk (hold +0.822) — the CMD18 states
   first pushed sd_backend's 32-bit `wait_cnt` decrement to a −0.646 ns
   setup violation, fixed by narrowing `wait_cnt` to 20 bits (the
-  sdram_ctrl counter-split cure). **Deferred to
-  later increments:** SD multi-block WRITE (CMD25), tier-3 cross-command
-  read-ahead, real data CRC16, MMC cards.
+  sdram_ctrl counter-split cure). **Tier-2 SD multi-block WRITE (CMD25)
+  is DONE, CONFIRMED ON HARDWARE 2026-07-22:** the write mirror — a
+  contiguous write run coalesced backend-only into one CMD25 stream
+  (escalate-on-second, 0xFC block token, 0xFD stop-tran close — not
+  CMD12), engine still bit-identical; `sim/ide/run_sd.sh` leg 5,
+  mutation-tested ×16, both `-DSD_STACK` passes green. Fit 7,027 LE
+  (58 %); STA has ONE −0.230 ns setup violation on the same pseudo-static
+  model_bk11→mapper cone (accepted as benign, hardware-validated — the
+  CMD25 `wait_cnt` paths are all positive). **Deferred to later
+  increments:** tier-3 cross-command read-ahead, real data CRC16,
+  MMC cards.
 - **512 KB segmented RAM extension** — ✅ **increment 1 DONE IN SIM 2026-07-17**
   (BK-0011M only, enable = **DIP 8**, DCLO-hold-latched like DIP 1). The
   memory-layout piece, and it *was* the Phase-7 coupling: 8 × 4 KB segments

@@ -31,9 +31,15 @@
 //  CMD18, further contiguous reads skip the command frame and just poll
 //  the next data token, and CMD12 (STOP_TRANSMISSION) closes the stream
 //  before any non-contiguous op or on a mid-stream error. Isolated reads
-//  stay CMD17. CMD24 single-block write (buffer words
-//  fetched with the registered-bk_rdata settle, data-response check,
-//  busy-wait). CRC policy is the SPI-mode default: real CRCs only on
+//  stay CMD17. Writes mirror this: CMD24 single-block (buffer words
+//  fetched with the registered-bk_rdata settle, 0xFE start token,
+//  data-response check, busy-wait), and a contiguous write run is
+//  coalesced into a single CMD25 write-multiple stream (the second
+//  contiguous write opens CMD25, further contiguous writes skip the
+//  command frame and send another 0xFC-tokened block, and the 0xFD
+//  stop-tran token closes the stream before any non-contiguous op or on
+//  a mid-stream error). Isolated writes stay CMD24. CRC policy is the
+//  SPI-mode default: real CRCs only on
 //  CMD0/CMD8, dummy CRC16 on writes, read CRC ignored. Errors complete
 //  as bk_done+bk_error (the engine ignores it for data ops - BkEmu
 //  ignores drive.read/write rc - and honors it only for the attach-time
@@ -164,6 +170,7 @@ module sd_backend #(
         A_STOP_R, A_STOP_BUSY,
         A_WCMD_R, A_WGAP, A_WTOKEN, A_WFETCH, A_WWAIT, A_WSAMP,
         A_WLO, A_WHI, A_WCRC, A_WRESP, A_WBUSY,
+        A_WSTOP_TOK, A_WSTOP_SKIP, A_WSTOP_BUSY,
         A_TAIL, A_FIN
     } st_t;
     st_t st, ret_st;
@@ -226,12 +233,18 @@ module sd_backend #(
     logic [7:0]  lo_byte;
     logic [15:0] wword;              // write: latched buffer word
 
-    // CMD18 read-multiple stream tracking (READ only; writes stay CMD24)
+    // CMD18 read-multiple stream tracking (READ side; needs a CMD12 close)
     logic        stream_active;      // a CMD18 read stream is open (needs CMD12)
     logic [27:0] stream_next;        // next LBA the open stream will deliver
+    // CMD25 write-multiple stream tracking (WRITE side; closed by a 0xFD token).
+    // A read and a write stream are mutually exclusive, so stop_ret is shared.
+    logic        wstream_active;     // a CMD25 write stream is open (close with 0xFD)
+    logic [27:0] wstream_next;       // next LBA the open write stream expects
+    logic        wtok_fc;            // A_WTOKEN sends 0xFC (CMD25 block) vs 0xFE (CMD24)
     logic [27:0] last_lba;           // previous completed op's sector
     logic        last_read;          // previous completed op was a good read
-    st_t         stop_ret;           // where the CMD12 close returns afterward
+    logic        last_write;         // previous completed op was a good write
+    st_t         stop_ret;           // where the CMD12/0xFD close returns afterward
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -256,8 +269,12 @@ module sd_backend #(
             err         <= 1'b0;
             stream_active <= 1'b0;
             stream_next   <= '0;
+            wstream_active <= 1'b0;
+            wstream_next   <= '0;
+            wtok_fc       <= 1'b0;
             last_lba      <= '0;
             last_read     <= 1'b0;
+            last_write    <= 1'b0;
             stop_ret      <= A_FIN;
         end else begin
             // pulse/level defaults; byte states re-assert x_go in their
@@ -529,9 +546,16 @@ module sd_backend #(
                         // frame, just poll the next data token
                         wait_cnt <= TOK_POLLS;
                         st       <= A_RTOK;
+                    end else if (wstream_active && r_wr
+                                 && r_sector == wstream_next) begin
+                        // continuation of the open CMD25 stream: the card is
+                        // already accepting block after block - no command
+                        // frame, just send the next 0xFC data packet
+                        wtok_fc <= 1'b1;
+                        st      <= A_WGAP;
                     end else if (stream_active) begin
-                        // non-continuation while a stream is open (write / LBA
-                        // gap / oob / geometry): close it with CMD12, then
+                        // non-continuation while a READ stream is open (write /
+                        // LBA gap / oob / geometry): close it with CMD12, then
                         // re-dispatch this same request as a fresh op
                         cmd_op   <= 6'd12;
                         cmd_arg  <= 32'h0000_0000;
@@ -540,17 +564,30 @@ module sd_backend #(
                         ret_st   <= A_STOP_R;
                         stop_ret <= A_DISPATCH;
                         st       <= F_LEAD;
+                    end else if (wstream_active) begin
+                        // non-continuation while a WRITE stream is open (read /
+                        // LBA gap / oob / geometry): close it with the 0xFD
+                        // stop-tran token, then re-dispatch as a fresh op
+                        stop_ret <= A_DISPATCH;
+                        st       <= A_WSTOP_TOK;
                     end else if (r_sector >= bk_total) begin
                         err <= 1'b1;            // oob: complete, no SPI traffic
                         st  <= A_FIN;
                     end else begin
-                        // second contiguous read opens a CMD18 read-multiple
-                        // stream (sectors 3..N then skip the command frame);
-                        // isolated reads stay CMD17, writes stay CMD24
+                        // second contiguous op opens a multi-block stream
+                        // (reads -> CMD18, writes -> CMD25); further contiguous
+                        // ops skip the command frame. Isolated reads stay
+                        // CMD17, isolated writes stay CMD24.
                         if (!r_wr && last_read && r_sector == last_lba + 28'd1)
                             cmd_op <= 6'd18;
+                        else if (r_wr && last_write
+                                 && r_sector == last_lba + 28'd1)
+                            cmd_op <= 6'd25;
                         else
                             cmd_op <= r_wr ? 6'd24 : 6'd17;
+                        // 0xFC block token iff we are opening a CMD25 stream
+                        wtok_fc  <= r_wr && last_write
+                                    && r_sector == last_lba + 28'd1;
                         // SDHC: block address; SDSC: byte address (sector*512)
                         cmd_arg  <= sdhc ? {4'b0000, r_sector}
                                          : {r_sector[22:0], 9'b0};
@@ -664,11 +701,15 @@ module sd_backend #(
                     end
                 end
 
-                // write: CMD24 -> gap -> token -> 512 bytes -> CRC -> resp
+                // write: CMD24/CMD25 -> gap -> token -> 512 bytes -> CRC -> resp
                 A_WCMD_R: begin
-                    if (r1 == 8'h00)
+                    if (r1 == 8'h00) begin
+                        // CMD25 accepted -> the card is now write-multiple
+                        // streaming (needs a 0xFD stop-tran token to stop)
+                        if (cmd_op == 6'd25)
+                            wstream_active <= 1'b1;
                         st <= A_WGAP;
-                    else begin
+                    end else begin
                         err <= 1'b1;
                         st  <= A_TAIL;
                     end
@@ -687,7 +728,8 @@ module sd_backend #(
                         st   <= A_WFETCH;
                     end else begin
                         x_go <= 1'b1;
-                        x_tx <= 8'hFE;
+                        // 0xFC = CMD25 multi-block start; 0xFE = single block
+                        x_tx <= wtok_fc ? 8'hFC : 8'hFE;
                     end
                 end
                 // registered-bk_rdata fetch: address, settle, sample
@@ -744,11 +786,53 @@ module sd_backend #(
                 end
                 A_WBUSY: begin                  // card holds DO low while busy
                     if (x_done) begin
-                        if (x_rx == 8'hFF)
-                            st <= A_TAIL;
-                        else if (wait_cnt == 0) begin
-                            err <= 1'b1;
-                            st  <= A_TAIL;
+                        if (x_rx == 8'hFF || wait_cnt == 0) begin
+                            if (wait_cnt == 0 && x_rx != 8'hFF)
+                                err <= 1'b1;        // busy timeout
+                            // a clean block in an open CMD25 stream advances the
+                            // expected LBA; an errored block (reject / timeout)
+                            // closes the stream cleanly with a 0xFD stop-tran
+                            if (wstream_active
+                                && (err || (wait_cnt == 0 && x_rx != 8'hFF))) begin
+                                stop_ret <= A_FIN;
+                                st       <= A_WSTOP_TOK;
+                            end else begin
+                                if (wstream_active)
+                                    wstream_next <= r_sector + 28'd1;
+                                st <= A_TAIL;
+                            end
+                        end else
+                            wait_cnt <= wait_cnt - 1'b1;
+                    end else begin
+                        x_go <= 1'b1;
+                        x_tx <= 8'hFF;
+                    end
+                end
+
+                // CMD25 close: send the 0xFD stop-tran token, one gap byte, then
+                // drain the card's busy window and return (stream cleared)
+                A_WSTOP_TOK: begin
+                    if (x_done)
+                        st <= A_WSTOP_SKIP;
+                    else begin
+                        x_go <= 1'b1;
+                        x_tx <= 8'hFD;
+                    end
+                end
+                A_WSTOP_SKIP: begin             // one byte before the card busies
+                    if (x_done) begin
+                        wait_cnt <= BUSY_POLLS;
+                        st       <= A_WSTOP_BUSY;
+                    end else begin
+                        x_go <= 1'b1;
+                        x_tx <= 8'hFF;
+                    end
+                end
+                A_WSTOP_BUSY: begin
+                    if (x_done) begin
+                        if (x_rx == 8'hFF || wait_cnt == 0) begin
+                            wstream_active <= 1'b0;
+                            st             <= stop_ret;
                         end else
                             wait_cnt <= wait_cnt - 1'b1;
                     end else begin
@@ -769,11 +853,12 @@ module sd_backend #(
                 A_FIN: begin
                     bk_done  <= 1'b1;
                     bk_error <= err;
-                    // remember this op so the next contiguous read can escalate
-                    // to CMD18 (a failed op breaks the run)
-                    last_lba  <= r_sector;
-                    last_read <= (!r_wr) && (!err);
-                    st        <= A_IDLE;
+                    // remember this op so the next contiguous op can escalate
+                    // to CMD18 (read) / CMD25 (write); a failed op breaks the run
+                    last_lba   <= r_sector;
+                    last_read  <= (!r_wr) && (!err);
+                    last_write <= r_wr && (!err);
+                    st         <= A_IDLE;
                 end
 
                 // ---- parking states ----------------------------------------

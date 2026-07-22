@@ -41,10 +41,20 @@ oracles; the board boots and multi-sector loads run faster).
 2026-07-21: the board boots** (a contiguous read run is coalesced
 backend-only into one CMD18 read-multiple stream closed by CMD12; the
 engine is untouched — `src/sd_backend.sv` + the `sim/ide` SD oracles).
-Remaining open items: SD multi-block
-WRITE (CMD25), bk10+SMK, the SMK-RAM `ram_init` pattern, `N_*`
-recalibration, and BK-0011M cycle-accuracy vs a reference (deferred,
-reference-tb-first).
+**Tier-2 SD multi-block WRITE (CMD25) is done, CONFIRMED ON HARDWARE
+2026-07-22**: the write mirror of the CMD18 read path — a
+contiguous write run is coalesced backend-only into one CMD25
+write-multiple stream (second contiguous write opens CMD25, further
+contiguous writes skip the command frame and send another 0xFC-tokened
+block, the 0xFD stop-tran token closes it before any non-contiguous op
+or on a mid-stream error); engine untouched, `smk_ide` bit-identical
+(`src/sd_backend.sv` + the `sim/ide` SD oracles, +4 mutations). STA has
+ONE known −0.230 ns setup violation on the **pseudo-static
+`model_bk11 → mapper win0_page[1]`** cone (frozen while the CPU runs, so
+a false path in practice — accepted and hardware-validated; the CMD25
+`wait_cnt` paths are all positive). Remaining open items: bk10+SMK, the
+SMK-RAM `ram_init` pattern, `N_*` recalibration, and BK-0011M
+cycle-accuracy vs a reference (deferred, reference-tb-first).
 
 ## Build & test
 
@@ -239,10 +249,19 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   non-contiguous read closes with ONE CMD12 then a fresh CMD17, and an
   isolated read never opens CMD18 (counted via the model's `cmd18_cnt`/
   `cmd12_cnt`/`rd_cnt`; leg 1's 0→1 pair also opens+closes a CMD18
-  incidentally). **Mutation-tested ×12** (run_sd.sh header: SDSC ×512,
-  CMD8 CRC, HCS, capacity off-by-one both formulas, LE byte swap, commit
-  settle, R1 poll, oob guard, dummy clocks; + tier-2: CMD18 never opened,
-  CMD12 close skipped, stream_next off-by-one — all fail). `sim/ide/run.sh`
+  incidentally). **Leg 5 is the tier-2 CMD25 write-multiple leg** (the
+  write mirror of leg 4): a contiguous write run is coalesced into ONE
+  CMD25 stream — the second contiguous write opens CMD25, further
+  contiguous writes skip the command frame (each 0xFC-tokened block
+  committed to the model's backing store word-exact), and a following
+  read closes the stream with ONE 0xFD stop-tran token then a fresh
+  CMD17 (counted via `cmd25_cnt`/`wr_cnt`/`wm_stop_cnt`; store + readback
+  checked against `wpat()`). **Mutation-tested ×16** (run_sd.sh header:
+  SDSC ×512, CMD8 CRC, HCS, capacity off-by-one both formulas, LE byte
+  swap, commit settle, R1 poll, oob guard, dummy clocks; + tier-2 reads:
+  CMD18 never opened, CMD12 close skipped, stream_next off-by-one; +
+  tier-2 writes: CMD25 never opened, 0xFD close skipped, wstream_next
+  off-by-one, wtok wrong — all fail). `sim/ide/run.sh`
   additionally re-runs the ENTIRE smk_ide_tb leg set with `-DSD_STACK`
   (`sd_harness` swaps the disk model for the real sd_backend+sd_model
   stack; sim-speed /2 dividers there — the ratios are run_sd.sh's job;
@@ -754,12 +773,20 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   between streaming blocks — a real card may send the token with zero NAC
   gap), and CMD12 (STOP_TRANSMISSION) closes the stream before any
   non-contiguous op or on a mid-stream error. Isolated/scattered reads
-  stay CMD17 (no dangling stream), WRITE stays single-block CMD24 (CMD25
-  a possible later increment). The engine (`smk_ide`) is UNTOUCHED — the
-  hardware-confirmed tier-1 prefetch, its unit legs, and `run_soc.sh`
-  stay bit-identical; the escalate-on-second policy and the CMD12 close
-  live entirely in `sd_backend` (`stream_active`/`stream_next`/`last_*`
-  regs, `A_STOP_R`/`A_STOP_BUSY` states). **STA gotcha (fixed):** the
+  stay CMD17 (no dangling stream). **Tier-2 CMD25 write-multiple
+  (CONFIRMED ON HARDWARE 2026-07-22):** the write mirror — a contiguous
+  write run is coalesced backend-only into ONE CMD25 stream (second
+  contiguous write opens CMD25, further contiguous writes skip the
+  command frame and send another **0xFC**-tokened block; the **0xFD**
+  stop-tran data token — NOT a command — closes it before any
+  non-contiguous op or on a mid-stream error). Isolated writes stay
+  CMD24; the read/write streams are mutually exclusive so `stop_ret` is
+  shared. The engine (`smk_ide`) is UNTOUCHED — the hardware-confirmed
+  tier-1 prefetch, its unit legs, and `run_soc.sh` stay bit-identical;
+  the escalate-on-second policy and both closes live entirely in
+  `sd_backend` (`stream_active`/`stream_next` + `wstream_active`/
+  `wstream_next`/`wtok_fc`/`last_*` regs, `A_STOP_*`/`A_WSTOP_*` states).
+  **STA gotcha (fixed):** the
   CMD18 states added load sites to the 32-bit `wait_cnt`, making its
   decrement ripple the sys_clk critical path (−0.646 ns setup) — narrowed
   `wait_cnt` to 20 bits (holds the 400000 budget; behaviour-identical),
@@ -774,9 +801,17 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   (a design-review catch — the bug would have shifted every command
   frame): a state asserts the byte engine's `x_go`/`x_tx` only in
   NON-`x_done` cycles, so a state change never launches the next byte
-  with the old state's data. **Still deferred:** SD multi-block WRITE
-  (CMD25 — CMD18 read-multiple is done in sim, above), bk10+SMK, the
-  SMK-RAM `ram_init` pattern, real data CRC16, MMC cards, and
+  with the old state's data. **STA note (CMD25, 2026-07-22):** the
+  A_WSTOP states added load/decrement sites to `wait_cnt` but its paths
+  stayed positive (+0.14 ns); the build's ONE −0.230 ns setup violation
+  is on the **pseudo-static `model_bk11 → mapper win0_page[1]`** cone
+  (frozen while the CPU runs = a false path in practice — this cone has
+  been persistently marginal, ≈+0.077 at the SD increment; +149 CMD25
+  LEs tipped its placement negative). Accepted as quasi-static and
+  HARDWARE-VALIDATED 2026-07-22 — the board boots and writes with it
+  (no SDC/seed churn — the SEED-3 discipline). 7,027 LE.
+  **Still deferred:** bk10+SMK, the SMK-RAM
+  `ram_init` pattern, real data CRC16, MMC cards, and
   `N_EXT`/`N_SMKREG`/`N_IDE` recalibration (reference-tb-first).
   Oracles: `sim/run_mapper.sh` + `sim/smk/run.sh` + `sim/ide/run.sh`
   (BOTH passes — disk model AND the `-DSD_STACK` real SPI stack) +

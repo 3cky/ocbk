@@ -5,11 +5,13 @@
 //  Mode-0 SPI slave (commands captured on the SCK rising edge, response
 //  bits presented on the falling edge, byte-aligned to the host's frame),
 //  decoding exactly the command set the host uses: CMD0/8/55/ACMD41/58/
-//  16/9/17/24 and the CMD18/CMD12 read-multiple pair, with R1/R3/R7
+//  16/9/17/24/25 and the CMD18/CMD12 read-multiple pair, with R1/R3/R7
 //  responses, data tokens, NCR gaps and a busy-byte phase after writes.
 //  CMD18 streams sequential blocks on demand as the host keeps clocking
 //  (rsec_str auto-advances); CMD12 (recognised even mid-block on MOSI)
-//  stops the stream, replies R1 and a short busy. The 16-bit word array `card` mirrors
+//  stops the stream, replies R1 and a short busy. CMD25 write-multiple
+//  accepts 0xFC-tokened blocks (wsec auto-advances, each capacity-checked)
+//  until the 0xFD stop-tran token closes the stream. The 16-bit word array `card` mirrors
 //  ide_disk_model's `disk` (the tb $readmemh's the SAME ide_image.hex;
 //  on the wire the LOW byte of each word travels first - the raw-image
 //  little-endian convention).
@@ -61,6 +63,7 @@ module sd_model #(
     integer cmd0_cnt, cmd8_cnt, cmd55_cnt, acmd41_cnt, cmd58_cnt;
     integer cmd16_cnt, cmd9_cnt, rd_cnt, wr_cnt;
     integer cmd18_cnt, cmd12_cnt;   // read-multiple + stop-transmission
+    integer cmd25_cnt, wm_stop_cnt; // write-multiple + its 0xFD stop-tran tokens
     integer cmd16_sdhc;             // CMD16 seen on an SDHC card (must stay 0)
     integer prot_errors;
 
@@ -71,6 +74,7 @@ module sd_model #(
     integer    acmd_tries;
     reg        reading_multi;       // inside a CMD18 read-multiple stream
     reg [31:0] rsec_str;            // next sector the stream will deliver
+    reg        writing_multi;       // inside a CMD25 write-multiple stream
 
     initial begin
         sdhc       = !$test$plusargs("sdsc");
@@ -82,9 +86,10 @@ module sd_model #(
         cmd0_cnt = 0; cmd8_cnt = 0; cmd55_cnt = 0; acmd41_cnt = 0;
         cmd58_cnt = 0; cmd16_cnt = 0; cmd9_cnt = 0; rd_cnt = 0; wr_cnt = 0;
         cmd18_cnt = 0; cmd12_cnt = 0;
+        cmd25_cnt = 0; wm_stop_cnt = 0;
         cmd16_sdhc = 0; prot_errors = 0;
         idle_state = 0; init_done = 0; app_pend = 0; acmd_tries = 0;
-        reading_multi = 0; rsec_str = 0;
+        reading_multi = 0; rsec_str = 0; writing_multi = 0;
     end
 
     task prot_err(input [8*64-1:0] msg);
@@ -107,13 +112,14 @@ module sd_model #(
 
     // ---- byte-level protocol FSM state -----------------------------------------
     localparam MS_IDLE = 0, MS_ARG = 1, MS_CRC = 2,
-               MS_WTOK = 3, MS_WDATA = 4, MS_WCRC = 5;
+               MS_WTOK = 3, MS_WDATA = 4, MS_WCRC = 5,
+               MS_WMTOK = 6, MS_WMDATA = 7, MS_WMCRC = 8;
     integer    mstate;
     reg [5:0]  cur_cmd;
     reg [31:0] arg;
     integer    argi;
     reg [7:0]  wbytes [0:511];
-    integer    wcnt, wcrc_cnt;
+    integer    wcnt, wcrc_cnt, bi;
     reg [31:0] wsec;
     reg        wrej;
 
@@ -133,7 +139,7 @@ module sd_model #(
         if (rst) begin
             idle_state = 0; init_done = 0; app_pend = 0; acmd_tries = 0;
             mstate = MS_IDLE; oq_rd = 0; oq_wr = 0; miso_r = 1'b1;
-            reading_multi = 0; rsec_str = 0;
+            reading_multi = 0; rsec_str = 0; writing_multi = 0;
         end
     end
 
@@ -218,8 +224,37 @@ module sd_model #(
                 MS_WCRC: begin
                     wcrc_cnt = wcrc_cnt + 1;
                     if (wcrc_cnt == 2) begin
-                        commit_write;
+                        commit_write(1'b0);         // single block: no advance
                         mstate = MS_IDLE;
+                    end
+                end
+                // ---- CMD25 write-multiple: 0xFC block(s) closed by a 0xFD ----
+                MS_WMTOK: begin
+                    if (b == 8'hFC) begin
+                        wcnt   = 0;
+                        mstate = MS_WMDATA;
+                    end else if (b == 8'hFD) begin  // stop-tran: close the stream
+                        writing_multi = 0;
+                        wm_stop_cnt   = wm_stop_cnt + 1;
+                        for (bi = 0; bi < BUSY_BYTES; bi = bi + 1)
+                            oq_push(8'h00);         // busy, then FF (empty q)
+                        mstate = MS_IDLE;
+                    end else if (b !== 8'hFF)
+                        prot_err("garbage / command during a write-multiple stream");
+                end
+                MS_WMDATA: begin
+                    wbytes[wcnt] = b;
+                    wcnt = wcnt + 1;
+                    if (wcnt == 512) begin
+                        wcrc_cnt = 0;
+                        mstate   = MS_WMCRC;
+                    end
+                end
+                MS_WMCRC: begin
+                    wcrc_cnt = wcrc_cnt + 1;
+                    if (wcrc_cnt == 2) begin
+                        commit_write(1'b1);         // multi: advance wsec after
+                        mstate = MS_WMTOK;          // back for the next block
                     end
                 end
             endcase
@@ -420,6 +455,19 @@ module sd_model #(
                     push_r1(8'h00);
                     mstate = MS_WTOK;
                 end
+                6'd25: begin                        // write multiple block
+                    cmd25_cnt = cmd25_cnt + 1;
+                    cmd_sector(arg, sec);
+                    if (!init_done)
+                        prot_err("CMD25 before init complete");
+                    if (sec >= capacity || sec >= MAX_SECTORS)
+                        prot_err("CMD25 sector out of capacity");
+                    wsec = sec;
+                    wrej = inj_wrrej;
+                    writing_multi = 1;              // 0xFC blocks until 0xFD
+                    push_r1(8'h00);
+                    mstate = MS_WMTOK;
+                end
                 default: begin
                     prot_err("unknown command");
                     push_r1(8'h04);
@@ -428,8 +476,12 @@ module sd_model #(
         end
     endtask
 
-    task commit_write;
+    // commit one write block: data-response token + busy. For the multi
+    // (CMD25) path capacity-check the running sector and auto-advance wsec.
+    task commit_write(input multi);
         begin
+            if (multi && (wsec >= capacity || wsec >= MAX_SECTORS))
+                prot_err("write-multiple sector out of capacity");
             if (wrej)
                 oq_push(8'h0D);                     // CRC-error reject
             else begin
@@ -439,6 +491,8 @@ module sd_model #(
             end
             for (i = 0; i < BUSY_BYTES; i = i + 1)
                 oq_push(8'h00);                     // busy, then FF (empty q)
+            if (multi)
+                wsec = wsec + 1;
         end
     endtask
 
