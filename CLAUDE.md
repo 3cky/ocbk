@@ -32,7 +32,7 @@ crash-restart at the FDD boot attempt). **Increment (b) — the SD/SPI
 backend (`src/sd_backend.sv`) — is done, CONFIRMED ON HARDWARE
 2026-07-18: the BIOS detects the SD-backed drive and BOOTS AN OS from
 the HDD image** (a raw AltPro image dd'd at card LBA 0, megasd slot
-PIN_61–66); pLed[2] is the drive-access LED (see the SMK512 bullet).
+PIN_61–66); pLed[7] is the drive-access LED (see the SMK512 bullet).
 **Tier-1 READ prefetch is done, CONFIRMED ON HARDWARE 2026-07-19**
 (fetch sector N+1 while the CPU drains N — the 2-bank buffer split with
 an E_FLUSH mid-command interlock; `src/smk_ide.sv` + the `sim/ide`
@@ -765,10 +765,15 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   after the 2026-07-21 fix, CONFIRMED ON HARDWARE — the old code left them
   one past it; no cross-command auto-advance, so consecutive single-sector
   READs must set CHS explicitly). WRITE and SD multi-block stay strictly
-  sequential. **pLed[2] = drive-access LED**:
+  sequential. **pLed[7] = drive-access LED**:
   `ide_act` (command/backend in flight — DRQ phases, backend ops, the
   attach-time geometry read; register pokes alone don't light it)
-  stretched to ~87 ms in `ocbk_top`. **Increment (b) — the SD/SPI
+  stretched to ~87 ms in `ocbk_top` and **blinked at ~11.5 Hz** while lit
+  (a second `ocbk_top` counter, `ide_blink`, held at 0 while the LED is
+  dark so every burst starts in the ON half: an isolated op is one clean
+  ~43 ms flash — the stretch window is exactly one blink period — while
+  continuous access, which re-arms the stretch every few µs, blinks
+  instead of sitting solid). **Increment (b) — the SD/SPI
   backend (`src/sd_backend.sv`) — DONE, CONFIRMED ON HARDWARE
   2026-07-18: the BIOS boots an OS from the SD-backed HDD image.** The
   card in the megasd slot (PIN_61–66, esemsx3 SPI-mode pin roles:

@@ -73,12 +73,12 @@
 // LEDs (liveness):
 //   pLedPwr (red)  : solid once SDRAM init_done; BLINKS if the boot blob failed
 //                    validation (the CPU is then held in reset).
-//   pLed[7]        : system heartbeat off the PLL (FPGA configured + PLL locked).
+//   pLed[7]        : SMK512 drive-access (ide_act stretched ~87 ms, blinking
+//                    at ~11.5 Hz while the drive is busy).
 //   pLed[0]        : BK speaker activity (solid while a tone plays; audio tap).
 //   pLed[1]        : CMT tape-in mode (Scroll Lock toggle; lit = the right
 //                    jack is the cassette port).
-//   pLed[2]        : SMK512 drive-access (ide_act stretched ~87 ms).
-//   pLed[6:3]      : unused (0).
+//   pLed[6:2]      : unused (0).
 module ocbk_top (
     input  logic        pClk21m,   // 21.47727 MHz crystal (PIN_28)
     output logic [7:0]  pLed,      // green LEDs   (1 = on)
@@ -935,8 +935,10 @@ module ocbk_top (
     );
 
 
-    // System heartbeat off the PLL (CPU-independent liveness).
-    logic [24:0] hb;
+    // Free-running PLL counter - the boot-fail blink source for pLedPwr (it is
+    // no longer a heartbeat on pLed[7]: that LED is the drive-access indicator
+    // now, so only the hb[22] blink tap is still used).
+    logic [22:0] hb;
     always_ff @(posedge sys_clk or negedge locked) begin
         if (!locked) hb <= '0;
         else         hb <= hb + 1'b1;
@@ -947,18 +949,30 @@ module ocbk_top (
     // in reset). Dark only during the ~200 us SDRAM init at power-on.
     wire boot_fail = boot_done && !boot_ok;
     assign pLedPwr = boot_fail ? hb[22] : init_done;
-    // pLed[2]: SMK IDE drive-access LED - ide_act (a command/backend op in
+    // pLed[7]: SMK IDE drive-access LED - ide_act (a command/backend op in
     // flight in smk_ide, sclk domain) stretched to ~87 ms (2^23 sys_clk) so
     // even a single-sector op is visible; re-armed while activity persists.
+    // While lit the LED BLINKS at ~11.5 Hz (2^22 sys_clk half-period) instead
+    // of sitting solid, so a long transfer (a boot, a multi-sector load, where
+    // ide_act re-arms the stretch every few us) reads as a working drive
+    // rather than a stuck light.  ide_blink is held at 0 while the LED is
+    // dark, so every burst starts in the ON half: an isolated op = one clean
+    // ~43 ms flash (the stretch window is exactly one blink period),
+    // continuous access = steady 11.5 Hz blinking.
     logic [22:0] ide_led_cnt = '0;
+    logic [22:0] ide_blink   = '0;
     always_ff @(posedge sys_clk) begin
         if (ide_act)               ide_led_cnt <= '1;
         else if (ide_led_cnt != 0) ide_led_cnt <= ide_led_cnt - 1'b1;
+
+        if (ide_led_cnt == 0) ide_blink <= '0;
+        else                  ide_blink <= ide_blink + 1'b1;
     end
-    // pLed[7]: PLL heartbeat.  pLed[2]: SMK IDE drive access (stretched).
-    // pLed[1]: CMT tape-in mode (Scroll Lock; lit = right jack is the
-    // cassette port).  pLed[0]: BK speaker activity (solid while a tone
-    // plays; audio bring-up tap).  pLed[6:3]: unused.
-    assign pLed    = {hb[24], 4'b0, |ide_led_cnt, cmt_mode, spk_active};
+    wire ide_led = (ide_led_cnt != 0) && !ide_blink[22];
+    // pLed[7]: SMK IDE drive access (stretched + blinking).  pLed[1]: CMT
+    // tape-in mode (Scroll Lock; lit = right jack is the cassette port).
+    // pLed[0]: BK speaker activity (solid while a tone plays; audio bring-up
+    // tap).  pLed[6:2]: unused.
+    assign pLed    = {ide_led, 5'b0, cmt_mode, spk_active};
 
 endmodule

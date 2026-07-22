@@ -690,8 +690,8 @@ is not a single peripheral:
   FDD boot attempt — which follows a failed HDD boot — crash-restarted
   the machine when its status polls bus-timed-out; a real SMK's floppy
   controller always replies, no-drive reads = 0 per BkEmu
-  FloppyController) and a **drive-access LED on pLed[2]** (~87 ms
-  stretch). Oracles: `sim/ide/run.sh` (unit, incl. the tier-1 prefetch
+  FloppyController) and a **drive-access LED on pLed[7]** (~87 ms
+  stretch, blinked at ~11.5 Hz while lit). Oracles: `sim/ide/run.sh` (unit, incl. the tier-1 prefetch
   legs 6b/6c/6d, mutation-tested ×14) + `sim/ide/run_soc.sh` (SoC, incl.
   the COUNT=2 bank-crossing leg, ×3) +
   `sim/run_boot_check.sh +smk` (the real BIOS boots to its banner with

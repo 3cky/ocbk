@@ -41,7 +41,7 @@ boots and shows its banner; increment 3 = the IDE drive engine + the
 SD/SPI backend: the SMK ATA task file served from a **raw AltPro HDD
 image dd'd onto an SD card** in the board's SD slot — **confirmed on
 hardware 2026-07-18: the SMK BIOS detects the drive and boots an OS
-from the SD-backed image** (pLed[2] = drive-access LED). With no card
+from the SD-backed image** (pLed[7] = drive-access LED). With no card
 the drive reports cleanly absent and the BIOS exits to its command
 line; flip DIP 8 OFF and press reset for a stock machine). DIP 2 is
 unused.
@@ -131,9 +131,13 @@ ROM always runs from the loaded SDRAM image).
   `init_done`, but **blinks** if the flash blob failed validation (the CPU is
   then held in reset — there is no on-chip fallback). Dark only during the
   ~200 µs SDRAM init at power-on.
-- **pLed[7]** — system heartbeat off the PLL (FPGA configured / PLL locked).
+- **pLed[7]** — SMK512 drive access: **blinks at ~11.5 Hz** while the drive is
+  busy (a boot, a multi-sector load), one ~43 ms flash for an isolated op
+  (`ide_act` stretched to ~87 ms), dark when idle.
+- **pLed[1]** — CMT tape-in mode (Scroll Lock toggle; lit = the right jack is
+  the cassette port).
 - **pLed[0]** — BK speaker activity (solid while a tone plays; audio bring-up tap).
-- **pLed[6:1]** — unused.
+- **pLed[6:2]** — unused.
 
 ## Known items (for later phases)
 
