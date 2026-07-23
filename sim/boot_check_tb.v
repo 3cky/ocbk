@@ -397,12 +397,19 @@ module boot_check_tb;
         .vid_pal  (vid_pal)
     );
 
-    // ---- EVNT/IRQ2: ocbk_top wiring replica (as bk11_soc_tb; idle in bk10) ----
-    reg       irq2_lvl;
+    // ---- EVNT/IRQ2: the REAL detector (Phase 9; idle in bk10) ----------------
+    // src/bk_evnt.sv, instantiated rather than replicated - so a boot smoke run
+    // exercises the same detector the board will fit. Real BOS unmasks 662
+    // bit 14, so this leg actually drives the frame interrupt during the run.
+    wire      irq2_lvl;
     reg [1:0] irq2_sr;
-    initial begin irq2_lvl = 1'b0; irq2_sr = 2'b00; end
-    always @(posedge sys_clk) irq2_lvl <= model11 & ~vid_irq2m & va_vgate;
-    always @(posedge clk)     irq2_sr  <= {irq2_sr[0], irq2_lvl};
+    initial   irq2_sr = 2'b00;
+    bk_evnt evnt (
+        .sys_clk(sys_clk), .rst_n(dclo_cold),
+        .wti(va_wti), .synco(va_vsync),
+        .irq_en(model11 & ~vid_irq2m), .evnt(irq2_lvl)
+    );
+    always @(posedge clk) irq2_sr <= {irq2_sr[0], irq2_lvl};
     assign n_irq2 = ~irq2_sr[1];
 
     // deepened for +smk (SMK RAM = SDRAM 0x40000-0x7FFFF); harmless otherwise

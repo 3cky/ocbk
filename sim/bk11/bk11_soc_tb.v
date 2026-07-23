@@ -209,15 +209,21 @@ module bk11_soc_tb;
         .we_n(s_we_n), .ba(s_ba), .addr(s_addr), .dqm(s_dqm), .dq(s_dq)
     );
 
-    // ---- EVNT/IRQ2: replica of the ocbk_top wiring (model_bk11 = 1 here) -----
-    // level = ~mask & the 037's vgate, registered on sys_clk, 2-FF onto
-    // posedge cpu_clk (the pin-sync rule); the vm1's internal arm/fire edge
-    // detector makes it one interrupt (vector 0100) per frame.
-    reg       irq2_lvl;
+    // ---- EVNT/IRQ2: the REAL detector (Phase 9; model_bk11 = 1 here) ---------
+    // The authentic external D28+D3:B missing-pulse pair off the 037's WTI and
+    // SYNCO pins - src/bk_evnt.sv, instantiated rather than replicated so this
+    // tb cannot drift from the RTL (the cpu_clkgen replica lesson). Its output
+    // is sys_clk-registered; the 2-FF onto posedge cpu_clk is the pin-sync
+    // rule. The vm1's arm/fire edge detector makes it one vector-0100
+    // interrupt per frame.
+    wire      irq2_lvl;
     reg [1:0] irq2_sr;
-    initial begin irq2_lvl = 1'b0; irq2_sr = 2'b00; end
-    always @(posedge sys_clk) irq2_lvl <= ~vid_irq2m & va_vgate;
-    always @(posedge clk)     irq2_sr  <= {irq2_sr[0], irq2_lvl};
+    initial   irq2_sr = 2'b00;
+    bk_evnt evnt (
+        .sys_clk(sys_clk), .rst_n(dclo_cold),
+        .wti(va_wti), .synco(va_vsync), .irq_en(~vid_irq2m), .evnt(irq2_lvl)
+    );
+    always @(posedge clk) irq2_sr <= {irq2_sr[0], irq2_lvl};
     assign n_irq2 = ~irq2_sr[1];
 
     // ---- СТОП: replica of the ocbk_top wiring (Phase 7) ----------------------
@@ -247,14 +253,41 @@ module bk11_soc_tb;
     // assertion guards, pinning what the program-side checks can't:
     //  - window phase: every nIRQ2 assertion must land inside the 037's
     //    vertical blanking window (an inverted level would still fire and
-    //    pass the program checks, just at active-area start);
+    //    pass the program checks, just at active-area start). The program sets
+    //    177664 bit 9 (full screen) before section 12, so this holds;
+    //  - NO RETRO-FIRE ON UNMASK (Phase 9): section 12 unmasks 662 bit 14 in
+    //    the middle of a blanking window, so the unmask itself is the only
+    //    nIRQ2 assertion this program can observe (the run ends before the
+    //    next frame). The pre-Phase-9 model gated the level combinationally
+    //    and re-asserted within a couple of sys_clk; the real detector's
+    //    enable is D3:B's async RESET, so the request can only re-appear at
+    //    the NEXT SYNCO edge - up to a full scanline later. That delay is the
+    //    one discriminator visible at SoC level, so pin it here. (The 452
+    //    CLKIN blanking-entry offset itself is sim/evnt's contract - it is not
+    //    observable in this program.)
     //  - mask gating: nIRQ2 must never assert while 662 bit 14 is set (with
     //    the gate broken the vm1's arm/fire edge detector - the pin never
     //    deasserts, so it never arms - would quietly defer the first fire
     //    to the SECOND frame and still pass the program checks).
+    integer unmask_age = 0;             // sys_clk since 662 bit 14 was cleared
+    reg     m_d = 1'b1;
+    always @(posedge sys_clk) begin
+        if (m_d && !vid_irq2m) unmask_age = 0;
+        else                   unmask_age = unmask_age + 1;
+        m_d = vid_irq2m;
+    end
+
     always @(negedge n_irq2) begin
         if (va_vgate !== 1'b1) begin
             $display("BK11-ERROR: IRQ2 asserted outside the vgate blanking window");
+            $display("COSIM FAIL");
+            $finish;
+        end
+        if (unmask_age < 512) begin
+            $display("BK11-ERROR: IRQ2 re-asserted %0d sys_clk after unmask -",
+                     unmask_age);
+            $display("BK11-ERROR: the async-cleared request must wait for the");
+            $display("BK11-ERROR: next SYNCO edge, not retro-fire combinationally");
             $display("COSIM FAIL");
             $finish;
         end

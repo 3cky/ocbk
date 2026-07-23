@@ -22,6 +22,7 @@ sim:
 	./sim/run_clkgen.sh
 	./sim/run_mapper.sh
 	./sim/raminit/run.sh
+	./sim/evnt/run.sh
 	./sim/bk10/run.sh
 	./sim/bk11/run.sh
 	./sim/smk/run.sh

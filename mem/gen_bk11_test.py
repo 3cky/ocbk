@@ -276,6 +276,13 @@ def build_stage2():
     # immediate. If stage 2 ever outgrows the first blanking window, the spin
     # below just rides to the next frame (slower sim, still correct - the
     # tb's vgate-at-assert guard keeps the window phase pinned).
+    # Configure the 037 for a FULL screen (177664 bit 9) as the real BOS does.
+    # Phase 9: this now matters. nIRQ2 comes from the authentic WTI/SYNCO
+    # detector (src/bk_evnt.sv), and WTI only pulses on DISPLAYED lines - so in
+    # the 1/4-screen power-on default the frame interrupt legitimately asserts
+    # during active video, ~129 lines before blanking. The 037 replies to this
+    # write itself (its RWR strobe), so it does not bus-time-out.
+    a.emit(0o012737, 0o001330, 0o177664)    # MOV #001330,@#177664
     a.emit(0o012737)                        # MOV #isr2,@#0100 (frame vector)
     a.addr("isr2")
     a.emit(0o000100)

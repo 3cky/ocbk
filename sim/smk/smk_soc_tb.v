@@ -220,15 +220,21 @@ module smk_soc_tb;
         .we_n(s_we_n), .ba(s_ba), .addr(s_addr), .dqm(s_dqm), .dq(s_dq)
     );
 
-    // ---- EVNT/IRQ2: replica of the ocbk_top wiring ---------------------------
+    // ---- EVNT/IRQ2: the REAL detector (Phase 9) ------------------------------
+    // src/bk_evnt.sv, instantiated rather than replicated (see bk11_soc_tb).
     // The program keeps 662 bit 14 SET throughout (no ISR is installed), so
     // this must never fire - the guards below turn a stray assert into a
     // loud failure (a broken mask gate would otherwise go unnoticed here).
-    reg       irq2_lvl;
+    // In the +bk10 leg model_bk11 is 0, which holds the detector cleared.
+    wire      irq2_lvl;
     reg [1:0] irq2_sr;
-    initial begin irq2_lvl = 1'b0; irq2_sr = 2'b00; end
-    always @(posedge sys_clk) irq2_lvl <= ~vid_irq2m & va_vgate;
-    always @(posedge clk)     irq2_sr  <= {irq2_sr[0], irq2_lvl};
+    initial   irq2_sr = 2'b00;
+    bk_evnt evnt (
+        .sys_clk(sys_clk), .rst_n(dclo_cold),
+        .wti(va_wti), .synco(va_vsync),
+        .irq_en(~bk10 & ~vid_irq2m), .evnt(irq2_lvl)
+    );
+    always @(posedge clk) irq2_sr <= {irq2_sr[0], irq2_lvl};
     assign n_irq2 = ~irq2_sr[1];
 
     always @(negedge n_irq2) begin

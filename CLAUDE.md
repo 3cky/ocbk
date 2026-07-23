@@ -62,6 +62,14 @@ SMK512 bullet); fit 6,938 LE, sys_clk +0.430 ns / TNS 0.
 Remaining open items, all deferred to Phase 9 and none blocking: the
 SMK-RAM `ram_init` pattern, `N_*` recalibration, SD data CRC16 / MMC
 cards, and BK-0011M cycle-accuracy vs a reference (reference-tb-first).
+**Phase 9 (fidelity & polish) STARTED — increment 1 (the authentic
+EVNT/IRQ2 assertion instant, `src/bk_evnt.sv`) is DONE IN SIM
+2026-07-23, hardware acceptance pending**: the 037 has no
+vertical-blanking pin, so the real 0011M's D28+D3:B missing-pulse
+detector off WTI/SYNCO replaces the Phase-7 "nIRQ2 = vgate" model, which
+was MiSTer's and fired **452 CLKIN (~1.18 scanlines, ~301 cpu_clk) early
+every frame** — displacing every beam-raced multicolor/gigascreen
+effect. See the EVNT/IRQ2 bullet and `sim/evnt/README.md`.
 
 ## Build & test
 
@@ -335,6 +343,21 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   Both are **mutation-tested** (reverting the `selected` change hangs the clear;
   the RMW leg also proved the S_REPLY refinement unnecessary — the DATIO gap
   already drops the read reply). The gen program is `mem/gen_romwr_test.py`.
+- `sim/evnt/run.sh` — the Phase-9 **EVNT/IRQ2 detector oracle** and the
+  authority on `src/bk_evnt.sv` (the authentic D28+D3:B missing-pulse pair off
+  the 037's WTI/SYNCO pins). Contract = the `sim/ref014` shape: the vendored
+  **reference** netlist `sim/ref037/va_037.v` generates `golden_evnt.txt`, and
+  the retimed `src/va_037_sync.sv` must reproduce it line-for-line (it does,
+  byte-identically). Three legs in one transcript — **L1** full screen
+  (assert = VGATE rise + **452 CLKIN**, deassert = VGATE fall + 452 CLKIN,
+  every frame), **L2** 1/4 screen (WTI stops after 64 displayed lines, so the
+  request fires **during active video**, ~129 lines early), **L3** mask
+  semantics (masking clears at once; **unmasking must NOT retro-fire** — it
+  waits for the next SYNCO edge). **Mutation-tested ×5** (`--mutate`: the
+  old-qa propagation race, the WTI clear, the D3:B clock edge, irq_en as a
+  combinational gate, the QA feedback — all fail). Mutations rewrite a *copy*
+  of the real RTL via sed, so there is no inline replica to drift. See
+  `sim/evnt/README.md`. **Never regenerate the golden from a va_037_sync run.**
 - `sim/raminit/run.sh` — the Phase-7 `ram_init` unit oracle (the authentic
   DRAM power-on pattern filler): drives ram_init through a served-mask-honoring
   grant model and checks, per fill pass, the exact per-model word pattern
@@ -973,25 +996,54 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   (placeholder; recalibrate reference-tb-first with 0011M cycle accuracy).
   `bk_kbd014` is untouched. `ocbk_top` muxes `vram_base`/`pal_idx` on
   `model_bk11` (all sys_clk — no CDC).
-- **EVNT/IRQ2 frame interrupt (Phase 7, BK-0011M):** the 50 Hz system timer,
-  **MiSTer `rtl/video.sv` model** (user-confirmed — BK software races IRQ2
-  for CRT effects and the corpus is proven against MiSTer): the nIRQ2 level
-  is the **vertical blanking window** — in our raster exactly the 037's
-  `vgate` (lines 256..319 of the 320-line frame; the line-boundary phase is
-  the vendored netlist's own, more authoritative than MiSTer's re-counted
-  hc/vc) — gated `model_bk11 & ~vid_irq2_mask` (sys_clk), registered on
-  sys_clk, then 2-FF onto **posedge cpu_clk** in `ocbk_top` (the pin-sync
-  rule; also authentic — the real board re-times IRQ2 through D11, a
-  К555ТМ9 on CLC). The vm1's internal arm/fire edge detector (arm while
-  deasserted, fire on assert) makes it exactly one vector-0100 interrupt
-  per frame; the DCLO default mask=1 keeps it silent until software
-  unmasks. **BK-0010 has no IRQ2 source at all** (BkEmu attaches
-  `SystemTimer` only for 0011M; MiSTer gates `irq_en = ~bk0010 & ...`) —
-  never wire one in bk10 mode. Deferred fidelity (schematic-traced, see
-  ROADMAP): the real 0011M asserts a few *lines into* blanking via an
-  external WTI missing-pulse counter — model it reference-tb-first with the
-  0011M cycle-accuracy work. Oracle: the `sim/bk11` section-12 leg + tb
-  assertion guards (see the sim list above).
+- **EVNT/IRQ2 frame interrupt (Phase 9 rework, BK-0011M):** the 50 Hz system
+  timer. **The 037 has NO vertical-blanking output pin** — the real board
+  synthesises IRQ2 externally, and `src/bk_evnt.sv` is a gate-faithful replica
+  of that detector (**schematic-traced pin-by-pin in `doc/bk0011m.sch`; see
+  `sim/evnt/README.md` for the full trace and contract**): **D28** (К555ИЕ5,
+  ÷2 section) with `CKA = ~(SYNCO | QA)` (D6:C, QA fed back) and its async
+  clear `R0(1)&R0(2) = CLC & WTI`, feeding **D3:B** (К555ТМ2) clocked by
+  **SYNCO** (037 pin 28) with `R` = the 662 enable bit (D35.5 = `~reg662[14]`,
+  ACLO-reset), `~Q` → D21 (ЛП9, OC) → the **~PRT** net → D11.4 (К555ТМ9 on
+  CLC) → the CPU's IRQ2 pin. WTI pulses once per fetched video word and is
+  silent on non-displayed lines, so it pins QA at 0 through the displayed
+  area; when WTI stops the next SYNCO edge sets QA (**set-once** — the
+  feedback then holds CKA low) and D3:B publishes it one SYNCO edge later.
+  **Measured against the reference netlist: assert = VGATE rise + 452 CLKIN,
+  deassert = VGATE fall + 452 CLKIN** (~75 µs, ~1.18 scanlines, ~301 cpu_clk
+  at the /24 rate), stable every frame. **This REPLACED the Phase-7
+  "nIRQ2 = vgate" model, which was MiSTer's (`rtl/video.sv`: set at
+  `vc==256`, cleared at `vc==0`) and fired 452 CLKIN too early every frame** —
+  a fixed displacement of every beam-raced multicolor/gigascreen effect, which
+  is what motivated the rework. Three load-bearing properties, each
+  mutation-covered: (1) **the propagation race** — the QA toggle and the D3:B
+  clock are the SAME SYNCO edge, and the board's delay makes D3:B capture the
+  **old** QA (reproduced by non-blocking assignment ordering; sampling the new
+  value loses a whole scanline); (2) **`irq_en` is an async CLEAR, not a
+  combinational gate** — so un-masking mid-blanking does **not** retro-fire
+  instantly (both our old model and MiSTer do), it waits for the next SYNCO
+  edge; (3) **QA is set-once**. In **1/4-screen mode** (177664 bit 9 clear)
+  WTI stops after the 64th displayed line, so the request authentically
+  asserts **during active video**, ~129 lines before blanking — the old vgate
+  model could not express this at all, and `mem/gen_bk11_test.py` §12 now
+  writes 177664 = 0o001330 (full screen, as real BOS does) for that reason.
+  bk_evnt is all sys_clk (the 037 outputs move on the /16 en_pos/en_neg
+  strobes, so edge detection is exact — no CDC), **power-on reset only**
+  (`vid_rst_n`; on the board D28 has no reset pin and D3:B's only reset is the
+  662 enable bit), then 2-FF onto **posedge cpu_clk** in `ocbk_top` — the
+  pin-sync rule, and authentic (D11 does the same on CLC). The vm1's internal
+  arm/fire edge detector (arm while deasserted, fire on assert) makes it
+  exactly one vector-0100 interrupt per frame; the DCLO default mask=1 keeps
+  it silent until software unmasks. **BK-0010 has no IRQ2 source at all**
+  (BkEmu attaches `SystemTimer` only for 0011M; MiSTer gates
+  `irq_en = ~bk0010 & ...`) — `model_bk11` holds the whole detector cleared,
+  never wire one in bk10 mode. Oracles: **`sim/evnt/run.sh`** (the authority —
+  reference-netlist golden + the retimed va_037_sync reproducing it
+  byte-identically, mutation-tested ×5) plus the `sim/bk11` section-12 leg,
+  whose tb guard pins the no-retro-fire-on-unmask semantic (teeth-tested: the
+  old wiring fails it at 34 sys_clk). The three SoC tbs (`sim/bk11`,
+  `sim/smk`, `sim/boot_check_tb.v`) **instantiate `bk_evnt` rather than
+  replicating it** — the `cpu_clkgen` replica-drift lesson.
 - **SDRAM arbiter ports** (fixed priority, 0 highest): 0=CPU, 1=panel readout,
   2=037 video fetch, 3=FB write. There is **no fairness** — the readout MUST stay
   paced (`fb_readout` PACE ≥24 sys_clk/word); an unpaced port-1 burst starves

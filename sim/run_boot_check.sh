@@ -60,7 +60,7 @@ iverilog -g2012 -o "$SP/boot.vvp" -s boot_check_tb \
    "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
    "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" \
    ../src/qbus_pkg.sv ../src/va_037_sync.sv ../src/cpu_sdram_dp.sv \
-   ../src/sdram_arbiter.sv ../src/sdram_ctrl.sv ../src/mem_mapper.sv ../src/qbus_mem.sv \
+   ../src/sdram_arbiter.sv ../src/sdram_ctrl.sv ../src/mem_mapper.sv ../src/qbus_mem.sv ../src/bk_evnt.sv \
    ../src/bk_kbd014.sv ../src/smk_ide.sv ide/ide_disk_model.v \
    ../src/sd_backend.sv ide/sd_model.v ide/sd_harness.v \
    ../src/fb_video.sv ../src/palette_apply.sv ../src/fb_readout.sv \

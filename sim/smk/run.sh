@@ -83,7 +83,7 @@ iverilog -g2012 -o "$SP/smk.vvp" -s smk_soc_tb \
    "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" \
    ../../src/qbus_pkg.sv ../../src/va_037_sync.sv ../../src/cpu_sdram_dp.sv \
    ../../src/sdram_arbiter.sv ../../src/sdram_ctrl.sv ../../src/mem_mapper.sv \
-   ../../src/qbus_mem.sv ../sdram_model.sv \
+   ../../src/qbus_mem.sv ../../src/bk_evnt.sv ../sdram_model.sv \
    smk_soc_tb.v 2>&1 | grep -v 'sorry:' || true
 
 # Two legs: BK-0011M (the original) and BK-0010 (+bk10). Each regenerates its

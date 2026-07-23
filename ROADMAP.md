@@ -457,18 +457,16 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   inside the vgate window AND never while masked — the CPU-side checks alone
   can't catch a broken gate: with the pin stuck asserted the vm1 detector
   never arms, so the first fire just slides to the next frame and passes).
-  **Deferred fidelity item (schematic-traced, `doc/bk0011m-sch.pdf`):** the
-  real 0011M has no vgate pin — an external detector asserts IRQ2 a few
-  *lines into* blanking: WTI (D19/037 pin 31, pulsing only on active lines)
-  holds the D28 СТ2 counter reset; in blanking it counts line-rate SYNCO
-  edges (via the D6:C NOR) until its tap arms D3:B (ТМ2, clocked by SYNCO)
-  → the PRT̄ net (also on the XT3.2 expansion connector) → D11 (К555ТМ9, on
-  CLC — the same retimer as RPLY/VIRQ) → the CPU IRQ2 pin; the 662-write
-  register bits (D35/D26) gate the counter resets and D3:B's reset.
-  Modelling that assert-instant offset goes **reference-tb-first** with the
-  0011M cycle-accuracy item (same posture as the D8:B RPLY retimer) — it
-  matters for beam-racing software, and is unverifiable until a 0011M
-  timing reference exists.
+  **This model was REPLACED in Phase 9 — see the Phase 9 section; the
+  deferred "asserts a few lines into blanking" fidelity item is DONE.** Two
+  corrections to what the deferred note used to say here: (a) the D28
+  К555ИЕ5's **÷8 section is clocked at CPU-clock rate and is unrelated to
+  IRQ2** — the interrupt path is its **÷2** section, whose CKA is
+  `~(SYNCO | QA)` with QA fed back, making QA **set-once** rather than a
+  counter that "counts line-rate SYNCO edges"; and (b) the offset is not a
+  free parameter needing a 0011M timing reference — WTI and SYNCO are both
+  exported by the vendored reference netlist `sim/ref037/va_037.v`, so the
+  detector is fully golden-verifiable there. Measured: **452 CLKIN**.
 - **Status (2026-07-12): fifth increment done (sim)** — the **СТОП-enable
   bit** (177716 write bit 12, BK-0011M: 1 = СТОП blocked, write-only),
   closing that deferred follow-up. **MiSTer `BK0011M.sv` is the model**
@@ -852,6 +850,32 @@ is not a single peripheral:
   together, reference-tb-first.
 
 ### Phase 9 — Fidelity & polish
+- **Status (2026-07-23): first increment done (sim)** — the **authentic
+  EVNT/IRQ2 assertion instant**, `src/bk_evnt.sv`. The 037 has no
+  vertical-blanking pin; the real 0011M synthesises IRQ2 from WTI + SYNCO with
+  the D28 (К555ИЕ5, ÷2) + D3:B (К555ТМ2) missing-pulse pair, schematic-traced
+  pin-by-pin in `doc/bk0011m.sch` (`~PRT` = D21.8 → D11.4 confirmed; the
+  enable is D35.5 = `~reg662[14]` off the inverted AD14 line, driving D3:B's
+  **async R** pin). Replaces the Phase-7 "nIRQ2 = vgate" model, which was
+  MiSTer's and **fired 452 CLKIN early every frame** (~75 µs, ~1.18 scanlines,
+  ~301 cpu_clk at the /24 rate) — a fixed displacement of every beam-raced
+  multicolor/gigascreen effect, which is what motivated the work. Measured
+  against the vendored reference netlist and stable per frame:
+  assert = VGATE rise + 452 CLKIN, deassert = VGATE fall + 452 CLKIN; and in
+  **1/4-screen mode** (177664 bit 9 clear) WTI stops after the 64th displayed
+  line so the request authentically asserts **during active video**, ~129
+  lines early — a behaviour the vgate model could not express. Also newly
+  faithful: un-masking mid-blanking no longer retro-fires instantly (the
+  enable is an async clear, so the request waits for the next SYNCO edge).
+  **The old "unverifiable without a 0011M timing reference" posture was
+  wrong**: WTI and SYNCO are both exported by `sim/ref037/va_037.v`, so the
+  new `sim/evnt/run.sh` derives its golden straight from the reference netlist
+  (and the retimed `va_037_sync` reproduces it byte-identically), mutation-
+  tested ×5. The three SoC tbs now instantiate `bk_evnt` instead of
+  replicating the wiring; `sim/bk11` §12 gained a teeth-tested
+  no-retro-fire-on-unmask guard and now sets 177664 full-screen as real BOS
+  does. Hardware acceptance (both models booting + a beam-racing demo)
+  pending.
 - Cycle-accuracy regression vs reference traces; turbo (6 MHz) mode.
 - Optional CRT effects (scanline dim/gamma) in the upscaler.
 - Config: DIP/menu for model, turbo, video filter.
