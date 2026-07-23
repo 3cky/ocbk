@@ -9,7 +9,10 @@
 //  when BkEmu attaches the same image file).
 //
 //  Init ladder (SPI clock /256 = 377 kHz <= the 400 kHz identification
-//  limit): >=74 dummy clocks CS-high, CMD0 (CRC 0x95), CMD8 0x1AA
+//  limit): >=74 dummy clocks CS-high, a recovery preamble (0xFD stop-tran
+//  + CMD12 + a bus flush - a warm reset resets US but not the card, which
+//  may still be streaming an open CMD18/CMD25; see S_PRE_TOK), CMD0
+//  (CRC 0x95), CMD8 0x1AA
 //  (CRC 0x87; a valid R7 echo = a v2 card, illegal-command = v1/SDSC),
 //  ACMD41 loop (HCS when v2) until ready, CMD58 (OCR CCS -> SDHC block
 //  addressing vs SDSC byte addressing), CMD16(512) for SDSC only, CMD9
@@ -17,7 +20,13 @@
 //  bk_media_ok rises and the SPI clock switches to /8 = 12.08 MHz (the
 //  proven epcs_boot rate, well under the 25 MHz SPI-mode limit). Any
 //  init failure/timeout parks in S_DEAD: bk_media_ok stays 0 and the
-//  drive reports absent - exactly the increment-(a) tie-off behaviour.
+//  drive reports absent - exactly the increment-(a) tie-off behaviour;
+//  dbg_fail then carries WHERE it died (a TEMPORARY bring-up aid on the
+//  board LEDs): 1 CMD0 exhausted, 2 CMD8 answered neither a valid R7 echo
+//  nor illegal-command, 3 CMD55 rejected, 4 ACMD41 never ready as v2,
+//  5 ACMD41 never ready as v1 (i.e. CMD8's response was MISREAD and an
+//  SDHC card got ACMD41 without HCS, which never readies), 6 CMD58,
+//  7 CMD16, 8 CMD9, 9 CSD data token, 10 unusable CSD version, 15 unknown.
 //  No MMC (CMD1) fallback; no card-detect pin exists, so re-init is a
 //  reset away (reset = DCLO-only, the same deliberate nINIT exception
 //  as smk_ide: power-on AND warm reset = "insert card, press reset").
@@ -25,25 +34,28 @@
 //  Data ops: CMD17 single-block read (0xFE token -> 512 bytes assembled
 //  as 256 little-endian words into the engine's sector-buffer bank via
 //  bk_baddr/bk_wdata/bk_we - first byte of a pair is the LOW byte, the
-//  raw-image/BkEmu convention). A run of contiguous reads (the engine
-//  issues one bk_req per sector at N, N+1, N+2 ...) is coalesced into a
-//  single CMD18 read-multiple stream: the second contiguous read opens
-//  CMD18, further contiguous reads skip the command frame and just poll
-//  the next data token, and CMD12 (STOP_TRANSMISSION) closes the stream
-//  before any non-contiguous op or on a mid-stream error. Isolated reads
-//  stay CMD17. Writes mirror this: CMD24 single-block (buffer words
+//  raw-image/BkEmu convention) and CMD24 single-block write (buffer words
 //  fetched with the registered-bk_rdata settle, 0xFE start token,
-//  data-response check, busy-wait), and a contiguous write run is
-//  coalesced into a single CMD25 write-multiple stream (the second
-//  contiguous write opens CMD25, further contiguous writes skip the
-//  command frame and send another 0xFC-tokened block, and the 0xFD
-//  stop-tran token closes the stream before any non-contiguous op or on
-//  a mid-stream error). Isolated writes stay CMD24. CRC policy is the
-//  SPI-mode default: real CRCs only on
-//  CMD0/CMD8, dummy CRC16 on writes, read CRC ignored. Errors complete
-//  as bk_done+bk_error (the engine ignores it for data ops - BkEmu
-//  ignores drive.read/write rc - and honors it only for the attach-time
-//  sector-7 geometry read); bk_media_ok never drops mid-run.
+//  data-response check, busy-wait). CRC policy is the SPI-mode default:
+//  real CRCs only on CMD0/CMD8, dummy CRC16 on writes, read CRC ignored.
+//  Errors complete as bk_done+bk_error (the engine ignores it for data ops
+//  - BkEmu ignores drive.read/write rc - and honors it only for the
+//  attach-time sector-7 geometry read); bk_media_ok never drops mid-run.
+//
+//  MULTI-BLOCK (CMD18/CMD25) WAS IMPLEMENTED, HARDWARE-CONFIRMED, AND
+//  REVERTED (2026-07-23). It coalesced a contiguous run into one streamed
+//  transfer, saving the ~10-byte command frame per sector - about 7 us
+//  against a 342 us block at the /8 data clock, i.e. ~2%. But that 2% is
+//  invisible: the BK drains 256 words through the task file at 4.03 MHz
+//  (~500-750 us per sector), so the drain, not the fetch, is the
+//  bottleneck, and the tier-1 prefetch already hides the whole fetch
+//  behind it. In exchange it cost a real fault: streams were closed
+//  lazily, so a stream stayed open across idle time, a warm reset left the
+//  card streaming (DCLO resets US, not the card), and the machine needed a
+//  SECOND reset press to find its disk. Not worth it - and the ~150 LE are
+//  better spent elsewhere. If it is ever revisited, close the stream when
+//  the operation ends (ao486's rtl/soc/driver_sd/card_read.v issues CMD12
+//  on the last sector) rather than lazily.
 //
 //  All on sys_clk like the engine - no CDC on the seam. The SPI byte
 //  engine follows epcs_boot: mode 0, MSB first, MOSI advances at the SCK
@@ -61,10 +73,19 @@ module sd_backend #(
     parameter int DIV_FAST_L2 = 3,      // data: /8 = 12.08 MHz
     // retry/timeout budgets (sim overrides shrink them)
     parameter int SETTLE_CLKS  = 131072,   // ~1.4 ms post-reset settle
-    parameter int CMD0_TRIES   = 8,        // CMD0 attempts before giving up
+    parameter int INIT_TRIES   = 8,        // whole-ladder attempts before
+                                           //   declaring the media absent
     parameter int ACMD41_TRIES = 4096,     // CMD55+CMD41 iterations (~1.4 s)
     parameter int TOK_POLLS    = 200000,   // read-token byte polls (~130 ms at /8)
-    parameter int BUSY_POLLS   = 400000    // write-busy byte polls (~260 ms at /8)
+    parameter int BUSY_POLLS   = 400000,   // write-busy byte polls (~260 ms at /8)
+    // recovery preamble (see S_PRE_TOK), all in SPI bytes at the /256 init
+    // clock (~21.2 us per byte):
+    parameter int PRE_BUSY_BYTES = 12000,  // post-0xFD program-busy poll,
+                                           //   ~255 ms = the SD write timeout
+    parameter int PRE_FLUSH      = 1100,   // FIXED post-CMD12 drain: a whole
+                                           //   block + token + CRC + R1 + busy
+    parameter int PRE_IDLE       = 1024,   // then wait for the bus to go quiet
+    parameter int PRE_FF_RUN     = 8       // consecutive 0xFF = bus is quiet
 ) (
     input  logic        clk,         // sys_clk
     input  logic        rst_n,       // = dclo_n (DCLO-only; NOT nINIT)
@@ -89,7 +110,14 @@ module sd_backend #(
     output logic [7:0]  bk_baddr,
     output logic [15:0] bk_wdata,
     output logic        bk_we,
-    input  logic [15:0] bk_rdata     // registered read - one settle cycle
+    input  logic [15:0] bk_rdata,    // registered read - one settle cycle
+
+    // ---- board-LED diagnostics (TEMPORARY, see ocbk_top's pLed comment) ----
+    output logic [3:0]  dbg_fail,        // 0 = fine; else WHERE init died
+                                         //   (see the S_DEAD codes below)
+    output logic        dbg_flush_cap,   // sticky: a flush ran out of budget
+                                         //   (the card would not go quiet)
+    output logic        dbg_retried      // sticky: >=1 CMD0 attempt failed
 );
 
     // ---- byte-level SPI engine (mode 0, MSB first) --------------------------
@@ -105,11 +133,38 @@ module sd_backend #(
     wire  [8:0] div_max  = fast ? DIVMAX_F  : DIVMAX_S;
     wire  [8:0] div_half = fast ? DIVHALF_F : DIVHALF_S;
 
+    // `enable` is smk_en && model_bk11 - both DIP bits latched in ocbk_top
+    // during the DCLO hold, so quasi-static, but high-fanout and therefore
+    // long-routed: feeding it straight into the S_SETTLE arm put
+    // model_bk11 -> st.A_WCMD_R on the critical path. One local flop, the
+    // model_bk11_q/smk_en_q treatment. Latency is irrelevant - enable only
+    // changes while DCLO is held and this whole module is in reset.
+    // Reset value 1, NOT 0: S_SETTLE parks in S_DISABLED - a DEAD-END state -
+    // the moment it sees !enable_q, and it is evaluated on the very first
+    // cycle out of reset. Resetting this flop to 0 therefore disabled the
+    // backend permanently on every reset even with a card present (found by
+    // the -DSD_STACK leg: reads went to zeros after a mid-run media cycle).
+    // Starting at 1 costs nothing - S_SETTLE re-evaluates every cycle of the
+    // ~1.4 ms settle, so a genuinely disabled backend still parks on cycle 2,
+    // before any SPI traffic (S_SETTLE never asserts x_go).
+    logic       enable_q;
+    always_ff @(posedge clk or negedge rst_n)
+        if (!rst_n) enable_q <= 1'b1;
+        else        enable_q <= enable;
+
     logic       x_go;                // level request from the FSM
     logic [7:0] x_tx;
     logic       x_run;
     logic       x_done;              // 1-cycle pulse, x_rx valid with it
     logic [7:0] x_rx;
+    // "the byte just received was 0xFF (idle bus)", precomputed in the byte
+    // engine and registered WITH x_rx. Every idle/busy poll in the FSM keys
+    // on this one bit instead of comparing x_rx itself: the equality was in
+    // the `st` next-state cone, and the recovery preamble's two extra
+    // compares pushed that cone to a -0.664 ns setup violation (the same
+    // structural trap as the wait_cnt decrement - fix it in the datapath,
+    // never with an SDC exception).
+    logic       x_ff;
     logic [7:0] x_sh;
     logic [2:0] x_bit;
     logic [8:0] divc;
@@ -118,6 +173,7 @@ module sd_backend #(
         if (!rst_n) begin
             x_run   <= 1'b0;
             x_done  <= 1'b0;
+            x_ff    <= 1'b0;
             sd_ck   <= 1'b0;
             sd_mosi <= 1'b1;
             divc    <= '0;
@@ -140,6 +196,7 @@ module sd_backend #(
                 if (divc == div_max) begin  // end of the high phase
                     sd_ck <= 1'b0;
                     x_rx  <= {x_rx[6:0], sd_miso};  // sample late-high
+                    x_ff  <= (x_rx[6:0] == 7'h7F) && sd_miso;
                     divc  <= '0;
                     if (x_bit == 3'd7) begin
                         x_run  <= 1'b0;
@@ -157,20 +214,19 @@ module sd_backend #(
     // ---- main FSM ------------------------------------------------------------
     typedef enum logic [5:0] {
         S_DISABLED, S_SETTLE, S_DUMMY,
+        S_PRE_TOK, S_PRE_BUSY, S_PRE_FLUSH, S_PRE_IDLE, S_PRE_END,
         S_CMD0, S_CMD0_R, S_CMD8, S_CMD8_R,
         S_CMD55, S_CMD55_R, S_CMD41, S_CMD41_R,
         S_CMD58, S_CMD58_R, S_CMD16, S_CMD16_R,
         S_CMD9, S_CMD9_R, S_CSD_TOK, S_CSD_DATA, S_CSD_END,
-        S_DEAD,
+        S_DEAD, S_RETRY,
         // shared command-frame subroutine (returns to ret_st)
         F_LEAD, F_SEND, F_R1, F_EXT,
         // serving loop
         A_IDLE, A_DISPATCH,
         A_RCMD_R, A_RTOK, A_RDATA, A_RCRC,
-        A_STOP_R, A_STOP_BUSY,
         A_WCMD_R, A_WGAP, A_WTOKEN, A_WFETCH, A_WWAIT, A_WSAMP,
         A_WLO, A_WHI, A_WCRC, A_WRESP, A_WBUSY,
-        A_WSTOP_TOK, A_WSTOP_SKIP, A_WSTOP_BUSY,
         A_TAIL, A_FIN
     } st_t;
     st_t st, ret_st;
@@ -202,13 +258,33 @@ module sd_backend #(
     // init bookkeeping
     logic         v2;                // CMD8 answered -> v2 card
     logic         sdhc;              // OCR CCS -> block addressing
-    logic [3:0]   cmd0_try;
+    logic [3:0]   init_try;
     // shared settle/ACMD41/token/busy budget. 20 bits holds the largest
     // default (BUSY_POLLS=400000 < 2^19) with margin; the full 32-bit width
     // made the decrement ripple the sys_clk critical path (a -0.646 ns setup
     // violation once the CMD18 states added load sites) - narrowing is
     // behaviour-identical since every assigned budget fits.
     logic [19:0]  wait_cnt;
+    // registered "wait_cnt is zero". The 20-bit zero-compare used to sit in
+    // the `st` next-state cone, in a dozen states at once; with the recovery
+    // preamble's four extra states that cone became the design's worst path
+    // (-0.689 ns). Testing a pre-computed flag moves the compare off the
+    // state machine's critical path and into the counter's own (flop-to-flop)
+    // one - the x_ff treatment, applied to the timeout side. Every load site
+    // must set it, every decrement must look one ahead; loads clear it
+    // unconditionally, so every budget parameter must stay NON-ZERO (a
+    // zero override would read as "not expired" for one wrap).
+    logic         wait_z;
+    // recovery-preamble budgets: a private counter, deliberately NOT another
+    // load site on wait_cnt (that decrement has been the sys_clk critical path
+    // before - see the CMD18 narrowing note above)
+    // Byte budgets for the recovery preamble AND the CS-high dummy-clock
+    // windows around it (S_DUMMY moved off wait_cnt onto this counter).
+    // Deliberately not a wait_cnt load site; pre_z is the registered zero
+    // test, for the same `st`-cone reason as wait_z.
+    logic [13:0]  pre_cnt;
+    logic         pre_z;
+    logic [2:0]   ff_run;            // consecutive idle (0xFF) bytes seen
     logic [4:0]   ccnt;              // CSD byte count
     logic [127:0] csd;
 
@@ -229,22 +305,23 @@ module sd_backend #(
     logic [27:0] r_sector;
     logic        err;
     logic [7:0]  widx;               // word index within the sector
+    // "widx is on the last word", registered with the increment. The 8-bit
+    // compare was in the `st` next-state cone (widx[7] -> st.A_RDATA was the
+    // worst sys_clk path once the FSM grew); this is the x_ff/wait_z/pre_z
+    // treatment again - wide compares belong in a flop, not at the decision.
+    logic        widx_last;
     logic        have_lo;            // read: low byte collected / CRC toggler
     logic [7:0]  lo_byte;
     logic [15:0] wword;              // write: latched buffer word
 
-    // CMD18 read-multiple stream tracking (READ side; needs a CMD12 close)
-    logic        stream_active;      // a CMD18 read stream is open (needs CMD12)
-    logic [27:0] stream_next;        // next LBA the open stream will deliver
-    // CMD25 write-multiple stream tracking (WRITE side; closed by a 0xFD token).
-    // A read and a write stream are mutually exclusive, so stop_ret is shared.
-    logic        wstream_active;     // a CMD25 write stream is open (close with 0xFD)
-    logic [27:0] wstream_next;       // next LBA the open write stream expects
-    logic        wtok_fc;            // A_WTOKEN sends 0xFC (CMD25 block) vs 0xFE (CMD24)
-    logic [27:0] last_lba;           // previous completed op's sector
-    logic        last_read;          // previous completed op was a good read
-    logic        last_write;         // previous completed op was a good write
-    st_t         stop_ret;           // where the CMD12/0xFD close returns afterward
+    // A_DISPATCH decisions, precomputed at the A_IDLE capture edge. The port
+    // contract holds bk_req and the fields until bk_ack, so sampling these
+    // one cycle early is exactly equivalent to comparing r_sector in
+    // A_DISPATCH - but it keeps a 28-bit comparator chain out of the `st`
+    // next-state cone, which the recovery-preamble states had pushed into a
+    // (marginal) setup violation. Same lesson as x_ff/wait_z: precompute
+    // wide compares into a flop, never re-derive them at the decision point.
+    logic        d_oob;              // past the card capacity
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -264,18 +341,18 @@ module sd_backend #(
             bk_we       <= 1'b0;
             v2          <= 1'b0;
             sdhc        <= 1'b0;
-            cmd0_try    <= '0;
+            init_try    <= '0;
+            widx_last   <= 1'b0;
             wait_cnt    <= SETTLE_CLKS;
+            wait_z      <= 1'b0;
+            pre_cnt       <= '0;
+            pre_z         <= 1'b0;
+            ff_run        <= '0;
+            dbg_fail      <= 4'd0;
+            dbg_flush_cap <= 1'b0;
+            dbg_retried   <= 1'b0;
             err         <= 1'b0;
-            stream_active <= 1'b0;
-            stream_next   <= '0;
-            wstream_active <= 1'b0;
-            wstream_next   <= '0;
-            wtok_fc       <= 1'b0;
-            last_lba      <= '0;
-            last_read     <= 1'b0;
-            last_write    <= 1'b0;
-            stop_ret      <= A_FIN;
+            d_oob         <= 1'b0;
         end else begin
             // pulse/level defaults; byte states re-assert x_go in their
             // non-done cycles (see the header convention)
@@ -288,22 +365,140 @@ module sd_backend #(
             case (st)
                 // ---- power-up ----------------------------------------------
                 S_SETTLE: begin
-                    if (!enable)
+                    if (!enable_q)
                         st <= S_DISABLED;
-                    else if (wait_cnt == 0) begin
-                        wait_cnt <= 80;         // dummy clocks, CS high
-                        st       <= S_DUMMY;
-                    end else
+                    else if (wait_z) begin
+                        pre_cnt <= 14'd10;      // 80 dummy clocks, CS high
+                        pre_z   <= 1'b0;
+                        st      <= S_DUMMY;
+                    end else begin
                         wait_cnt <= wait_cnt - 1'b1;
+                        wait_z   <= (wait_cnt == 20'd1);
+                    end
                 end
 
                 S_DUMMY: begin                  // >= 74 clocks, CS+MOSI high
                     if (x_done) begin
-                        if (wait_cnt <= 8) begin
-                            cmd0_try <= '0;
-                            st       <= S_CMD0;
-                        end else
-                            wait_cnt <= wait_cnt - 8;
+                        if (pre_cnt <= 14'd1)
+                            st <= S_PRE_TOK;
+                        else
+                            pre_cnt <= pre_cnt - 1'b1;
+                    end else begin
+                        x_go <= 1'b1;
+                        x_tx <= 8'hFF;
+                    end
+                end
+
+                // ---- warm-reset recovery preamble --------------------------
+                // DCLO resets US but NOT the card, so a warm reset can land
+                // mid-transfer and leave the card holding the rest of a block.
+                // It then answers the init ladder with image data: CMD0's R1
+                // poll latches a data byte with the MSB clear as R1, and one
+                // stray byte later in the ladder is worse still (S_CMD8_R
+                // reads any byte with bit 2 set as "v1 card", after which an
+                // SDHC card gets ACMD41 without HCS and never readies).
+                // So always, before CMD0: send 0xFD (stop-tran; inert unless
+                // something left a write-multiple open - its MSB is set, so it
+                // is never a command start), wait out any program-busy window,
+                // send CMD12 (closes a read-multiple; a harmless
+                // illegal-command otherwise), then flush the bus. Nothing in
+                // THIS design opens a multi-block stream any more (see the
+                // header), so the 0xFD/CMD12 pair is pure insurance - against
+                // a card left streaming by other firmware, and against our own
+                // mid-block reset case. ~25 bytes at 377 kHz on a clean card.
+                S_PRE_TOK: begin
+                    sd_cs <= 1'b0;
+                    if (x_done) begin
+                        pre_cnt <= PRE_BUSY_BYTES[13:0];
+                        pre_z   <= 1'b0;
+                        st      <= S_PRE_BUSY;
+                    end else begin
+                        x_go <= 1'b1;
+                        x_tx <= 8'hFD;
+                    end
+                end
+                // The 0xFD close of a write-multiple starts a program cycle
+                // the card may legitimately hold for ~250 ms, so this budget
+                // is time-sized (PRE_BUSY_BYTES at 377 kHz), not block-sized.
+                S_PRE_BUSY: begin
+                    if (x_done) begin
+                        if (x_ff || pre_z) begin
+                            cmd_op   <= 6'd12;
+                            cmd_arg  <= 32'h0000_0000;
+                            cmd_crc  <= 8'h01;
+                            want_ext <= 1'b0;
+                            ret_st   <= S_PRE_FLUSH;
+                            pre_cnt  <= PRE_FLUSH[13:0];
+                            pre_z    <= 1'b0;
+                            ff_run   <= '0;
+                            st       <= F_LEAD;
+                        end else begin
+                            pre_cnt <= pre_cnt - 1'b1;
+                            pre_z   <= (pre_cnt == 14'd1);
+                        end
+                    end else begin
+                        x_go <= 1'b1;
+                        x_tx <= 8'hFF;
+                    end
+                end
+                // FIXED-length flush, NO early exit. The residue being flushed
+                // is image data, and on a BK disk that data is full of 0xFF
+                // runs (the IDE layer inverts, so BK zero-filled regions are
+                // stored as 0xFF on the card) - an "exit once the bus looks
+                // idle" flush therefore stops INSIDE the residue and leaves
+                // the rest to poison CMD0 or the attach-time geometry read.
+                // PRE_FLUSH covers a whole block + token + CRC + R1 + busy.
+                S_PRE_FLUSH: begin
+                    if (x_done) begin
+                        if (pre_z) begin
+                            pre_cnt <= PRE_IDLE[13:0];
+                            pre_z   <= 1'b0;
+                            st      <= S_PRE_IDLE;
+                        end else begin
+                            pre_cnt <= pre_cnt - 1'b1;
+                            pre_z   <= (pre_cnt == 14'd1);
+                        end
+                    end else begin
+                        x_go <= 1'b1;
+                        x_tx <= 8'hFF;
+                    end
+                end
+                // ...and only THEN require the bus to actually look idle, so
+                // a card still talking is not mistaken for a quiet one.
+                // Running out of budget here is the "card would not go quiet"
+                // signal - latched in dbg_flush_cap for the board LEDs.
+                S_PRE_IDLE: begin
+                    if (x_done) begin
+                        if (x_ff)
+                            ff_run <= ff_run + 1'b1;
+                        else
+                            ff_run <= '0;
+                        if ((x_ff && ff_run == PRE_FF_RUN - 1) || pre_z) begin
+                            if (pre_z && !(x_ff && ff_run == PRE_FF_RUN - 1))
+                                dbg_flush_cap <= 1'b1;
+                            pre_cnt <= 14'd10;  // 80 CS-high clocks, see below
+                            pre_z   <= 1'b0;
+                            st      <= S_PRE_END;
+                        end else begin
+                            pre_cnt <= pre_cnt - 1'b1;
+                            pre_z   <= (pre_cnt == 14'd1);
+                        end
+                    end else begin
+                        x_go <= 1'b1;
+                        x_tx <= 8'hFF;
+                    end
+                end
+                S_PRE_END: begin
+                    // The spec wants >=74 CS-high clocks IMMEDIATELY before
+                    // CMD0, and the preamble just spent a while with CS low,
+                    // so re-open that window (80 clocks at 377 kHz = 0.2 ms)
+                    // rather than leaving S_DUMMY's separated from CMD0.
+                    sd_cs <= 1'b1;
+                    if (x_done) begin
+                        if (pre_cnt <= 1)
+                            st <= S_CMD0;
+                        else
+                            pre_cnt <= pre_cnt - 1'b1;
                     end else begin
                         x_go <= 1'b1;
                         x_tx <= 8'hFF;
@@ -323,11 +518,10 @@ module sd_backend #(
                 S_CMD0_R: begin
                     if (r1 == 8'h01)
                         st <= S_CMD8;
-                    else if (cmd0_try != CMD0_TRIES - 1) begin
-                        cmd0_try <= cmd0_try + 1'b1;
-                        st       <= S_CMD0;
-                    end else
-                        st <= S_DEAD;
+                    else begin
+                        dbg_fail <= 4'd1;
+                        st       <= S_RETRY;
+                    end
                 end
 
                 S_CMD8: begin
@@ -340,14 +534,17 @@ module sd_backend #(
                 end
                 S_CMD8_R: begin
                     wait_cnt <= ACMD41_TRIES;
+                    wait_z   <= 1'b0;
                     if (r1 == 8'h01 && ext[11:0] == 12'h1AA) begin
                         v2 <= 1'b1;
                         st <= S_CMD55;
                     end else if (r1 != 8'hFF && r1[2]) begin
                         v2 <= 1'b0;             // illegal command: v1 card
                         st <= S_CMD55;
-                    end else
-                        st <= S_DEAD;
+                    end else begin
+                        dbg_fail <= 4'd2;
+                        st       <= S_RETRY;
+                    end
                 end
 
                 S_CMD55: begin
@@ -361,8 +558,10 @@ module sd_backend #(
                 S_CMD55_R: begin
                     if (r1 == 8'h00 || r1 == 8'h01)
                         st <= S_CMD41;
-                    else
-                        st <= S_DEAD;
+                    else begin
+                        dbg_fail <= 4'd3;
+                        st       <= S_RETRY;
+                    end
                 end
                 S_CMD41: begin
                     cmd_op   <= 6'd41;
@@ -375,11 +574,14 @@ module sd_backend #(
                 S_CMD41_R: begin
                     if (r1 == 8'h00)
                         st <= S_CMD58;
-                    else if (r1 == 8'h01 && wait_cnt != 0) begin
+                    else if (r1 == 8'h01 && !wait_z) begin
                         wait_cnt <= wait_cnt - 1'b1;
+                        wait_z   <= (wait_cnt == 20'd1);
                         st       <= S_CMD55;
-                    end else
-                        st <= S_DEAD;
+                    end else begin
+                        dbg_fail <= v2 ? 4'd4 : 4'd5;
+                        st       <= S_RETRY;
+                    end
                 end
 
                 S_CMD58: begin
@@ -397,8 +599,10 @@ module sd_backend #(
                             st <= S_CMD9;
                         else
                             st <= S_CMD16;
-                    end else
-                        st <= S_DEAD;
+                    end else begin
+                        dbg_fail <= 4'd6;
+                        st       <= S_RETRY;
+                    end
                 end
 
                 S_CMD16: begin                  // byte-addressed cards only
@@ -412,8 +616,10 @@ module sd_backend #(
                 S_CMD16_R: begin
                     if (r1 == 8'h00)
                         st <= S_CMD9;
-                    else
-                        st <= S_DEAD;
+                    else begin
+                        dbg_fail <= 4'd7;
+                        st       <= S_RETRY;
+                    end
                 end
 
                 S_CMD9: begin
@@ -426,20 +632,27 @@ module sd_backend #(
                 end
                 S_CMD9_R: begin
                     wait_cnt <= TOK_POLLS;
+                    wait_z   <= 1'b0;
                     if (r1 == 8'h00)
                         st <= S_CSD_TOK;
-                    else
-                        st <= S_DEAD;
+                    else begin
+                        dbg_fail <= 4'd8;
+                        st       <= S_RETRY;
+                    end
                 end
                 S_CSD_TOK: begin
                     if (x_done) begin
                         if (x_rx == 8'hFE) begin
                             ccnt <= '0;
                             st   <= S_CSD_DATA;
-                        end else if (x_rx != 8'hFF || wait_cnt == 0)
-                            st <= S_DEAD;
-                        else
+                        end else if (!x_ff || wait_z) begin
+                            dbg_fail <= 4'd9;
+                            st       <= S_RETRY;
+                        end
+                        else begin
                             wait_cnt <= wait_cnt - 1'b1;
+                            wait_z   <= (wait_cnt == 20'd1);
+                        end
                     end else begin
                         x_go <= 1'b1;
                         x_tx <= 8'hFF;
@@ -472,8 +685,10 @@ module sd_backend #(
                         bk_media_ok <= 1'b1;
                         fast        <= 1'b1;
                         st          <= A_IDLE;
-                    end else
-                        st <= S_DEAD;
+                    end else begin
+                        dbg_fail <= 4'd10;
+                        st       <= S_RETRY;
+                    end
                 end
 
                 // ---- shared command frame ----------------------------------
@@ -530,64 +745,29 @@ module sd_backend #(
                 end
 
                 // ---- serving loop ------------------------------------------
+                // Single-block only (CMD17/CMD24). Multi-block coalescing
+                // (CMD18/CMD25) was implemented, hardware-confirmed and then
+                // REVERTED 2026-07-23 - see the module header for why.
                 A_IDLE: begin
                     if (bk_req) begin
                         bk_ack   <= 1'b1;
                         r_wr     <= bk_wr;
                         r_sector <= bk_sector;
+                        // wide compare precomputed at the capture edge: the
+                        // port holds its fields until bk_ack, so this is
+                        // equivalent to comparing r_sector in A_DISPATCH but
+                        // keeps a 28-bit comparator out of the `st` cone
+                        d_oob    <= (bk_sector >= bk_total);
                         st       <= A_DISPATCH;
                     end
                 end
                 A_DISPATCH: begin
                     err <= 1'b0;
-                    if (stream_active && !r_wr && r_sector == stream_next) begin
-                        // continuation of the open CMD18 stream: the card is
-                        // already delivering block after block - no command
-                        // frame, just poll the next data token
-                        wait_cnt <= TOK_POLLS;
-                        st       <= A_RTOK;
-                    end else if (wstream_active && r_wr
-                                 && r_sector == wstream_next) begin
-                        // continuation of the open CMD25 stream: the card is
-                        // already accepting block after block - no command
-                        // frame, just send the next 0xFC data packet
-                        wtok_fc <= 1'b1;
-                        st      <= A_WGAP;
-                    end else if (stream_active) begin
-                        // non-continuation while a READ stream is open (write /
-                        // LBA gap / oob / geometry): close it with CMD12, then
-                        // re-dispatch this same request as a fresh op
-                        cmd_op   <= 6'd12;
-                        cmd_arg  <= 32'h0000_0000;
-                        cmd_crc  <= 8'h01;
-                        want_ext <= 1'b0;
-                        ret_st   <= A_STOP_R;
-                        stop_ret <= A_DISPATCH;
-                        st       <= F_LEAD;
-                    end else if (wstream_active) begin
-                        // non-continuation while a WRITE stream is open (read /
-                        // LBA gap / oob / geometry): close it with the 0xFD
-                        // stop-tran token, then re-dispatch as a fresh op
-                        stop_ret <= A_DISPATCH;
-                        st       <= A_WSTOP_TOK;
-                    end else if (r_sector >= bk_total) begin
+                    if (d_oob) begin
                         err <= 1'b1;            // oob: complete, no SPI traffic
                         st  <= A_FIN;
                     end else begin
-                        // second contiguous op opens a multi-block stream
-                        // (reads -> CMD18, writes -> CMD25); further contiguous
-                        // ops skip the command frame. Isolated reads stay
-                        // CMD17, isolated writes stay CMD24.
-                        if (!r_wr && last_read && r_sector == last_lba + 28'd1)
-                            cmd_op <= 6'd18;
-                        else if (r_wr && last_write
-                                 && r_sector == last_lba + 28'd1)
-                            cmd_op <= 6'd25;
-                        else
-                            cmd_op <= r_wr ? 6'd24 : 6'd17;
-                        // 0xFC block token iff we are opening a CMD25 stream
-                        wtok_fc  <= r_wr && last_write
-                                    && r_sector == last_lba + 28'd1;
+                        cmd_op   <= r_wr ? 6'd24 : 6'd17;
                         // SDHC: block address; SDSC: byte address (sector*512)
                         cmd_arg  <= sdhc ? {4'b0000, r_sector}
                                          : {r_sector[22:0], 9'b0};
@@ -601,16 +781,11 @@ module sd_backend #(
                     end
                 end
 
-                // read: CMD17/CMD18 -> token -> 512 bytes -> 2 CRC bytes.
-                // For CMD18 the card streams blocks until CMD12; a
-                // continuation op re-enters at A_RTOK, skipping A_RCMD_R.
+                // read: CMD17 -> token -> 512 bytes -> 2 CRC bytes
                 A_RCMD_R: begin
                     wait_cnt <= TOK_POLLS;
+                    wait_z   <= 1'b0;
                     if (r1 == 8'h00) begin
-                        // CMD18 accepted -> the card is now read-multiple
-                        // streaming (needs a CMD12 to stop)
-                        if (cmd_op == 6'd18)
-                            stream_active <= 1'b1;
                         st <= A_RTOK;
                     end else begin
                         err <= 1'b1;
@@ -620,24 +795,17 @@ module sd_backend #(
                 A_RTOK: begin
                     if (x_done) begin
                         if (x_rx == 8'hFE) begin
-                            widx    <= '0;
+                            widx      <= '0;
+                            widx_last <= 1'b0;
                             have_lo <= 1'b0;
                             st      <= A_RDATA;
-                        end else if (x_rx != 8'hFF || wait_cnt == 0) begin
+                        end else if (!x_ff || wait_z) begin
                             err <= 1'b1;        // error token / timeout
-                            if (stream_active) begin
-                                // abandon the stream cleanly: CMD12, then finish
-                                cmd_op   <= 6'd12;
-                                cmd_arg  <= 32'h0000_0000;
-                                cmd_crc  <= 8'h01;
-                                want_ext <= 1'b0;
-                                ret_st   <= A_STOP_R;
-                                stop_ret <= A_FIN;
-                                st       <= F_LEAD;
-                            end else
-                                st <= A_TAIL;
-                        end else
+                            st  <= A_TAIL;
+                        end else begin
                             wait_cnt <= wait_cnt - 1'b1;
+                            wait_z   <= (wait_cnt == 20'd1);
+                        end
                     end else begin
                         x_go <= 1'b1;
                         x_tx <= 8'hFF;
@@ -653,8 +821,9 @@ module sd_backend #(
                             bk_wdata <= {x_rx, lo_byte};
                             bk_we    <= 1'b1;
                             have_lo  <= 1'b0;
-                            widx     <= widx + 1'b1;
-                            if (widx == 8'd255)
+                            widx      <= widx + 1'b1;
+                            widx_last <= (widx == 8'd254);
+                            if (widx_last)
                                 st <= A_RCRC;
                         end
                     end else begin
@@ -665,49 +834,17 @@ module sd_backend #(
                 A_RCRC: begin                   // discard the 2 CRC bytes
                     if (x_done) begin
                         have_lo <= ~have_lo;
-                        if (have_lo) begin
-                            // block complete: advance the stream's expected LBA
-                            // and skip the A_TAIL byte - the card streams the
-                            // next block's data token back-to-back (possibly
-                            // with zero NAC gap), which A_TAIL would consume
-                            if (stream_active) begin
-                                stream_next <= r_sector + 28'd1;
-                                st <= A_FIN;
-                            end else
-                                st <= A_TAIL;
-                        end
+                        if (have_lo)
+                            st <= A_TAIL;
                     end else begin
                         x_go <= 1'b1;
                         x_tx <= 8'hFF;
                     end
                 end
 
-                // CMD12 close: F_R1 already skipped the stuffing byte and
-                // captured R1; drain the busy window, then return
-                A_STOP_R: begin
-                    wait_cnt <= BUSY_POLLS;
-                    st       <= A_STOP_BUSY;
-                end
-                A_STOP_BUSY: begin
-                    if (x_done) begin
-                        if (x_rx == 8'hFF || wait_cnt == 0) begin
-                            stream_active <= 1'b0;
-                            st            <= stop_ret;
-                        end else
-                            wait_cnt <= wait_cnt - 1'b1;
-                    end else begin
-                        x_go <= 1'b1;
-                        x_tx <= 8'hFF;
-                    end
-                end
-
-                // write: CMD24/CMD25 -> gap -> token -> 512 bytes -> CRC -> resp
+                // write: CMD24 -> gap -> token -> 512 bytes -> CRC -> resp
                 A_WCMD_R: begin
                     if (r1 == 8'h00) begin
-                        // CMD25 accepted -> the card is now write-multiple
-                        // streaming (needs a 0xFD stop-tran token to stop)
-                        if (cmd_op == 6'd25)
-                            wstream_active <= 1'b1;
                         st <= A_WGAP;
                     end else begin
                         err <= 1'b1;
@@ -724,12 +861,12 @@ module sd_backend #(
                 end
                 A_WTOKEN: begin
                     if (x_done) begin
-                        widx <= '0;
+                        widx      <= '0;
+                        widx_last <= 1'b0;
                         st   <= A_WFETCH;
                     end else begin
                         x_go <= 1'b1;
-                        // 0xFC = CMD25 multi-block start; 0xFE = single block
-                        x_tx <= wtok_fc ? 8'hFC : 8'hFE;
+                        x_tx <= 8'hFE;          // single-block start token
                     end
                 end
                 // registered-bk_rdata fetch: address, settle, sample
@@ -752,8 +889,9 @@ module sd_backend #(
                 end
                 A_WHI: begin
                     if (x_done) begin
-                        widx <= widx + 1'b1;
-                        if (widx == 8'd255) begin
+                        widx      <= widx + 1'b1;
+                        widx_last <= (widx == 8'd254);
+                        if (widx_last) begin
                             have_lo <= 1'b0;
                             st      <= A_WCRC;
                         end else
@@ -776,6 +914,7 @@ module sd_backend #(
                 A_WRESP: begin                  // data response: xxx00101 = ok
                     if (x_done) begin
                         wait_cnt <= BUSY_POLLS;
+                        wait_z   <= 1'b0;
                         if (x_rx[4:0] != 5'b00101)
                             err <= 1'b1;
                         st <= A_WBUSY;
@@ -786,55 +925,14 @@ module sd_backend #(
                 end
                 A_WBUSY: begin                  // card holds DO low while busy
                     if (x_done) begin
-                        if (x_rx == 8'hFF || wait_cnt == 0) begin
-                            if (wait_cnt == 0 && x_rx != 8'hFF)
+                        if (x_ff || wait_z) begin
+                            if (wait_z && !x_ff)
                                 err <= 1'b1;        // busy timeout
-                            // a clean block in an open CMD25 stream advances the
-                            // expected LBA; an errored block (reject / timeout)
-                            // closes the stream cleanly with a 0xFD stop-tran
-                            if (wstream_active
-                                && (err || (wait_cnt == 0 && x_rx != 8'hFF))) begin
-                                stop_ret <= A_FIN;
-                                st       <= A_WSTOP_TOK;
-                            end else begin
-                                if (wstream_active)
-                                    wstream_next <= r_sector + 28'd1;
-                                st <= A_TAIL;
-                            end
-                        end else
+                            st <= A_TAIL;
+                        end else begin
                             wait_cnt <= wait_cnt - 1'b1;
-                    end else begin
-                        x_go <= 1'b1;
-                        x_tx <= 8'hFF;
-                    end
-                end
-
-                // CMD25 close: send the 0xFD stop-tran token, one gap byte, then
-                // drain the card's busy window and return (stream cleared)
-                A_WSTOP_TOK: begin
-                    if (x_done)
-                        st <= A_WSTOP_SKIP;
-                    else begin
-                        x_go <= 1'b1;
-                        x_tx <= 8'hFD;
-                    end
-                end
-                A_WSTOP_SKIP: begin             // one byte before the card busies
-                    if (x_done) begin
-                        wait_cnt <= BUSY_POLLS;
-                        st       <= A_WSTOP_BUSY;
-                    end else begin
-                        x_go <= 1'b1;
-                        x_tx <= 8'hFF;
-                    end
-                end
-                A_WSTOP_BUSY: begin
-                    if (x_done) begin
-                        if (x_rx == 8'hFF || wait_cnt == 0) begin
-                            wstream_active <= 1'b0;
-                            st             <= stop_ret;
-                        end else
-                            wait_cnt <= wait_cnt - 1'b1;
+                            wait_z   <= (wait_cnt == 20'd1);
+                        end
                     end else begin
                         x_go <= 1'b1;
                         x_tx <= 8'hFF;
@@ -853,21 +951,44 @@ module sd_backend #(
                 A_FIN: begin
                     bk_done  <= 1'b1;
                     bk_error <= err;
-                    // remember this op so the next contiguous op can escalate
-                    // to CMD18 (read) / CMD25 (write); a failed op breaks the run
-                    last_lba   <= r_sector;
-                    last_read  <= (!r_wr) && (!err);
-                    last_write <= r_wr && (!err);
-                    st         <= A_IDLE;
+                    st       <= A_IDLE;
                 end
 
                 // ---- parking states ----------------------------------------
+                // Whole-ladder retry arbiter. EVERY init-stage failure lands
+                // here, not just CMD0's: after a warm reset the bus can still
+                // carry residue, and one stray byte anywhere in the ladder is
+                // fatal in a way that looks nothing like a CMD0 failure -
+                // S_CMD8_R in particular reads any byte with bit 2 set as
+                // "illegal command = a v1 card", after which an SDHC card is
+                // sent ACMD41 WITHOUT HCS and never leaves idle. Re-running
+                // the whole recovery is what a second reset press does on the
+                // board, and it is the only cure that does not depend on
+                // guessing which byte got corrupted. v2/sdhc are cleared so
+                // each attempt re-types the card from scratch.
+                S_RETRY: begin
+                    if (init_try != INIT_TRIES - 1) begin
+                        init_try    <= init_try + 1'b1;
+                        dbg_retried <= 1'b1;
+                        wait_cnt    <= SETTLE_CLKS;
+                        wait_z      <= 1'b0;
+                        v2          <= 1'b0;
+                        sdhc        <= 1'b0;
+                        // S_CMD0 left CS LOW ("for the session"), but S_DUMMY
+                        // is a CS-HIGH window by definition - raise it here or
+                        // the retry's dummy clocks are not dummy clocks
+                        sd_cs       <= 1'b1;
+                        st          <= S_SETTLE;
+                    end else
+                        st <= S_DEAD;
+                end
+
                 S_DEAD: begin                   // media absent until next DCLO
                     sd_cs <= 1'b1;
                 end
                 S_DISABLED: ;
 
-                default: st <= S_DEAD;
+                default: begin dbg_fail <= 4'd15; st <= S_RETRY; end
             endcase
         end
     end

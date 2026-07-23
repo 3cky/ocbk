@@ -16,6 +16,16 @@
 //  on the wire the LOW byte of each word travels first - the raw-image
 //  little-endian convention).
 //
+//  Two bytes the host's warm-reset recovery preamble sends unconditionally
+//  are accepted as legal-but-inert rather than flagged, exactly as a real
+//  card treats them: a 0xFD stop-tran with no write stream open (MSB set,
+//  so never a command start) and a CMD12 with no read stream open (answered
+//  R1=0x04, illegal command). Both are counted in their own
+//  stoptok_idle_cnt/cmd12_idle_cnt so the stream legs' exact cmd12_cnt and
+//  wm_stop_cnt deltas still mean what they meant. The idle CMD12 does NOT
+//  drop a queued single-block transfer - flushing that residue is the
+//  preamble's job, and leg 6c depends on it.
+//
 //  Model-as-checker: protocol violations (wrong CMD0/CMD8 CRC, a bare
 //  CMD41 without CMD55, a data/CSD command before init completes, a
 //  misaligned SDSC byte address, an out-of-capacity sector, a CMD16 with
@@ -34,7 +44,12 @@
 //
 //  Error injection plusargs: +noinit (ACMD41 never ready), +rderr (reads
 //  answer an error token instead of data), +wrrej (writes rejected with
-//  the CRC-error data response 0x0D and NOT committed).
+//  the CRC-error data response 0x0D and NOT committed), +cmd0busy (the
+//  card answers no CMD0 until CMD0_BUSY_UNTIL - a still-busy card, which
+//  only a host that re-runs its whole recovery between attempts outlasts),
+//  +cmd8junk (an SDHC card whose FIRST CMD8 answers illegal-command, so a
+//  host that does not re-run the whole ladder mistypes it v1 and hangs in
+//  ACMD41 forever).
 // ============================================================================
 `timescale 1ns/1ps
 module sd_model #(
@@ -56,6 +71,19 @@ module sd_model #(
     reg         sdhc;
     reg [31:0]  capacity;           // sectors
     reg         inj_noinit, inj_rderr, inj_wrrej;
+    reg         inj_cmd0busy;       // CMD0 unanswered until CMD0_BUSY_UNTIL
+    // +cmd8junk: the FIRST CMD8 answers "illegal command" even though this is
+    // an SDHC card - what one stray residue byte does to CMD8's response after
+    // a warm reset. A host that believes it types the card v1, sends ACMD41
+    // WITHOUT HCS, and the card then never leaves idle: fatal, and nothing
+    // like a CMD0 failure. Only re-running the WHOLE ladder recovers.
+    reg         inj_cmd8junk;
+    // +cmd0busy models the real-card fault this recovery exists for: a card
+    // that is still busy (a program cycle after a stop-tran can run to
+    // ~250 ms) and answers NOTHING until it is done. Sized so that only a
+    // host which re-runs its WHOLE recovery between attempts gets there in
+    // time - a bare CMD0 re-send loop is far too quick and gives up first.
+    localparam  CMD0_BUSY_UNTIL = 25_000_000;   // ns
 
     // transcript counters (tb-read)
     integer dummy_clocks;           // CS-high clocks before the first command
@@ -64,6 +92,10 @@ module sd_model #(
     integer cmd16_cnt, cmd9_cnt, rd_cnt, wr_cnt;
     integer cmd18_cnt, cmd12_cnt;   // read-multiple + stop-transmission
     integer cmd25_cnt, wm_stop_cnt; // write-multiple + its 0xFD stop-tran tokens
+    // recovery-preamble traffic, counted apart so the stream legs' exact
+    // cmd12_cnt/wm_stop_cnt deltas keep their meaning: an inert 0xFD (no write
+    // stream open) and a CMD12 outside a read-multiple stream
+    integer stoptok_idle_cnt, cmd12_idle_cnt;
     integer cmd16_sdhc;             // CMD16 seen on an SDHC card (must stay 0)
     integer prot_errors;
 
@@ -82,11 +114,14 @@ module sd_model #(
         inj_noinit = $test$plusargs("noinit");
         inj_rderr  = $test$plusargs("rderr");
         inj_wrrej  = $test$plusargs("wrrej");
+        inj_cmd0busy = $test$plusargs("cmd0busy");
+        inj_cmd8junk = $test$plusargs("cmd8junk");
         dummy_clocks = 0; cmd_total = 0;
         cmd0_cnt = 0; cmd8_cnt = 0; cmd55_cnt = 0; acmd41_cnt = 0;
         cmd58_cnt = 0; cmd16_cnt = 0; cmd9_cnt = 0; rd_cnt = 0; wr_cnt = 0;
         cmd18_cnt = 0; cmd12_cnt = 0;
         cmd25_cnt = 0; wm_stop_cnt = 0;
+        stoptok_idle_cnt = 0; cmd12_idle_cnt = 0;
         cmd16_sdhc = 0; prot_errors = 0;
         idle_state = 0; init_done = 0; app_pend = 0; acmd_tries = 0;
         reading_multi = 0; rsec_str = 0; writing_multi = 0;
@@ -194,6 +229,13 @@ module sd_model #(
                         arg     = 0;
                         argi    = 0;
                         mstate  = MS_ARG;
+                    end else if (b == 8'hFD) begin
+                        // stop-tran token with no write-multiple stream open:
+                        // a real card ignores it (MSB set = never a command
+                        // start). The host's recovery preamble sends one
+                        // unconditionally after a reset, when the card's state
+                        // is unknowable - inert here, counted separately.
+                        stoptok_idle_cnt = stoptok_idle_cnt + 1;
                     end else if (b !== 8'hFF)
                         prot_err("non-FF garbage byte outside a command");
                 end
@@ -352,13 +394,18 @@ module sd_model #(
                     idle_state = 1;
                     init_done  = 0;
                     acmd_tries = 0;
-                    push_r1(8'h01);
+                    // +cmd0busy: no response at all while the card is busy
+                    // (see CMD0_BUSY_UNTIL) - the automatic equivalent of the
+                    // user's second reset press is what must get past this.
+                    if (!(inj_cmd0busy && $time < CMD0_BUSY_UNTIL))
+                        push_r1(8'h01);
                 end
                 6'd8: begin
                     cmd8_cnt = cmd8_cnt + 1;
                     if (arg != 32'h0000_01AA || crcb !== 8'h87)
                         prot_err("CMD8 arg/CRC wrong (needs 0x1AA/0x87)");
-                    if (sdhc) begin                 // v2 card: R7 echo
+                    if (sdhc && !(inj_cmd8junk && cmd8_cnt == 1)) begin
+                                                    // v2 card: R7 echo
                         push_r1(8'h01);
                         oq_push(8'h00); oq_push(8'h00);
                         oq_push(8'h01); oq_push(8'hAA);
@@ -434,14 +481,23 @@ module sd_model #(
                     rsec_str = sec + 1;
                 end
                 6'd12: begin                        // stop transmission
-                    cmd12_cnt = cmd12_cnt + 1;
-                    if (!reading_multi)
-                        prot_err("CMD12 outside a read-multiple stream");
-                    reading_multi = 0;
-                    oq_rd = 0; oq_wr = 0;           // drop the streaming block
-                    push_r1(8'h00);                 // stuff byte(s) + R1
-                    for (i = 0; i < BUSY_BYTES; i = i + 1)
-                        oq_push(8'h00);             // busy, then FF (empty q)
+                    if (!reading_multi) begin
+                        // CMD12 with no stream open: legal traffic, not an
+                        // error - the host's recovery preamble sends one after
+                        // every reset. A real card just answers R1 with the
+                        // illegal-command bit. Counted apart from cmd12_cnt,
+                        // and it does NOT drop a queued single-block transfer:
+                        // flushing that residue is the preamble's own job.
+                        cmd12_idle_cnt = cmd12_idle_cnt + 1;
+                        push_r1(8'h04);
+                    end else begin
+                        cmd12_cnt = cmd12_cnt + 1;
+                        reading_multi = 0;
+                        oq_rd = 0; oq_wr = 0;       // drop the streaming block
+                        push_r1(8'h00);             // stuff byte(s) + R1
+                        for (i = 0; i < BUSY_BYTES; i = i + 1)
+                            oq_push(8'h00);         // busy, then FF (empty q)
+                    end
                 end
                 6'd24: begin
                     wr_cnt = wr_cnt + 1;

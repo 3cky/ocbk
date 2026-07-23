@@ -159,8 +159,28 @@ module qbus_mem #(
     logic [ADDR_BITS-1:0] mphys;
     logic                 bank_wr;
     logic                 m_smk_ro, m_smk_wo;
+    // smk_en re-registered locally - the model_bk11_q treatment, same reasons
+    // (see the CLAUDE.md "a quasi-static signal with big fanout still costs
+    // real setup time" gotcha). DIP 8 is latched in ocbk_top during the DCLO
+    // hold and fans out across the mapper translate, the fdd/ide decodes and
+    // the top-level muxes, so the fitter routes it far; that route landing in
+    // the mapper's translate put smk_en -> cpu_sdram_dp|addr_o/wdata_o at
+    // -0.171..-0.314 ns across builds. This flop is the ONLY consumer of the
+    // raw port inside qbus_mem, so the long route now ends at one flop and
+    // everything downstream is fed from a register the fitter places nearby.
+    // The 1-cycle latency cannot matter: smk_en only changes during a DCLO
+    // hold, CPU parked, mapper in reset, thousands of sclk before release.
+    // Registered HERE and NOT inside mem_mapper on purpose: run_mapper.sh
+    // flips smk_en and compares the decode COMBINATIONALLY (#1, no clock
+    // edge) against its reference instance, and it drives the mapper's port
+    // directly - so the mapper keeps its combinational contract untouched.
+    logic smk_en_q;
+    always_ff @(posedge sclk or posedge reset)
+        if (reset) smk_en_q <= 1'b0;
+        else       smk_en_q <= smk_en;
+
     mem_mapper #(.ADDR_BITS(ADDR_BITS)) u_map (
-        .sclk(sclk), .rst(reset), .model_bk11(model_bk11), .smk_en(smk_en),
+        .sclk(sclk), .rst(reset), .model_bk11(model_bk11), .smk_en(smk_en_q),
         .sync_n(sync_n), .dout_n(dout_n), .wtbt_n(wtbt_n), .sel1_n(sel1_n),
         .ad_true(~ad_n), .addr0(addr[0]), .bank_wr(bank_wr),
         .addr(addr), .kind(mkind), .phys(mphys), .smk_ro(m_smk_ro),
@@ -277,7 +297,7 @@ module qbus_mem #(
     // write order), so a mode write can never re-map its own in-flight
     // cycle. With the SMK absent the decode is dead and 177130 stays plain
     // ROM: reads return the MSTD word, writes trap (sim/romwr).
-    wire sel_fdd = model_bk11 && smk_en && !sync_n
+    wire sel_fdd = model_bk11 && smk_en_q && !sync_n
                    && (addr[15:2] == 14'(16'o177130 >> 2));
 
     // ---- 177740-177757: SMK512 IDE task file (Phase-8 IDE increment) ------
@@ -292,7 +312,7 @@ module qbus_mem #(
     // reply). The block sits outside cpu_blk/kbd_blk, so the carve-outs
     // are not involved. Reply = fixed N_IDE (N_ROM family per the I/O-page
     // rule; placeholder - see qbus_pkg).
-    wire sel_ide = model_bk11 && smk_en && !sync_n
+    wire sel_ide = model_bk11 && smk_en_q && !sync_n
                    && (addr[15:4] == 12'hFFE);
 
     // ROM reads are always served from SDRAM through cpu_sdram_dp (port 0).

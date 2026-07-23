@@ -59,7 +59,7 @@
 //  A same-cycle new
 //  COMMAND/SRST while a prefetch is in flight routes through E_FLUSH,
 //  which waits out the outstanding op (bk_out) before re-pinning both
-//  banks. WRITE and SD multi-block (CMD18/25) stay strictly sequential.
+//  banks. WRITE stays strictly sequential.
 //  All on sclk - the SD engine is sys_clk too, so there is no CDC here.
 // ============================================================================
 

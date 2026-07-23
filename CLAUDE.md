@@ -37,18 +37,14 @@ PIN_61–66); pLed[7] is the drive-access LED (see the SMK512 bullet).
 (fetch sector N+1 while the CPU drains N — the 2-bank buffer split with
 an E_FLUSH mid-command interlock; `src/smk_ide.sv` + the `sim/ide`
 oracles; the board boots and multi-sector loads run faster).
-**Tier-2 SD multi-block READ (CMD18) is done, CONFIRMED ON HARDWARE
-2026-07-21: the board boots** (a contiguous read run is coalesced
-backend-only into one CMD18 read-multiple stream closed by CMD12; the
-engine is untouched — `src/sd_backend.sv` + the `sim/ide` SD oracles).
-**Tier-2 SD multi-block WRITE (CMD25) is done, CONFIRMED ON HARDWARE
-2026-07-22**: the write mirror of the CMD18 read path — a
-contiguous write run is coalesced backend-only into one CMD25
-write-multiple stream (second contiguous write opens CMD25, further
-contiguous writes skip the command frame and send another 0xFC-tokened
-block, the 0xFD stop-tran token closes it before any non-contiguous op
-or on a mid-stream error); engine untouched, `smk_ide` bit-identical
-(`src/sd_backend.sv` + the `sim/ide` SD oracles, +4 mutations).
+**Tier-2 SD multi-block (CMD18/CMD25) was implemented, confirmed on
+hardware, then REVERTED 2026-07-23** — it bought ~2% of the SD-side time
+on a path the tier-1 prefetch already hides behind the CPU drain, and
+cost a real fault (streams were closed lazily, so one stayed open across
+idle time, a warm reset left the card streaming, and the machine needed
+a SECOND reset press to find its disk). The backend is single-block
+CMD17/CMD24 again; the warm-reset recovery preamble and the whole-ladder
+init retry stay as hardening. See the `sd_backend` bullet.
 **The long-standing pseudo-static `model_bk11 → mapper` timing cone is
 FIXED, CONFIRMED ON HARDWARE 2026-07-22** by re-registering
 `model_bk11` inside `mem_mapper`
@@ -246,33 +242,38 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   data-exact incl. past-image sectors, oob completing with ZERO SPI
   traffic, write/store-check/readback, and the +noinit/+rderr/+wrrej
   injection legs — at the REAL dividers (/256 init, /8 data). **Leg 4 is
-  the tier-2 CMD18 read-multiple leg:** a contiguous read run is coalesced
-  into ONE CMD18 stream — the second contiguous read opens CMD18, further
-  contiguous reads skip the command frame (data still exact per block), a
-  non-contiguous read closes with ONE CMD12 then a fresh CMD17, and an
-  isolated read never opens CMD18 (counted via the model's `cmd18_cnt`/
-  `cmd12_cnt`/`rd_cnt`; leg 1's 0→1 pair also opens+closes a CMD18
-  incidentally). **Leg 5 is the tier-2 CMD25 write-multiple leg** (the
-  write mirror of leg 4): a contiguous write run is coalesced into ONE
-  CMD25 stream — the second contiguous write opens CMD25, further
-  contiguous writes skip the command frame (each 0xFC-tokened block
-  committed to the model's backing store word-exact), and a following
-  read closes the stream with ONE 0xFD stop-tran token then a fresh
-  CMD17 (counted via `cmd25_cnt`/`wr_cnt`/`wm_stop_cnt`; store + readback
-  checked against `wpat()`). **Mutation-tested ×16** (run_sd.sh header:
+  the warm-reset recovery leg:** `rst_n` is pulsed with the CARD LEFT
+  UNTOUCHED (what DCLO does on the board), landing MID-single-block-read,
+  so the card still holds ~half a block that the preamble must flush
+  before CMD0 — and that sector deliberately opens with a long 0xFF run
+  (what a BK disk really looks like on the card, since the IDE layer
+  inverts), which is the case a flush that stops when the bus merely
+  LOOKS idle gets wrong. The leg also asserts `dbg_retried == 0`: ONE
+  recovery pass must suffice, so the automatic retry cannot hide a weak
+  recovery. Two injection runs cover the retry itself — **`+cmd0busy`**
+  (the card answers no CMD0 for 25 ms; only a host that re-runs its
+  WHOLE recovery between attempts outlasts it) and **`+cmd8junk`** (an
+  SDHC card whose first CMD8 answers illegal-command: a host that only
+  retries CMD0 types it v1, sends ACMD41 without HCS and stalls forever
+  — the mechanism that made the board need two reset presses).
+  **Mutation-tested ×14** (run_sd.sh header:
   SDSC ×512, CMD8 CRC, HCS, capacity off-by-one both formulas, LE byte
-  swap, commit settle, R1 poll, oob guard, dummy clocks; + tier-2 reads:
-  CMD18 never opened, CMD12 close skipped, stream_next off-by-one; +
-  tier-2 writes: CMD25 never opened, 0xFD close skipped, wstream_next
-  off-by-one, wtok wrong — all fail). `sim/ide/run.sh`
+  swap, commit settle, R1 poll, oob guard, dummy clocks; + the recovery:
+  preamble removed, flush removed, flush exits early, recovery not
+  re-run, CMD0-only retry — all fail). The preamble's 0xFD/CMD12 pair is
+  deliberately NOT mutation-covered, and the header says so out loud:
+  since the revert nothing in this design can open a multi-block stream,
+  so no leg can kill their removal — they are insurance against a card
+  left streaming by other firmware. `sim/ide/run.sh`
   additionally re-runs the ENTIRE smk_ide_tb leg set with `-DSD_STACK`
   (`sd_harness` swaps the disk model for the real sd_backend+sd_model
   stack; sim-speed /2 dividers there — the ratios are run_sd.sh's job;
   +sdsc because CSDv1 encodes the tb totals 640/2016 exactly) — the
-  decisive engine+backend integration pass, and leg 6b there additionally
-  asserts the engine's COUNT=4 chain is coalesced into a CMD18 stream on
-  the wire (`u_disk.u_card.cmd18_cnt` up) while `ack_cnt` stays 4 (the
-  engine still issues one bk_req per sector — coalescing is backend-only).
+  decisive engine+backend integration pass. It earns that name: it is
+  what caught the `enable_q` reset-value bug (an enable registered for
+  timing reset to 0, so S_SETTLE's first evaluation parked the backend
+  in the DEAD-END `S_DISABLED` state on every reset, card present or
+  not) after run_sd.sh alone had been run and passed.
 - `sim/bk11/run.sh` — the Phase-7 BK-0011M SoC **functional** oracle
   (data-checking, NOT a timing golden — ref037 keeps the timing-reference
   meaning): the `mem/gen_bk11_test.py` program (pinned parks: success
@@ -782,41 +783,67 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   pDac_SR class of intentional pad tri-state) holds the raw AltPro
   image dd'd at card LBA 0 (`gen_ide_image.py` also emits the dd-able
   `ide_image.bin`); `bk_total` = the FULL card capacity from the CSD.
-  Init ladder CMD0/CMD8/ACMD41(HCS)/CMD58/(CMD16)/CMD9 at /256 =
+  Init ladder: >=74 CS-high dummy clocks, the **warm-reset recovery
+  preamble** (see the next bullet), then CMD0/CMD8/ACMD41(HCS)/CMD58/
+  (CMD16)/CMD9 at /256 =
   377 kHz, then /8 = 12.08 MHz data (the epcs_boot shifter idiom:
   mode 0, MSB first, launch at the fall, sample late-high); SDSC
   byte- AND SDHC/SDXC block addressing, both CSD capacity formulas;
   CMD17/CMD24 single-block; SPI-default CRC policy (real CRCs only on
-  CMD0/CMD8). **Tier-2 CMD18 read-multiple (CONFIRMED ON HARDWARE
-  2026-07-21 — the board boots):** a run of
-  contiguous read requests (the engine issues one bk_req per sector at
-  N, N+1, N+2 …) is coalesced backend-only into a single CMD18 stream —
-  the second contiguous read opens CMD18, further contiguous reads skip
-  the command frame and just poll the next data token (A_TAIL is skipped
-  between streaming blocks — a real card may send the token with zero NAC
-  gap), and CMD12 (STOP_TRANSMISSION) closes the stream before any
-  non-contiguous op or on a mid-stream error. Isolated/scattered reads
-  stay CMD17 (no dangling stream). **Tier-2 CMD25 write-multiple
-  (CONFIRMED ON HARDWARE 2026-07-22):** the write mirror — a contiguous
-  write run is coalesced backend-only into ONE CMD25 stream (second
-  contiguous write opens CMD25, further contiguous writes skip the
-  command frame and send another **0xFC**-tokened block; the **0xFD**
-  stop-tran data token — NOT a command — closes it before any
-  non-contiguous op or on a mid-stream error). Isolated writes stay
-  CMD24; the read/write streams are mutually exclusive so `stop_ret` is
-  shared. The engine (`smk_ide`) is UNTOUCHED — the hardware-confirmed
-  tier-1 prefetch, its unit legs, and `run_soc.sh` stay bit-identical;
-  the escalate-on-second policy and both closes live entirely in
-  `sd_backend` (`stream_active`/`stream_next` + `wstream_active`/
-  `wstream_next`/`wtok_fc`/`last_*` regs, `A_STOP_*`/`A_WSTOP_*` states).
-  **STA gotcha (fixed):** the
-  CMD18 states added load sites to the 32-bit `wait_cnt`, making its
-  decrement ripple the sys_clk critical path (−0.646 ns setup) — narrowed
-  `wait_cnt` to 20 bits (holds the 400000 budget; behaviour-identical),
-  the same structural cure as the sdram_ctrl counter split; post-fix
-  setup +0.330 / TNS 0, 6,957 LE. All sys_clk — no CDC on the seam; reset DCLO-only like
-  the engine (card re-init at power-on AND warm reset = "insert card,
-  press reset" — the slot has NO card-detect pin); enable-gated, so a
+  CMD0/CMD8); CMD17/CMD24 single-block only. All sys_clk — no CDC on the
+  seam; reset DCLO-only like the engine (card re-init at power-on AND
+  warm reset = "insert card, press reset" — the slot has NO card-detect
+  pin).
+  **TIER-2 MULTI-BLOCK (CMD18/CMD25) WAS REVERTED 2026-07-23** after
+  being implemented and hardware-confirmed (2026-07-21/22). It coalesced
+  a contiguous run into one streamed transfer, saving the ~10-byte
+  command frame per sector — ~7 µs against a 342 µs block at the /8 data
+  clock, i.e. **~2%**. That 2% is invisible: the BK drains 256 words
+  through the task file at 4.03 MHz (~500–750 µs per sector), so the
+  DRAIN is the bottleneck and the tier-1 prefetch already hides the whole
+  fetch behind it. Against that it cost a real fault — streams were
+  closed LAZILY (only when the next op turned out non-contiguous), so one
+  stayed open across idle time, a warm reset left the card streaming
+  (DCLO resets us, not the card), and the BIOS could not find the drive
+  until a SECOND reset press. Chasing that cost a recovery preamble, a
+  whole-ladder retry, an idle-close timer, four structural timing fixes
+  and ~150 LE. **If it is ever revisited: close the stream when the
+  OPERATION ends** — ao486's `rtl/soc/driver_sd/card_read.v` issues CMD12
+  on the last sector of every read, so a stream never outlives the
+  transfer — not lazily. (That driver is native 4-bit SD, where responses
+  ride a separate CMD line and streaming data cannot corrupt them; SPI
+  shares MISO between data and responses, which is why this whole failure
+  class exists here and not there.)
+  **WARM-RESET RECOVERY PREAMBLE + WHOLE-LADDER RETRY (kept from the
+  tier-2 episode):** DCLO resets US but NOT the card, so a warm reset can
+  land mid-transfer and leave the card holding the rest of a block. It
+  then answers the init ladder with image data, and ONE stray byte
+  anywhere in the ladder is fatal — `S_CMD0_R` mis-reads R1, and worse,
+  `S_CMD8_R` reads any byte with bit 2 set as "illegal command = a v1
+  card", after which an SDHC card gets ACMD41 WITHOUT HCS and by spec
+  never leaves idle. Cure, before CMD0: send **0xFD** (stop-tran; inert
+  unless something left a write-multiple open — MSB set, so never a
+  command start), wait out any program-busy window (`PRE_BUSY_BYTES`,
+  time-sized at ~255 ms = the SD write timeout), send **CMD12** (closes a
+  read-multiple; a harmless illegal-command otherwise), then **flush a
+  FIXED `PRE_FLUSH`=1100 bytes** — a whole block + token + CRC + R1 +
+  busy — before waiting for the bus to look idle (`PRE_IDLE`/
+  `PRE_FF_RUN`). The fixed drain is load-bearing: the residue is image
+  data, and on a BK disk that data is full of 0xFF runs (the IDE layer
+  inverts, so BK zero-filled regions are stored as 0xFF), so an
+  "exit once the bus looks idle" flush stops INSIDE the residue. Then
+  ≥74 CS-high clocks again, immediately before CMD0. States `S_PRE_*`,
+  with a private `pre_cnt`/`pre_z` deliberately NOT another `wait_cnt`
+  load site. **`S_RETRY`**: EVERY init-stage failure (not just CMD0's)
+  re-runs the whole recovery, up to `INIT_TRIES`=8, clearing `v2`/`sdhc`
+  so each attempt re-types the card — the automatic equivalent of the
+  second reset press, and the only cure that does not depend on guessing
+  which byte got corrupted. `dbg_fail` carries WHERE init died (1 CMD0 …
+  5 ACMD41-stalled-as-v1 … 10 CSD), available for LED bring-up.
+  Oracle: `sim/ide/run_sd.sh` leg 4 + the `+cmd0busy`/`+cmd8junk`
+  injections, mutations 10–14; the model gained two real-card tolerances
+  (an inert 0xFD and a CMD12 with no stream open, counted apart).
+  Enable-gated, so a
   stock machine never clocks the card. A failed/absent-card init parks
   media-absent = exactly the old increment-(a) tie-off; data-op errors
   complete done+error (the engine ignores them — the BkEmu rc rule;
@@ -824,12 +851,24 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   (a design-review catch — the bug would have shifted every command
   frame): a state asserts the byte engine's `x_go`/`x_tx` only in
   NON-`x_done` cycles, so a state change never launches the next byte
-  with the old state's data. **STA note (CMD25, 2026-07-22):** the
-  A_WSTOP states added load/decrement sites to `wait_cnt` but its paths
-  stayed positive (+0.14 ns); the build's one −0.230 ns setup violation
-  was the **pseudo-static `model_bk11 → mapper`** cone, since FIXED at
-  the source (see the mem_mapper bullet) — sys_clk now +0.420 ns / TNS 0
-  with the worst path back inside `sd_backend`. 7,025 LE.
+  with the old state's data. **STA — the `st` next-state cone is this
+  module's chronic critical path** (2026-07-23): every wide compare
+  tested at a state decision lands in it, and the FSM is big. Cures, all
+  the same shape — precompute into a flop, never re-derive at the
+  decision point, and NEVER reach for an SDC exception: `x_ff` ("the byte
+  received was 0xFF", computed in the byte engine), `wait_z` (the 20-bit
+  timeout zero-test), `pre_z`, `widx_last` (the 8-bit last-word test),
+  and `d_oob` (the 28-bit capacity compare, precomputed at the A_IDLE
+  capture edge — legal because the port holds its fields until bk_ack).
+  Two quasi-static signals needed the `model_bk11_q` treatment as well:
+  `smk_en_q` in **qbus_mem** (registered in the PARENT, not in
+  mem_mapper, because `run_mapper.sh` flips smk_en and compares the
+  decode combinationally with `#1`) and `enable_q` here. **`enable_q`
+  must reset to 1**, not 0: `S_SETTLE` parks in the DEAD-END `S_DISABLED`
+  the moment it sees `!enable_q`, and it is evaluated on the first cycle
+  out of reset — resetting that flop to 0 disabled the backend on every
+  reset even with a card present (caught by the `-DSD_STACK` leg).
+  Post-fix sys_clk +0.572 ns / TNS 0.
   **Still deferred:** bk10+SMK, the SMK-RAM
   `ram_init` pattern, real data CRC16, MMC cards, and
   `N_EXT`/`N_SMKREG`/`N_IDE` recalibration (reference-tb-first).

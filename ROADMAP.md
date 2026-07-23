@@ -672,15 +672,11 @@ is not a single peripheral:
   task-file registers still advance at each sector's drain-start (never at
   a prefetch's own bk_done), and a mid-command new COMMAND/SRST routes
   through `E_FLUSH`, which waits out the outstanding op (`bk_out`) before
-  re-pinning both banks. (**Tier-2 SD multi-block READ (CMD18) is DONE,
-  CONFIRMED ON HARDWARE 2026-07-21** — a contiguous read run is coalesced backend-only into one
-  CMD18 read-multiple stream closed by CMD12; the engine is untouched so
-  tier-1 stays bit-identical. **Tier-2 CMD25 write-multiple is DONE,
-  CONFIRMED ON HARDWARE 2026-07-22** — the write mirror: a contiguous
-  write run coalesced backend-only into one CMD25 stream, blocks tokened
-  0xFC and closed by the 0xFD stop-tran token (not CMD12); engine still
-  bit-identical. Tier-3 speculative cross-command read-ahead remains
-  deferred.) LBA math rides a serial
+  re-pinning both banks. (**Tier-2 SD multi-block (CMD18/CMD25) was built,
+  hardware-confirmed and then REVERTED 2026-07-23** — see the sd_backend
+  bullet below for the arithmetic; tier-1 prefetch is the increment that
+  actually mattered, and it is untouched. Tier-3 speculative
+  cross-command read-ahead is not planned.) LBA math rides a serial
   shift-add multiplier (single-cycle products broke sys_clk closure; the
   engine has bus-scale time budgets). Hardware shipped (a) with the port
   tied "no media" (DIP-8-ON showed the BIOS a cleanly ABSENT drive
@@ -713,43 +709,50 @@ is not a single peripheral:
   at /256 = 377 kHz then /8 = 12.08 MHz data; **SDSC and SDHC/SDXC**
   (byte vs block addressing, CSDv1 AND CSDv2 capacity → bk_total = the
   full card capacity); CMD17/CMD24 single-block read/write, SPI-default
-  CRC policy. The **raw AltPro image is dd'd at card LBA 0**
+  CRC policy. A **warm-reset recovery preamble** (0xFD stop-tran +
+  CMD12 + a fixed 1100-byte flush) runs before CMD0 on every init, and
+  **every** init-stage failure re-runs the whole recovery (`S_RETRY`, 8
+  attempts): DCLO resets the host but not the card, so a reset landing
+  mid-transfer leaves the card holding the rest of a block, and one
+  stray byte anywhere in the ladder is fatal — CMD8 in particular reads
+  any byte with bit 2 set as "v1 card", after which an SDHC card gets
+  ACMD41 without HCS and never readies. The **raw AltPro image is dd'd at card LBA 0**
   (`gen_ide_image.py` emits the dd-able `ide_image.bin`; any
   BkEmu-attachable image works as-is). Reset DCLO-only = card re-init at
   power-on AND warm reset (no card-detect pin: insert card, press
   reset); a failed/absent-card init parks media-absent — the (a)
   behaviour exactly. Oracles: `sim/ide/run_sd.sh` (unit: the
   protocol-checking `sd_model` card, both personalities, injection
-  legs, plus the **tier-2 CMD18 read-multiple leg** — **mutation-tested
-  ×12**), the `sim/ide/run.sh` **`-DSD_STACK` second pass** (EVERY
-  transcribed BkEmu smk_ide_tb leg re-run over the real SPI stack via
-  `sd_harness` — the decisive integration oracle, leg 6b there now also
-  asserting the COUNT=4 chain is coalesced into a CMD18 stream with
-  `ack_cnt` still 4) and `sim/run_boot_check.sh +smk +sdspi` (the real
+  legs, plus the **warm-reset recovery leg** and the `+cmd0busy` /
+  `+cmd8junk` retry injections — **mutation-tested ×14**), the
+  `sim/ide/run.sh` **`-DSD_STACK` second pass** (EVERY transcribed BkEmu
+  smk_ide_tb leg re-run over the real SPI stack via `sd_harness` — the
+  decisive integration oracle) and `sim/run_boot_check.sh +smk +sdspi` (the real
   BIOS boot with attach riding the full card-init + SPI path). Fit 6,767
   LE (56 %), STA met TNS 0 (worst +0.077 ns on the quasi-static
   model_bk11→mapper cone; no SDC exception — the SEED-3 rule).
-  **Tier-2 SD multi-block READ (CMD18) is DONE, CONFIRMED ON HARDWARE
-  2026-07-21 (the board boots):** a contiguous read run is coalesced
-  backend-only into one CMD18 stream closed by CMD12 (escalate-on-second,
-  lazy CMD12 close; the engine is untouched). Fit 6,957 LE (58 %), STA
-  met setup +0.330 ns / TNS 0 on sys_clk (hold +0.822) — the CMD18 states
-  first pushed sd_backend's 32-bit `wait_cnt` decrement to a −0.646 ns
-  setup violation, fixed by narrowing `wait_cnt` to 20 bits (the
-  sdram_ctrl counter-split cure). **Tier-2 SD multi-block WRITE (CMD25)
-  is DONE, CONFIRMED ON HARDWARE 2026-07-22:** the write mirror — a
-  contiguous write run coalesced backend-only into one CMD25 stream
-  (escalate-on-second, 0xFC block token, 0xFD stop-tran close — not
-  CMD12), engine still bit-identical; `sim/ide/run_sd.sh` leg 5,
-  mutation-tested ×16, both `-DSD_STACK` passes green. Fit 7,027 LE
-  (58 %). The −0.230 ns setup violation this build showed on the
-  pseudo-static model_bk11→mapper cone is **FIXED, CONFIRMED ON
-  HARDWARE 2026-07-22** by
-  re-registering `model_bk11` inside `mem_mapper` for the `bank_wr`
-  term — sys_clk **+0.420 ns, TNS 0, zero negative paths**, 7,025 LE,
-  worst path back inside `sd_backend`; bk10 bit-identical (all twelve
-  ref037 goldens byte-identical). **Deferred to later increments:**
-  tier-3 cross-command read-ahead, real data CRC16, MMC cards.
+  **TIER-2 SD MULTI-BLOCK (CMD18/CMD25): BUILT, HARDWARE-CONFIRMED
+  (2026-07-21/22), REVERTED 2026-07-23.** It coalesced a contiguous run
+  into one streamed transfer, saving the ~10-byte command frame per
+  sector — ~7 µs against a 342 µs block at the /8 data clock, i.e. **~2%
+  of the SD-side time**. That saving is invisible in practice: the BK
+  drains 256 words through the task file at 4.03 MHz (~500–750 µs per
+  sector), so the DRAIN is the bottleneck and the tier-1 prefetch already
+  hides the entire fetch behind it. Against ~2% of a hidden path it cost
+  a real fault: streams were closed LAZILY (only when the next op turned
+  out non-contiguous), so one stayed open across idle time; a warm reset
+  left the card streaming (DCLO resets the host, not the card) and the
+  BIOS could not find the drive until a SECOND reset press. Containing
+  that took a recovery preamble, a whole-ladder retry, an idle-close
+  timer and four structural timing fixes, for ~150 LE. Reverted by
+  agreement 2026-07-23; the preamble and retry stay as hardening, the
+  rest is gone. **If revisited: close the stream when the OPERATION
+  ends** — ao486's `rtl/soc/driver_sd/card_read.v` issues CMD12 on the
+  last sector of each read — never lazily. (That driver is native 4-bit
+  SD, where responses ride a separate CMD line and streaming data cannot
+  corrupt them; SPI shares MISO between data and responses, which is why
+  this failure class exists here and not there.) **Deferred:** real data
+  CRC16, MMC cards.
 - **512 KB segmented RAM extension** — ✅ **increment 1 DONE IN SIM 2026-07-17**
   (BK-0011M only, enable = **DIP 8**, DCLO-hold-latched like DIP 1). The
   memory-layout piece, and it *was* the Phase-7 coupling: 8 × 4 KB segments

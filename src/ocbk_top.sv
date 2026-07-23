@@ -720,7 +720,12 @@ module ocbk_top (
         .bk_baddr   (bk_baddr),
         .bk_wdata   (bk_wdata),
         .bk_we      (bk_we),
-        .bk_rdata   (bk_rdata)
+        .bk_rdata   (bk_rdata),
+        // diagnostics unused at the top level (pruned by synthesis); they
+        // exist for the sim oracles and for wiring to LEDs during bring-up
+        .dbg_fail     (),
+        .dbg_flush_cap(),
+        .dbg_retried  ()
     );
     assign pSd_Dt[3]   = sd_cs;
     assign pSd_Dt[2:1] = 2'bzz;

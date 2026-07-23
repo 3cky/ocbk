@@ -50,7 +50,7 @@ module sd_harness #(
         .DIV_SLOW_L2 (1),           // sim-speed: /2 both phases
         .DIV_FAST_L2 (1),
         .SETTLE_CLKS (32),
-        .CMD0_TRIES  (4),
+        .INIT_TRIES  (4),
         .ACMD41_TRIES(64),
         .TOK_POLLS   (64),
         .BUSY_POLLS  (64)

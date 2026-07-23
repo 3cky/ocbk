@@ -25,26 +25,30 @@
 //    3 write+readback : buffer word -> CMD24 -> model backing store
 //        checked word-exact -> CMD17 round trip; then a re-read of
 //        sector 0 (the backend serves normally after every leg).
-//    4 CMD18 multi-block : a run of contiguous reads is coalesced - the
-//        second contiguous read opens ONE CMD18, further contiguous reads
-//        skip the command frame (data still exact per block), a
-//        non-contiguous read closes the stream with ONE CMD12 then a
-//        fresh CMD17, and an isolated read never opens CMD18. Counted via
-//        the model's cmd18_cnt/cmd12_cnt/rd_cnt. (Leg 1 already opens+
-//        closes a CMD18 incidentally via the 0->1 read pair.)
-//    5 CMD25 multi-block : the write mirror of leg 4 - a contiguous write
-//        run is coalesced, the second contiguous write opens ONE CMD25,
-//        further contiguous writes skip the command frame (each 0xFC block
-//        committed to the backing store word-exact), and a following read
-//        closes the stream with ONE 0xFD stop-tran token then a fresh
-//        CMD17. Counted via cmd25_cnt/wr_cnt/wm_stop_cnt; store + readback
-//        checked against wpat().
+//    4 warm-reset recovery : rst_n is pulsed WITHOUT resetting the card
+//        (exactly what DCLO does on the board - the card keeps its state),
+//        landing MID-single-block-read so the card is left holding ~half a
+//        block that the preamble must flush before CMD0 (the model
+//        deliberately does not drop that residue on the idle CMD12). The
+//        sector opens with a long 0xFF run - what a BK disk really looks
+//        like on the card, since the IDE layer inverts - which is the case
+//        a flush that stops when the bus merely LOOKS idle gets wrong.
+//        The leg also asserts dbg_retried == 0: ONE recovery pass must be
+//        enough, so the automatic retry cannot hide a weak recovery.
 //  Error-injection runs (each a separate vvp invocation):
 //    +noinit : ACMD41 never ready -> bk_media_ok stays 0, no bk_done.
 //    +rderr  : read answers an error token -> bk_done+bk_error, no
 //              buffer writes; media_ok stays up.
 //    +wrrej  : write data-response reject -> bk_done+bk_error, backing
 //              store untouched.
+//    +cmd0busy : the card answers no CMD0 for the first 25 ms (a still-busy
+//              card). Init must still complete - only by re-running the WHOLE
+//              recovery between attempts, which is the automatic equivalent
+//              of the second reset press; dbg_retried must record it.
+//    +cmd8junk : an SDHC card whose FIRST CMD8 answers illegal-command (what
+//              one stray residue byte does). A host that only retries CMD0
+//              mistypes it v1, sends ACMD41 without HCS and stalls forever;
+//              the whole-ladder retry must recover AND re-type it SDHC.
 //
 //  Pass: "COSIM PASS" with zero tb errors AND zero model protocol
 //  errors (the model checks CRCs, CMD ordering, alignment - see
@@ -58,7 +62,7 @@ module sd_backend_tb;
     reg rst_n = 1'b0;
 
     integer errors = 0;
-    reg sdsc, noinit, rderr, wrrej;
+    reg sdsc, noinit, rderr, wrrej, cmd0busy, cmd8junk;
 
     // ---- DUT + card ---------------------------------------------------------
     wire sd_ck, sd_cs, sd_mosi, sd_miso;
@@ -74,10 +78,15 @@ module sd_backend_tb;
 
     sd_backend #(
         .SETTLE_CLKS (64),              // shrunk budgets; dividers stay REAL
-        .CMD0_TRIES  (4),
+        .INIT_TRIES  (4),
         .ACMD41_TRIES(64),
         .TOK_POLLS   (64),
-        .BUSY_POLLS  (64)
+        .BUSY_POLLS  (64),
+        // PRE_FLUSH stays big enough to swallow a WHOLE residual block
+        // (token + 512 + CRC) - that is the property the recovery leg tests
+        .PRE_BUSY_BYTES(64),
+        .PRE_FLUSH     (700),
+        .PRE_IDLE      (64)
     ) u_dut (
         .clk        (clk),
         .rst_n      (rst_n),
@@ -174,6 +183,46 @@ module sd_backend_tb;
         end
     endtask
 
+    // start an op and return as soon as it is accepted (the recovery leg resets the
+    // host in the middle of the transfer, so it must not wait for bk_done)
+    task bk_start(input wr, input [27:0] sec);
+        begin
+            we_count = 0;
+            @(posedge clk);
+            bk_wr     <= wr;
+            bk_sector <= sec;
+            bk_req    <= 1'b1;
+            cnt = 0;
+            while (!bk_ack && cnt < 1000000) begin
+                @(posedge clk); cnt = cnt + 1;
+            end
+            check(bk_ack, "no bk_ack");
+            bk_req <= 1'b0;
+        end
+    endtask
+
+    // a DCLO pulse: resets the HOST only - the card keeps its state, which
+    // is the whole point of the recovery preamble
+    task warm_reset;
+        begin
+            rst_n = 1'b0;
+            repeat (20) @(posedge clk);
+            rst_n = 1'b1;
+            cnt = 0;
+            while (!bk_media_ok && cnt < 8000000) begin
+                @(posedge clk); cnt = cnt + 1;
+            end
+            check(bk_media_ok, "no re-init after a warm reset");
+            // The field symptom this whole preamble exists for was "one reset
+            // is not enough, a second one works". A retry would paper over
+            // exactly that, so pin the stronger property: ONE recovery pass
+            // brings the card back. (The retry path itself is covered by the
+            // +cmd0busy run.)
+            check(u_dut.dbg_retried === 1'b0,
+                  "re-init needed a CMD0 retry: one recovery pass was not enough");
+        end
+    endtask
+
     integer w;
     task cmp_ref(input [27:0] sec);     // rbuf vs the image
         begin
@@ -209,14 +258,15 @@ module sd_backend_tb;
 
     // ---- main -------------------------------------------------------------------
     integer i, ct;
-    integer c18, c12, c17;
-    integer c25, cwr, cws, s;
+    integer s;
     reg [15:0] save;
     initial begin
         sdsc   = $test$plusargs("sdsc");
         noinit = $test$plusargs("noinit");
         rderr  = $test$plusargs("rderr");
         wrrej  = $test$plusargs("wrrej");
+        cmd0busy = $test$plusargs("cmd0busy");
+        cmd8junk = $test$plusargs("cmd8junk");
 
         $readmemh("ide_image.hex", ref_img);
         for (i = 0; i < 1024*256; i = i + 1)
@@ -236,19 +286,43 @@ module sd_backend_tb;
 
         // ---- leg 0: init transcript ----
         cnt = 0;
-        while (!bk_media_ok && cnt < 8000000) begin
+        while (!bk_media_ok && cnt < 20000000) begin
             @(posedge clk); cnt = cnt + 1;
         end
         check(bk_media_ok, "init did not complete");
         check(u_card.dummy_clocks >= 74, "fewer than 74 dummy clocks");
         check(u_card.cmd0_cnt   >= 1, "CMD0 not seen");
-        check(u_card.cmd8_cnt   == 1, "CMD8 count wrong");
+        // +cmd8junk deliberately forces a second whole-ladder attempt, so
+        // CMD8 is legitimately sent twice there; everywhere else exactly once
+        check(u_card.cmd8_cnt   == (cmd8junk ? 2 : 1), "CMD8 count wrong");
         check(u_card.acmd41_cnt >= 1, "ACMD41 not seen");
         check(u_card.cmd58_cnt  == 1, "CMD58 count wrong");
         check(u_card.cmd9_cnt   == 1, "CMD9 count wrong");
         check(u_card.cmd16_cnt  == (sdsc ? 1 : 0), "CMD16 iff SDSC violated");
         check(u_card.cmd16_sdhc == 0, "CMD16 sent to the SDHC card");
         check(bk_total == (sdsc ? 28'd640 : 28'd1024), "bk_total wrong");
+
+        if (cmd8junk) begin
+            // the card was mistyped v1 on the first attempt and stalled in
+            // ACMD41; only a whole-ladder retry recovers, and it must re-type
+            // the card correctly (SDHC capacity, not the v1 reading)
+            check(u_dut.dbg_retried === 1'b1, "+cmd8junk: no retry was recorded");
+            check(u_dut.dbg_fail   === 4'd5,
+                  "+cmd8junk: expected fail code 5 (ACMD41 stalled, typed v1)");
+            check(u_card.cmd8_cnt >= 2, "+cmd8junk: CMD8 was not re-sent");
+            check(bk_total == 28'd1024, "+cmd8junk: card not re-typed as SDHC");
+            bk_op(0, 7, 0); cmp_ref(7);
+            finish_report;
+        end
+
+        if (cmd0busy) begin
+            // the card swallowed the first CMD0; init must still complete,
+            // via the automatic recovery retry, and then serve normally
+            check(u_dut.dbg_retried === 1'b1, "+cmd0busy: no retry was recorded");
+            check(u_card.cmd0_cnt >= 2, "+cmd0busy: CMD0 was not re-sent");
+            bk_op(0, 7, 0); cmp_ref(7);
+            finish_report;
+        end
 
         if (rderr) begin
             bk_op(0, 7, 1);             // error token -> done+error
@@ -313,65 +387,29 @@ module sd_backend_tb;
             end
         bk_op(0, 0, 0); cmp_ref(0);     // still serving normally
 
-        // ---- leg 4: CMD18 read-multiple (contiguous run coalesced) ----
-        c18 = u_card.cmd18_cnt;
-        c12 = u_card.cmd12_cnt;
-        c17 = u_card.rd_cnt;
-        bk_op(0, 20, 0); cmp_ref(20);   // isolated -> CMD17
-        bk_op(0, 21, 0); cmp_ref(21);   // 2nd contiguous -> opens ONE CMD18
-        bk_op(0, 22, 0); cmp_ref(22);   // continuation -> no command frame
-        bk_op(0, 23, 0); cmp_ref(23);   // continuation
-        bk_op(0, 24, 0); cmp_ref(24);   // continuation
-        bk_op(0, 40, 0); cmp_ref(40);   // non-contiguous -> CMD12 + fresh CMD17
-        check(u_card.cmd18_cnt - c18 == 1, "run did not open exactly one CMD18");
-        check(u_card.cmd12_cnt - c12 == 1, "stream not closed by one CMD12");
-        check(u_card.rd_cnt   - c17 == 2, "CMD17 count wrong (only 20 and 40)");
-        // an isolated read afterwards stays CMD17 (no dangling / new stream)
-        c18 = u_card.cmd18_cnt;
-        c17 = u_card.rd_cnt;
-        bk_op(0, 50, 0); cmp_ref(50);   // 50 != 40+1 -> plain CMD17
-        check(u_card.cmd18_cnt == c18, "isolated read wrongly opened CMD18");
-        check(u_card.rd_cnt - c17 == 1, "isolated read not a single CMD17");
-
-        // ---- leg 5: CMD25 write-multiple (contiguous writes coalesced) ----
-        c25 = u_card.cmd25_cnt;
-        cwr = u_card.wr_cnt;
-        cws = u_card.wm_stop_cnt;
-        // the prior op was a read (sector 50), so the first write is
-        // non-contiguous and goes out as a single CMD24
-        for (w = 0; w < 256; w = w + 1) wbuf[w] = wpat(30, w);
-        bk_op(1, 30, 0);                // first write -> CMD24
-        for (w = 0; w < 256; w = w + 1) wbuf[w] = wpat(31, w);
-        bk_op(1, 31, 0);                // 2nd contiguous -> opens ONE CMD25
-        for (w = 0; w < 256; w = w + 1) wbuf[w] = wpat(32, w);
-        bk_op(1, 32, 0);                // continuation -> no command frame
-        for (w = 0; w < 256; w = w + 1) wbuf[w] = wpat(33, w);
-        bk_op(1, 33, 0);                // continuation
-        bk_op(0, 60, 0); cmp_ref(60);   // read -> closes stream (0xFD) + CMD17
-        check(u_card.cmd25_cnt   - c25 == 1, "run did not open exactly one CMD25");
-        check(u_card.wr_cnt      - cwr == 1, "CMD24 count wrong (only sector 30)");
-        check(u_card.wm_stop_cnt - cws == 1, "write stream not closed by one 0xFD");
-        // the backing store received all four sectors correctly
-        for (s = 30; s <= 33; s = s + 1)
-            for (w = 0; w < 256; w = w + 1)
-                if (u_card.card[s*256 + w] !== wpat(s, w)) begin
-                    errors = errors + 1;
-                    $display("SD-ERROR: tb: CMD25 store sec %0d word %0d: %04x != %04x",
-                             s, w, u_card.card[s*256 + w], wpat(s, w));
-                    w = 256; s = 34;
-                end
-        // readback round trip (these reads may themselves coalesce, fine)
-        for (s = 30; s <= 33; s = s + 1) begin
-            bk_op(0, s, 0);
-            check(we_count == 256, "CMD25 readback did not deliver 256 words");
-            for (w = 0; w < 256; w = w + 1)
-                if (rbuf[w] !== wpat(s, w)) begin
-                    errors = errors + 1;
-                    $display("SD-ERROR: tb: CMD25 readback sec %0d word %0d: %04x != %04x",
-                             s, w, rbuf[w], wpat(s, w));
-                    w = 256;
-                end
-        end
+        // ---- leg 4: warm-reset recovery, mid-block ----
+        // The reset lands MID-block of a single-sector read, so the card
+        // is left holding the rest of that block - the preamble's flush is
+        // what keeps those bytes out of CMD0's R1 poll.
+        // The sector deliberately OPENS WITH A LONG 0xFF RUN: that is what a
+        // BK disk actually looks like on the card (the IDE layer inverts, so
+        // BK zero-filled regions are stored as 0xFF), and it is the case a
+        // flush that stops as soon as the bus "looks idle" gets wrong - it
+        // quits inside the residue and leaves the rest for CMD0.
+        for (w = 0; w < 256; w = w + 1)
+            u_card.card[200*256 + w] = (w < 64) ? 16'hFFFF : wpat(200, w);
+        bk_start(0, 200);
+        repeat (5000) @(posedge clk);   // ~70 bytes in: inside the 0xFF run
+        check(u_card.oq_rd < u_card.oq_wr, "leg4: no in-flight block to flush");
+        warm_reset;
+        bk_op(0, 200, 0);
+        check(we_count == 256, "leg4: readback did not deliver 256 words");
+        for (w = 0; w < 256; w = w + 1)
+            if (rbuf[w] !== ((w < 64) ? 16'hFFFF : wpat(200, w))) begin
+                errors = errors + 1;
+                $display("SD-ERROR: tb: leg4 readback word %0d: %04x", w, rbuf[w]);
+                w = 256;
+            end
 
         finish_report;
     end
