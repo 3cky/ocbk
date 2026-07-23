@@ -19,7 +19,9 @@ BK-0010.01 ROM in SDRAM + EPCS loader), 6 (keyboard/audio/tape: PS/2 →
 177716 banking mapper, 177662 video register, 50 Hz EVNT/IRQ2, СТОП-block,
 two-pass EPCS loader with the 0011M ROM set, authentic DRAM power-on pattern)
 are done — both models boot and run on hardware**; see README.md for the
-current result. **Phase 8 (SMK512) is in progress**: increment 1 (the 512 KB
+current result. **Phase 8 (SMK512) is DONE — CONCLUDED 2026-07-23, all
+increments confirmed on hardware in BOTH models: DIP 8 boots the SMK BIOS and
+loads an OS from a raw AltPro image on an SD card.** Increment 1 (the 512 KB
 segmented RAM extension on **DIP 8**) and increment 2 (the
 SMK BIOS ROM + the SYS register-space boot overlay — **DIP-8-ON boots the
 SMK BIOS, confirmed on hardware 2026-07-17: it shows its banner**) are done;
@@ -57,9 +59,9 @@ the SD-backed image on a BK-0010 too**. DIP 8
 works in BOTH models now (the SMK is an МПИ expansion board — only the
 per-mode monitor-ROM deselect, `mon_en`, is model-dependent; see the
 SMK512 bullet); fit 6,938 LE, sys_clk +0.430 ns / TNS 0.
-Remaining open items: the
-SMK-RAM `ram_init` pattern, `N_*` recalibration, and BK-0011M
-cycle-accuracy vs a reference (deferred, reference-tb-first).
+Remaining open items, all deferred to Phase 9 and none blocking: the
+SMK-RAM `ram_init` pattern, `N_*` recalibration, SD data CRC16 / MMC
+cards, and BK-0011M cycle-accuracy vs a reference (reference-tb-first).
 
 ## Build & test
 

@@ -4,7 +4,7 @@ Running the Soviet **Elektronika BK-0010/0011M** (PDP-11-class) as alternative
 firmware on the OneChipBook board (Altera Cyclone I **EP1C12Q240C8**, Quartus II
 11.0). See [ROADMAP.md](ROADMAP.md) for the full plan.
 
-## Status: Phase 5 — SoC boot ✅ (BASIC Vilnius banner on screen) + soft reset
+## Status: Phases 1–8 ✅ — both models boot, and the SMK512 boots an OS from SD
 
 **The board cold-boots the real BK-0010.01 firmware**: at power-up the EPCS
 loader copies the **MONITOR + BASIC Vilnius ROM set** (32 KB, `mem/roms/`, from
@@ -30,7 +30,7 @@ screen-page/palette register, the 50 Hz EVNT/IRQ2 timer, the СТОП-block bit,
 the two-pass EPCS loader with the 0011M ROM set and the authentic DRAM
 power-on pattern are all in — **BK-0011M boots and runs BOS on hardware**;
 both models are resident in flash and the reset button switches between them).
-**DIP 8 enables the SMK512 controller** (Phase 8, in progress — increment 1 =
+**DIP 8 enables the SMK512 controller** (Phase 8 done — increment 1 =
 the 512 KB segmented RAM extension: the 0177130 layout register with all 8
 BkEmu `SmkMemoryManager` modes over 8 × 4 KB segments, 16 × 32 KB pages in
 SDRAM; increment 2 = the SMK BIOS ROM (v2.05) with the authentic boot hack —

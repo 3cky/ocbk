@@ -630,13 +630,22 @@ register/behaviour reference for the exact bit fields):
   - *0011M cycle-stealing may differ from the 037 model* — validate the banked
     RAM timing against a reference before trusting the current 037 for 0011M.
 
-### Phase 8 — Storage (SMK512)
+### Phase 8 — Storage (SMK512) ✅ DONE (the SMK BIOS boots an OS from SD in BOTH models)
 - Emulate the **SMK512** controller — the mainstream BK HDD/storage controller —
   backing its disk operations with an SD card (reuse the esemsx3 SD/SPI
   infrastructure). BkEmu is the authoritative behaviour reference.
 - **Milestone:** boot the SMK BIOS and load/run programs from an SD-backed HDD
   image — ✅ **ACHIEVED 2026-07-18: the SMK BIOS boots an OS from the SD card
   on the board.**
+- **PHASE CONCLUDED 2026-07-23.** All four increments are done and confirmed on
+  hardware: the 512 KB segmented RAM (DIP 8), the BIOS ROM + the SYS
+  register-space boot overlay, the IDE drive engine (+ tier-1 READ prefetch),
+  and the SD/SPI backend — in **both** models (`BK_0011M_SMK512` and
+  `BK_0010_SMK512`). Deferred to Phase 9 / fidelity work, none of them
+  blocking: the SMK-RAM power-on `ram_init` pattern, `N_EXT`/`N_SMKREG`/`N_IDE`
+  (and `N_VREG`) recalibration against a reference — reference-tb-first with
+  the 0011M cycle-accuracy item — real SD data CRC16, MMC cards, and the
+  cycle-stealing/RPLY-ownership open point below.
 
 **SMK512 — design notes.** The SMK512 is *three* devices on one board, so Phase 8
 is not a single peripheral:
@@ -872,7 +881,10 @@ is not a single peripheral:
   double-buffered framebuffer in SDRAM (the 48.8→60 reclock + tearing bound require a
   full-frame buffer; a line buffer only works genlocked). Bandwidth <10% of SDRAM.
 - Exact BK MONITOR / BASIC ROM images and licensing for bundling.
-- BK FDD/disk controller variant to emulate in Phase 8 (and Nextor-like vs native).
+- ~~BK FDD/disk controller variant to emulate in Phase 8~~ — **decided:** the
+  **SMK512** (IDE task file + the 512 KB extension), SD-backed with a raw
+  AltPro image; its 177130/132 КНГМД floppy registers exist only as the
+  always-replying no-drive stub. A real FDD controller is not planned.
 - Whether to keep a native-rate analog-RGB output as a secondary, judder-free path.
 
 ---
@@ -893,14 +905,16 @@ experiment broke right audio; oracle-tested). The Phase-7 50 Hz EVNT/IRQ2
 frame interrupt is wired (sim-proven, bk11-only), and the BK-0011M ROM set now
 rides a second EPCS blob with SYS_START 140000 — **Phase 7 is done and
 confirmed on hardware 2026-07-16: BK-0011M boots and runs BOS, the reset
-button switches models**. Phase 8 has started: increment 1 (the SMK512
-512 KB segmented RAM extension on DIP 8) and increment 2 (the
-SMK BIOS ROM + the SYS register-space boot overlay — DIP-8-ON boots the SMK
-BIOS through the merged 177716 start vector) are done, **increment 2 confirmed
-on hardware 2026-07-17: the SMK BIOS boots to its banner** (see the Phase-8
-section). Remaining deferred items: the SMK IDE/SD increment, the
-SMK-RAM ram_init pattern, `N_VREG`/`N_EXT`/`N_SMKREG` calibration and 0011M
-cycle-accuracy vs a reference (reference-tb-first).*
+button switches models**. **Phase 8 is done and confirmed on hardware
+2026-07-23**: DIP 8 adds the SMK512 — the 512 KB segmented RAM extension, the
+BIOS ROM with the SYS register-space boot overlay (the merged 177716 start
+vector), the IDE drive engine with tier-1 READ prefetch and the SD/SPI backend
+— so **the SMK BIOS boots and loads an OS from a raw AltPro image on an SD
+card, in both `BK_0011M_SMK512` and `BK_0010_SMK512`** (see the Phase-8
+section). Remaining deferred items, none of them blocking: the SMK-RAM
+ram_init pattern, `N_VREG`/`N_EXT`/`N_SMKREG`/`N_IDE` calibration, SD data
+CRC16 / MMC cards and 0011M cycle-accuracy vs a reference
+(reference-tb-first).*
 *See also the project memory notes `bk-on-1chipmsx-feasibility` (bring-up history),
 `bk-video-pipeline-decision` (Phase 3/4 design) and `bkemu-reference-and-roms`
 (BkEmu is the canonical BK reference; ROMs committed in-tree).*
