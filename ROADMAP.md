@@ -774,7 +774,8 @@ is not a single peripheral:
   SYS not STD11, low-nibble strobe compare, per-BkEmu byte-lane masking).
   **Deliberately deferred (now landed in increment 2 — see the next
   bullet):** the BIOS ROM windows and the seg-7 extents.
-  **The SMK-RAM power-on fill landed 2026-07-23 (sim):** `ram_init` gained a
+  **The SMK-RAM power-on fill is ✅ DONE, CONFIRMED ON HARDWARE 2026-07-23**
+  (fit 6,935 LE, sys_clk +0.098 ns / TNS 0): `ram_init` gained a
   second fill segment over the 256 Kwords at `SMK_RAM_BASE`, **zero-filled**
   rather than patterned — bkemu-QT has no SMK512 board, so no authoritative
   power-on pattern exists (`Board_EXT32`/`Board_*_FDD` only continue the *host
@@ -786,7 +787,7 @@ is not a single peripheral:
   `sim/run_mapper.sh` (differential smk_en=0
   reference + the directed contract, mutation-tested), `sim/smk/run.sh`
   (SoC functional oracle with a DCLO-replay second pass, mutation-tested) and
-  `sim/raminit/run.sh` (the segment sequence + the zero fill, +5 mutations).
+  `sim/raminit/run.sh` (the segment sequence + the zero fill, mutation-tested ×7).
 - **BK-0010 + SMK (BkEmu `BK_0010_SMK512`)** — ✅ **DONE, CONFIRMED ON
   HARDWARE 2026-07-23** (DIP 1 OFF + DIP 8 ON: the SMK BIOS boots and loads
   an OS from the SD-backed image on a BK-0010 as well):

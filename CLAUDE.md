@@ -57,9 +57,10 @@ the SD-backed image on a BK-0010 too**. DIP 8
 works in BOTH models now (the SMK is an МПИ expansion board — only the
 per-mode monitor-ROM deselect, `mon_en`, is model-dependent; see the
 SMK512 bullet); fit 6,938 LE, sys_clk +0.430 ns / TNS 0.
-**The SMK-RAM power-on fill is DONE (sim) 2026-07-23**: `ram_init` gained
-a second, ZERO-filled segment over the SMK512's 256 Kwords (see the
-`ram_init` bullet). Remaining open items:
+**The SMK-RAM power-on fill is DONE, CONFIRMED ON HARDWARE 2026-07-23**:
+`ram_init` gained a second, ZERO-filled segment over the SMK512's
+256 Kwords (see the `ram_init` bullet); fit 6,935 LE, sys_clk
++0.098 ns / TNS 0. Remaining open items:
 `N_*` recalibration and BK-0011M
 cycle-accuracy vs a reference (deferred, reference-tb-first).
 
@@ -354,9 +355,10 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   (nothing — `smk_valid` is sticky), a model change (main only), and a power
   cycle with both set (one pass, both segments).
   **Mutation-tested** (wrong pattern bit /
-  no gap break it; +5 Phase-8: seg-1 pattern instead of zeros, sticky
-  `smk_valid` dropped, `LASTSMK` off by one, the `seg_next` gap fix-up dropped,
-  `blank_pulse` losing its `need_main` term — see the run.sh header).
+  no gap break it; **+7 Phase-8**: the `~seg` zero fold dropped from `valb`,
+  sticky `smk_valid` dropped, `LASTSMK` off by one, the `seg_next` gap fix-up
+  dropped, the start address always the main base, `seg` never advancing in
+  the gap, `blank_pulse` losing its `need_main` term — see the run.sh header).
   The SoC-integration side is covered by
   `sim/run_boot_check.sh` (real MONITOR/BOS cold-booting on the pattern) — the
   replica preloads the pattern rather than running ram_init through the
@@ -529,7 +531,8 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   the fresh pattern → firmware clears it (the first power-on fill needs no pulse
   — video is still in reset then).
   **Phase 8 — a SECOND fill segment (`seg`), the SMK512's 256 Kwords at
-  `SMK_RAM_BASE`, ZERO-filled** (2026-07-23): bkemu-QT has no SMK512 board, so
+  `SMK_RAM_BASE`, ZERO-filled** (CONFIRMED ON HARDWARE 2026-07-23; fit 6,935
+  LE, sys_clk +0.098 ns / TNS 0): bkemu-QT has no SMK512 board, so
   there is no authoritative power-on pattern for it — its `Board_EXT32` /
   `Board_*_FDD` only continue the *host machine's* linear rule across their own
   extension arrays, which says nothing about a third-party МПИ board with
@@ -959,7 +962,7 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   RAM seg 6) is what that machine is for. No blob change: `epcs_boot`
   loads both blobs unconditionally, so the BIOS is resident at
   `SMK_BIOS_BASE` whatever DIP 1 says.
-  **SMK-RAM power-on fill (done in sim 2026-07-23):** `ram_init` zero-fills
+  **SMK-RAM power-on fill (DONE, CONFIRMED ON HARDWARE 2026-07-23):** `ram_init` zero-fills
   the 256 Kwords at `SMK_RAM_BASE` as a second fill segment — see the
   `ram_init` bullet for the trigger and why zeros rather than a pattern.
   **Still deferred:** real data CRC16, MMC cards, and
@@ -1078,6 +1081,23 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   a 1-cycle latency provably cannot matter: verify the signal changes only
   while the consumer is in reset / the CPU is parked, and keep the raw
   signal on any cone whose oracle compares combinationally after a flip.
+- **On a wide mux whose SELECT side is critical, keep the DATA inputs driven
+  by a single net** (Phase 8, measured 2026-07-23). `ram_init`'s `w_wdata`
+  feeds the port-0 boot-writer mux → `cpu_sdram_dp`'s write-data mux, whose
+  select side is the mapper's commit-decoded flags — a chronic sys_clk path.
+  Adding the SMK segment as a **16-bit 2:1 mux** on `w_wdata` put a LUT on
+  each of that mux's 16 data inputs and cost 0.34 ns (+0.430 → +0.088, worst
+  path becoming `seg_std[4] → wdata_o[9]`). **Registering `w_wdata` instead
+  was WORSE** (+16 LE → −0.552, TNS −4.958: the fitter re-placed and an
+  unrelated `cpu_sdram_dp.was_read → mem_mapper.win1_rom_en` pad-loop path
+  failed) — on this placement-fragile design, extra LEs are their own risk,
+  so "register it" is not automatically the safe move. Cure: push the choice
+  upstream into the **1-bit** term (`valb = ~seg & (model ? valb11 : valb10)`)
+  so the word stays `{16{valb}}`, a pure replication of one net — the exact
+  cone shape it had before the feature. 6,935 LE (3 *fewer* than baseline),
+  +0.098 ns, TNS 0, worst path back to an ordinary `smk_ide` flop-to-flop.
+  Same family as the `model_bk11_q` and `sd_backend` precompute fixes:
+  structural, never an SDC exception.
 - **A SINGLE-driver open-collector `tri1` net degenerates to stuck-ASSERTED in
   Quartus** (Cyclone I has no internal tri-state/pull-up). This bit the Phase-6
   keyboard on hardware: `bk_kbd014` was the *only* nVIRQ source, driving
