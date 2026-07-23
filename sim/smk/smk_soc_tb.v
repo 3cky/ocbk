@@ -54,6 +54,17 @@ module smk_soc_tb;
     // markers - MUST match mem/gen_smk_test.py
     localparam [15:0] ROMPAT0 = 16'o123456;
     localparam [15:0] TOPPAT  = 16'o054321;
+    // --bk10 leg: the BK-0010 ROM image markers (SDRAM 0x4000 = BK 100000)
+    localparam [15:0] MONPAT0 = 16'o152525;   // 100000, monitor ROM head
+    localparam [15:0] MONPAT1 = 16'o063636;   // 117776, seg-1 top
+    localparam [15:0] BASPAT  = 16'o177077;   // 120000 - must NEVER show
+
+    // +bk10 (BkEmu BK_0010_SMK512): the same SMK oracle on a BK-0010 stack -
+    // model_bk11=0, the /32 CPU rate, the program resident in the machine's
+    // own RAM (SDRAM 0x0000) and the monitor ROM standing in for the bk11
+    // second banked window / BOS. See the run.sh header.
+    reg bk10;
+    initial bk10 = $test$plusargs("bk10");
 
     // ---- clocks: sys_clk + /16 037 enables + /24 CPU clock (cpu_clkgen
     //      replica in BK-0011M mode: toggle every 12 sys_clk) ---------------
@@ -69,9 +80,10 @@ module smk_soc_tb;
     reg [3:0] cdiv;
     reg       cpu_clk_r;
     initial begin cdiv = 4'd0; cpu_clk_r = 1'b0; end
+    wire [3:0] cdiv_max = bk10 ? 4'd15 : 4'd11;   // /32 bk10, /24 bk11
     always @(posedge sys_clk) begin
-        if (cdiv >= 4'd11) begin cdiv <= 4'd0; cpu_clk_r <= ~cpu_clk_r; end
-        else               cdiv <= cdiv + 1'b1;
+        if (cdiv >= cdiv_max) begin cdiv <= 4'd0; cpu_clk_r <= ~cpu_clk_r; end
+        else                  cdiv <= cdiv + 1'b1;
     end
     wire clk = cpu_clk_r;
 
@@ -160,7 +172,7 @@ module smk_soc_tb;
         .tape_in  (1'b0),
         .sel1_n   (sel[1]),
         .sel2_n   (sel[2]),
-        .model_bk11(1'b1),
+        .model_bk11(~bk10),
         .smk_en   (1'b1),            // <- the whole point of this oracle
         .boot_active(1'b0),          // no EPCS: images preloaded directly
         .bw_req   (1'b0),
@@ -285,9 +297,13 @@ module smk_soc_tb;
                 if (scnt == 3) begin
                     if (!pass2) begin
                         // the program's final 662 write (0o145000: page=1,
-                        // masked, pal=0o12), RESET-instruction-preserved
-                        if (vid_page !== 1'b1 || vid_irq2m !== 1'b1
-                            || vid_pal !== 4'o12) begin
+                        // masked, pal=0o12), RESET-instruction-preserved. On
+                        // +bk10 the taps must still be at the DCLO defaults:
+                        // the 662 decode is BK-0011M-only, and the program's
+                        // write there is expected to TRAP (the model-detect
+                        // mechanism the real BIOS uses - gen_smk_test.py 10).
+                        if (vid_page !== ~bk10 || vid_irq2m !== 1'b1
+                            || vid_pal !== (bk10 ? 4'o17 : 4'o12)) begin
                             $display("SMK-ERROR: 177662 taps page=%b m=%b pal=%o",
                                      vid_page, vid_irq2m, vid_pal);
                             $display("COSIM FAIL");
@@ -338,8 +354,17 @@ module smk_soc_tb;
     integer ii;
     initial begin
         for (ii = 0; ii < (1<<19); ii = ii + 1) u_mem.mem[ii] = 16'o000000;
-        // fixed page 6: vectors + stage 2
-        $readmemh("smk_page6.hex", u_mem.mem, 'h2C000, 'h2DFFF);
+        // the residence image: bk11 physical RAM page 6 (000000-037777) or,
+        // under +bk10, the whole BK-0010 RAM (000000-077777). Same layout -
+        // the SMK never touches anything below 0100000.
+        if (bk10) $readmemh("smk_low10.hex", u_mem.mem, 'h00000, 'h03FFF);
+        else      $readmemh("smk_page6.hex", u_mem.mem, 'h2C000, 'h2DFFF);
+        // +bk10: the BK-0010 ROM image markers. Segs 0,1 = the MONITOR ROM
+        // (what mon_en selects); BASPAT sits in the ex-BASIC region, which
+        // must stay invisible in every mode (BK_0010_SMK512 has no BASIC).
+        u_mem.mem['h4000] = MONPAT0;
+        u_mem.mem['h4FFF] = MONPAT1;
+        u_mem.mem['h5000] = BASPAT;
         // the synthetic SMK BIOS image at SMK_BIOS_BASE - exactly where the
         // EPCS loader puts the real one. SMK RAM itself gets NO preload: the
         // program boots from the BIOS windows (the real mechanism) and owns

@@ -206,11 +206,12 @@ module ocbk_top (
     // cpu_clk-domain FF, 2-FF resynced here; pDip is a static switch.
     // --- SMK512 enable: DIP 8 (ON = low = SMK present; Phase 8) -------------
     // The identical DCLO-hold latch: model and SMK config switch together on
-    // a warm reset. BK-0011M only this increment (qbus_mem/mem_mapper gate
-    // every SMK term with model_bk11); with no SMK BIOS blob yet DIP-8-ON is
-    // deliberately non-booting (reset layout SYS deselects BOS and maps the
-    // 140000 start vector to power-on SMK RAM garbage) - flip DIP 8 off and
-    // press reset to return to a stock machine.
+    // a warm reset. Independent of DIP 1 - the SMK is an МПИ expansion board
+    // and works on BOTH models (BkEmu BK_0010_SMK512 / BK_0011M_SMK512; see
+    // the mem_mapper header for the per-model layout table). DIP-8-ON boots
+    // the SMK BIOS in either model (the SYS rom7 register-space overlay
+    // redirects the 177716 start vector to 166400); flip DIP 8 off and press
+    // reset to return to a stock machine.
     logic [1:0] dipm_sr, dips_sr, dclo_sr;
     logic       model_bk11, smk_en;
     always_ff @(posedge sys_clk or negedge locked) begin
@@ -667,7 +668,7 @@ module ocbk_top (
     smk_ide u_ide (
         .sclk       (sys_clk),
         .reset      (~dclo_n),
-        .enable     (smk_en && model_bk11),
+        .enable     (smk_en),
         .ad_n       (ad_n),
         .sync_n     (sync_n),
         .din_n      (din_n),
@@ -703,7 +704,7 @@ module ocbk_top (
     sd_backend u_sd (
         .clk        (sys_clk),
         .rst_n      (dclo_n),
-        .enable     (smk_en && model_bk11),
+        .enable     (smk_en),
         .sd_ck      (pSd_Ck),
         .sd_cs      (sd_cs),
         .sd_mosi    (pSd_Cm),

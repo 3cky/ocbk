@@ -31,6 +31,16 @@
 # drive-engine contract is pinned by sim/ide, and the real BIOS reading a
 # real image is the increment-(b) hardware milestone.
 #
+# ./run_boot_check.sh +smk10 (the bk10+SMK increment) cold-boots the SAME
+# real SMK BIOS on a BK-0010 stack (BkEmu BK_0010_SMK512): model_bk11=0, the
+# /32 CPU rate, the bk10 ROM blob (its monitor ROM is what the SMK's mon_en
+# selects at segs 0,1) plus the bk11 blob for the BIOS image at 0x3A000 -
+# both are flash-resident on real hardware whatever DIP 1 says. Same pass
+# conditions as +smk except the 177662 write, which on a BK-0010 must NOT
+# reply: that bus timeout IS the BIOS's model detect (doc/smk64.mac START).
+# The time bound is 550 ms (the BIOS's SOB startup delay at the /32 rate).
+# +smk10 +sdspi works too (the sd_harness mux is model-agnostic).
+#
 # ./run_boot_check.sh +smk +sdspi (increment (b)) swaps the disk model for
 # the REAL sd_backend + sd_model SPI stack (sim/ide/sd_harness.v): the
 # attach-time sector-7 geometry read rides the full card init + SPI path

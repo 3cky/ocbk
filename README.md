@@ -36,8 +36,11 @@ BkEmu `SmkMemoryManager` modes over 8 × 4 KB segments, 16 × 32 KB pages in
 SDRAM; increment 2 = the SMK BIOS ROM (v2.05) with the authentic boot hack —
 in the reset SYS layout the BIOS overlays the register space, the 177716
 start-vector read returns the BIOS word and the CPU boots into the BIOS at
-166400. BK-0011M only — confirmed on hardware 2026-07-17: the SMK BIOS
-boots and shows its banner; increment 3 = the IDE drive engine + the
+166400 — confirmed on hardware 2026-07-17: the SMK BIOS
+boots and shows its banner. It works in **both models** (the SMK is an
+МПИ expansion board; on a BK-0010 the machine's monitor ROM takes the
+place BOS and the banked window hold on a BK-0011M, and the BIOS detects
+which machine it is running on by whether a 177662 write replies); increment 3 = the IDE drive engine + the
 SD/SPI backend: the SMK ATA task file served from a **raw AltPro HDD
 image dd'd onto an SD card** in the board's SD slot — **confirmed on
 hardware 2026-07-18: the SMK BIOS detects the drive and boots an OS
@@ -46,7 +49,7 @@ the drive reports cleanly absent and the BIOS exits to its command
 line; flip DIP 8 OFF and press reset for a stock machine). DIP 2 is
 unused.
 
-- Fits in **6767 / 12060 LEs (56%)**, **3 M4Ks**, **1 ASMI block**, **1 PLL**;
+- Fits in **6938 / 12060 LEs (58%)**, **3 M4Ks**, **1 ASMI block**, **1 PLL**;
   timing closes.
 - Cycle accuracy holds under full 4-port SDRAM contention for RAM *and* ROM
   execution: the SoC cosims reproduce both goldens (`golden_037.txt`,

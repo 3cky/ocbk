@@ -89,7 +89,7 @@ module sd_backend #(
 ) (
     input  logic        clk,         // sys_clk
     input  logic        rst_n,       // = dclo_n (DCLO-only; NOT nINIT)
-    input  logic        enable,      // smk_en && model_bk11 (quasi-static)
+    input  logic        enable,      // = smk_en, DIP 8 (quasi-static)
 
     // ---- SPI pads (megasd slot) -------------------------------------------
     output logic        sd_ck,
@@ -133,7 +133,7 @@ module sd_backend #(
     wire  [8:0] div_max  = fast ? DIVMAX_F  : DIVMAX_S;
     wire  [8:0] div_half = fast ? DIVHALF_F : DIVHALF_S;
 
-    // `enable` is smk_en && model_bk11 - both DIP bits latched in ocbk_top
+    // `enable` is smk_en (DIP 8, both models) - latched in ocbk_top
     // during the DCLO hold, so quasi-static, but high-fanout and therefore
     // long-routed: feeding it straight into the S_SETTLE arm put
     // model_bk11 -> st.A_WCMD_R on the critical path. One local flop, the

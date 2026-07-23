@@ -12,6 +12,22 @@
 # then a tb DCLO replay proves the SYS re-init (BIOS windows back) + SMK RAM
 # survival. See sim/smk/smk_soc_tb.v.
 #
+# TWO LEGS since the bk10+SMK increment. The second (`--bk10` / `+bk10`,
+# BkEmu BK_0010_SMK512) re-runs the whole contract on a BK-0010 stack -
+# model_bk11=0, the /32 = 3.02 MHz CPU rate, the program resident in the
+# machine's own RAM (SDRAM 0x0000) - because the SMK is an МПИ expansion
+# board and everything except which standard memory a mode deselects is
+# model-independent. The bk10-specific legs: the MONITOR ROM at segs 0,1 in
+# SYS/STD10/STD11/RAM11 (mon_en) and read-only there; the ex-BASIC region
+# 0120000-0157777 DEAD wherever the SMK does not cover it (the tb pokes a
+# marker at SDRAM 0x5000 that must never show - BK_0010_SMK512 has no BASIC
+# ROMs); HLT11, the one mode where mon_en is observable (segs 0-3 all trap);
+# RAM11's mixed monitor/dead/SMK layout; and THE model-detect mechanism the
+# real BIOS uses - under SYS a 177662 write hits the rom7 ROM window and
+# bus-times-out -> trap 4 (on a bk11 the same write is REPLIED by qbus_mem's
+# model-gated sel_vreg decode, which is exactly how the BIOS tells the two
+# machines apart). The 177716 merge is checked against SYS_START = 0100000.
+#
 # MUTATION-TESTED (2026-07-17, increment 1):
 #   * qbus_mem `selected` without the sel_ext term -> FAIL (the first SMK
 #     access bus-times-out -> fail park): the reply path is load-bearing;
@@ -40,6 +56,17 @@
 #     increment-1 documented MASKED mutation; the reworked issued-legs
 #     done-gate no longer holds an un-issued RO write in S_WAIT, so the
 #     bogus reply now surfaces and the HLT10 trap expectation catches it);
+# MUTATION-TESTED (2026-07-23, the bk10 leg - each fails the +bk10 run and
+# leaves the bk11 leg passing, i.e. they are genuinely bk10-specific):
+#   * mem_mapper std_vec widened to all eight segments in bk10 -> FAIL (the
+#     ex-BASIC region shows the ROM blob through; the STD11/RAM11 dead-segment
+#     expectations catch it) - this is the "BkEmu has no BASIC in that config"
+#     decision, and it is load-bearing, not cosmetic;
+#   * mem_mapper mon_en dropped (the monitor always selected) -> FAIL (the
+#     HLT11 leg: 0100000-0137777 must be dead when the mode deselects it);
+#   * qbus_mem sel_fdd re-gated with model_bk11 -> FAIL (the RAM10 leg's
+#     177130/177132 read-0 checks bus-time-out) - and the same for sel_ide by
+#     construction (sim/ide/run_soc.sh owns that decode's contract).
 #   * the extent direction swap (ALL<->HLT flags) is pinned by
 #     sim/run_mapper.sh (S8), whose increment-2 mutations also cover the
 #     rom6/rom7 selection swap, the extent boundary off-by-one and a wrong
@@ -50,8 +77,6 @@ cd "$(dirname "$0")"
 SP="$(mktemp -d)"
 trap 'rm -rf "$SP"' EXIT
 
-( cd ../../mem && python3 gen_smk_test.py ../sim/smk ) > /dev/null
-
 CPU=../../src/cpu
 iverilog -g2012 -o "$SP/smk.vvp" -s smk_soc_tb \
    "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
@@ -61,7 +86,17 @@ iverilog -g2012 -o "$SP/smk.vvp" -s smk_soc_tb \
    ../../src/qbus_mem.sv ../sdram_model.sv \
    smk_soc_tb.v 2>&1 | grep -v 'sorry:' || true
 
-vvp -n "$SP/smk.vvp" 2>/dev/null | tee "$SP/out.txt" | grep -E "SMK-ERROR|COSIM" || true
+# Two legs: BK-0011M (the original) and BK-0010 (+bk10). Each regenerates its
+# own images first - the bk11 leg's residence image is physical RAM page 6,
+# the bk10 leg's is the machine's own RAM at SDRAM 0x0000.
+run_leg () {   # $1 = label, $2 = gen flags, $3 = vvp plusargs
+    ( cd ../../mem && python3 gen_smk_test.py $2 ../sim/smk ) > /dev/null
+    vvp -n "$SP/smk.vvp" $3 2>/dev/null | tee "$SP/out.txt" \
+        | grep -E "SMK-ERROR|COSIM" || true
+    grep -q '^COSIM PASS$' "$SP/out.txt" \
+        || { echo "SMK512 RAM oracle ($1): FAIL" >&2; exit 1; }
+    echo "SMK512 RAM oracle ($1): PASS"
+}
 
-grep -q '^COSIM PASS$' "$SP/out.txt" || { echo "SMK512 RAM oracle: FAIL" >&2; exit 1; }
-echo "SMK512 RAM oracle: PASS"
+run_leg "BK-0011M" "" ""
+run_leg "BK-0010"  "--bk10" "+bk10"

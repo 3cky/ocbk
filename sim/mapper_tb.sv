@@ -13,10 +13,10 @@
 //  nINIT-preserve is structural (the module has no nINIT port); the
 //  behavioural RESET-instruction check lives in the bk11 SoC oracle.
 //
-//  Phase 8 (SMK512, sections S1-S10): a second DIFFERENTIAL reference
+//  Phase 8 (SMK512, sections S1-S11): a second DIFFERENTIAL reference
 //  instance (dut_ref, smk_en tied 0, identical stimulus) pins "SMK disabled
-//  == bit-identical" over full-64K sweeps in every non-SMK configuration
-//  (smk_en=0 both models, and smk_en=1 in bk10 - the SMK is BK-0011M-only);
+//  == bit-identical" over full-64K sweeps in both models, and "the SMK never
+//  touches the low 32K" over 000000-077777 with the SMK live in either model;
 //  the directed sections then walk the BkEmu SmkMemoryManager contract: the
 //  177130 two-phase strobe protocol (low-nibble==6 arms, the FOLLOWING write
 //  commits mode+page on the strobe falling edge), the byte-write lane
@@ -42,6 +42,25 @@
 //  extent direction flags (S8 ALL vs HLT10), extent boundary off-by-one
 //  (addr[11:9]==3'b110 - S8 boundary pairs), a wrong SMK_BIOS_BASE bit
 //  (every check_bios phys).
+//
+//  BK-0010 + SMK (BkEmu BK_0010_SMK512, sections S2 + S11): the SMK is an
+//  МПИ expansion board - the 177130 register file, the mode table, the +4
+//  rotation, the page scatter, the BIOS windows and the seg-7 extents are all
+//  model-INDEPENDENT (S10/S11 flip the model and find the same layout). The
+//  ONLY model-dependent part is which standard memory a mode deselects: the
+//  MONITOR ROM (the mon_en flag, BkEmu selectBk10MonitorRom) instead of BOS
+//  and the second banked window. S11 walks all eight modes from bk10 -
+//  monitor ROM at segs 0,1 in SYS/STD10/STD11/RAM11; the ex-BASIC region
+//  MK_NONE wherever the SMK does not cover it (that config carries no BASIC
+//  ROMs, and the loaded blob must NOT show through); HLT11 the one mode where
+//  mon_en is observable (segs 0-3 dead); HLT10's seg-0 smk_ro + the 177674/76
+//  write-only extent (the SMK HALT debugger, which exists for a BK-0010);
+//  and DIP-8-off returning the plain bk10 pass-through.
+//  bk10 mutations (each fails): dropping mon_en (S11 HLT11 segs 0,1);
+//  widening std_vec to all eight segments in bk10 (S11 STD11/RAM11 dead
+//  segments show the blob); forcing bk10 segs 0,1 to MK_NONE (every
+//  check_mon); restoring the model_bk11 gate on smk_act (S2/S11 wholesale);
+//  restoring it on smk_reg_wr (S11's bk10 commits stop working).
 // ============================================================================
 `timescale 1ns/1ps
 module mapper_tb;
@@ -208,6 +227,19 @@ module mapper_tb;
         check_extd(a, pg, rel, ro, 1'b0, tag);
     endtask
 
+    // BK-0010 + SMK: a segment showing the machine's own MONITOR ROM (segs
+    // 0,1 while mon_en) - the bk10 pass-through decode, phys = addr[15:1].
+    task check_mon(input [15:0] a, input [159:0] tag);
+        begin
+            check(a, MK_ROM, AB'(a[15:1]), tag);
+            if (smk_ro !== 1'b0 || smk_wo !== 1'b0) begin
+                $display("MAPPER-ERROR %0s: addr=%o monitor flags ro=%b wo=%b",
+                         tag, a, smk_ro, smk_wo);
+                errors = errors + 1;
+            end
+        end
+    endtask
+
     // SMK BIOS ROM window: ONE 2048-word image at SMK_BIOS_BASE, both windows
     task check_bios(input [15:0] a, input [159:0] tag);
         begin
@@ -225,6 +257,24 @@ module mapper_tb;
         integer a;
         begin
             for (a = 0; a < 65536; a = a + 1) begin
+                addr = a[15:0]; #1;
+                if (kind !== kind_ref || phys !== phys_ref
+                    || smk_ro !== 1'b0 || smk_wo !== 1'b0) begin
+                    $display("MAPPER-ERROR %0s: addr=%o dut kind=%0d phys=%h ro=%b wo=%b ref kind=%0d phys=%h",
+                             tag, a, kind, phys, smk_ro, smk_wo, kind_ref, phys_ref);
+                    errors = errors + 1;
+                end
+            end
+        end
+    endtask
+
+    // the low 32K only (000000-077777): SMK territory starts at 0100000, so
+    // this half must equal the smk_en=0 reference in EVERY configuration,
+    // including bk10 with the SMK live.
+    task sweep_diff_lo(input [159:0] tag);
+        integer a;
+        begin
+            for (a = 0; a < 'o100000; a = a + 1) begin
                 addr = a[15:0]; #1;
                 if (kind !== kind_ref || phys !== phys_ref
                     || smk_ro !== 1'b0 || smk_wo !== 1'b0) begin
@@ -371,13 +421,21 @@ module mapper_tb;
         check(16'o100000, MK_NONE, '0, "S1 seg0 still SYS");
         check_ext(16'o120000, 4'd0, 3'd6, 1'b0, "S1 seg2 still SYS");
 
-        // ---- S2. bk10 immunity with smk_en=1 (SMK is BK-0011M-only) --------
+        // ---- S2. bk10 + SMK is LIVE (BkEmu BK_0010_SMK512) -----------------
+        // The reset SYS layout seen from BK-0010: segs 0,1 = the machine's own
+        // MONITOR ROM (mon_en - the bk10 analogue of the bk11 seg_std vector),
+        // segs 2-5 = SMK RAM, segs 6,7 = the BIOS windows incl. the 177716
+        // boot overlay. The full 8-mode bk10 table is section S11.
         model_bk11 = 1'b0; #1;
-        sweep_diff("S2 bk10 diff smk-on");
-        smk_write(16'o000006, 1'b0, 1'b0, "S2 arm bk10");
-        smk_write(16'o000120, 1'b0, 1'b0, "S2 commit bk10");
+        check_mon(16'o100000, "S2 bk10 SYS seg0 monitor");
+        check_mon(16'o117776, "S2 bk10 SYS seg1 monitor hi");
+        check_ext(16'o120000, 4'd0, 3'd6, 1'b0, "S2 bk10 SYS seg2");
+        check_ext(16'o157776, 4'd0, 3'd1, 1'b0, "S2 bk10 SYS seg5 hi");
+        check_bios(16'o160000, "S2 bk10 SYS seg6 BIOS");
+        check_bios(16'o177716, "S2 bk10 SYS boot word");
+        // the low 32K is never SMK territory, in either model
+        sweep_diff_lo("S2 bk10 low-32K diff");
         model_bk11 = 1'b1; #1;
-        check(16'o100000, MK_NONE, '0, "S2 bk10 write no snoop");
         check_ext(16'o120000, 4'd0, 3'd6, 1'b0, "S2 seg2 still SYS");
 
         // ---- S3. SYS reset-default segment boundaries (page 0) -------------
@@ -559,9 +617,111 @@ module mapper_tb;
         smk_en = 1'b1; #1;
         check_ext(16'o100000, 4'd2, 3'd0, 1'b0, "S10 dip flip kept");
         model_bk11 = 1'b0; #1;
-        sweep_diff("S10 bk10 diff");
+        sweep_diff_lo("S10 bk10 low-32K diff");
+        check_ext(16'o100000, 4'd2, 3'd0, 1'b0, "S10 bk10 shares the layout");
         model_bk11 = 1'b1; #1;
         check_ext(16'o100000, 4'd2, 3'd0, 1'b0, "S10 model flip kept");
+
+        // ==================== S11: the BK-0010 + SMK table ==================
+        // BkEmu BK_0010_SMK512: the SAME SmkMemoryManager, the only difference
+        // being WHICH standard memory a mode deselects - the monitor ROM
+        // (selectBk10MonitorRom) instead of BOS + the second banked window.
+        // The mode/page/rotation/extent machinery is model-independent, so the
+        // 177130 register file is shared: entering here with RAM10 page 2
+        // committed in bk11 mode, bk10 must show exactly that layout.
+        model_bk11 = 1'b0; #1;
+
+        // a 177130 write from BK-0010 COMMITS (it used to be ignored)
+        smk_mode(16'o000120, "S11 RAM10 page0");
+        check_ext(16'o100000, 4'd0, 3'd0, 1'b0, "S11 RAM10 seg0");
+        check_ext(16'o170000, 4'd0, 3'd7, 1'b0, "S11 RAM10 seg7");
+        check(16'o177000, MK_NONE, '0, "S11 RAM10 extent capped");
+        // ...and the machine's own RAM/ROM below 0100000 is untouched
+        check(16'o077776, MK_RAM037, 24'o077776 >> 1, "S11 bk10 low RAM top");
+
+        // SYS: segs 0,1 monitor ROM | 2-5 SMK P+6,7,0,1 | 6,7 BIOS
+        smk_mode(16'o000160, "S11 SYS");
+        check_mon(16'o100000, "S11 SYS seg0 monitor");
+        check_mon(16'o117776, "S11 SYS seg1 monitor hi");
+        check_ext(16'o120000, 4'd0, 3'd6, 1'b0, "S11 SYS seg2");
+        check_ext(16'o130000, 4'd0, 3'd7, 1'b0, "S11 SYS seg3");
+        check_ext(16'o140000, 4'd0, 3'd0, 1'b0, "S11 SYS seg4");
+        check_ext(16'o150000, 4'd0, 3'd1, 1'b0, "S11 SYS seg5");
+        check_bios(16'o160000, "S11 SYS seg6 BIOS");
+        check_bios(16'o170000, "S11 SYS seg7 BIOS");
+        check_bios(16'o177716, "S11 SYS 177716 boot word");
+        check_bios(16'o177130, "S11 SYS 177130 read = BIOS");
+
+        // STD10 - what the real BIOS commits after its bk10 model detect
+        // (doc/smk64.mac START: R1 = 060 "для 10" via the 177662 trap-4 path)
+        smk_mode(16'o000060, "S11 STD10");
+        check_mon(16'o100000, "S11 STD10 seg0 monitor");
+        check_mon(16'o110000, "S11 STD10 seg1 monitor");
+        check_ext(16'o120000, 4'd0, 3'd2, 1'b0, "S11 STD10 seg2");
+        check_ext(16'o150000, 4'd0, 3'd5, 1'b0, "S11 STD10 seg5");
+        check_bios(16'o160000, "S11 STD10 seg6 BIOS");
+        check_ext(16'o170000, 4'd0, 3'd7, 1'b0, "S11 STD10 seg7");
+        check(16'o177000, MK_NONE, '0, "S11 STD10 extent capped");
+
+        // STD11 on a bk10: segs 0,1 monitor, segs 2-5 DEAD (that config has no
+        // BASIC ROMs - the ex-BASIC region never falls through to the blob)
+        smk_mode(16'o000140, "S11 STD11");
+        check_mon(16'o100000, "S11 STD11 seg0 monitor");
+        check_mon(16'o117776, "S11 STD11 seg1 monitor hi");
+        check(16'o120000, MK_NONE, '0, "S11 STD11 seg2 dead");
+        check(16'o157776, MK_NONE, '0, "S11 STD11 seg5 dead");
+        check_bios(16'o160000, "S11 STD11 seg6 BIOS");
+        check_ext(16'o170000, 4'd0, 3'd7, 1'b0, "S11 STD11 seg7");
+
+        // RAM11 on a bk10: segs 0,1 monitor | 2,3 dead | 4-7 SMK P+4..7
+        smk_mode(16'o000040, "S11 RAM11");
+        check_mon(16'o100000, "S11 RAM11 seg0 monitor");
+        check(16'o120000, MK_NONE, '0, "S11 RAM11 seg2 dead");
+        check(16'o137776, MK_NONE, '0, "S11 RAM11 seg3 dead");
+        check_ext(16'o140000, 4'd0, 3'd4, 1'b0, "S11 RAM11 seg4");
+        check_ext(16'o160000, 4'd0, 3'd6, 1'b0, "S11 RAM11 seg6");
+        check_ext(16'o170000, 4'd0, 3'd7, 1'b0, "S11 RAM11 seg7");
+
+        // ALL: all eight rotated, extent READABLE (monitor deselected, but
+        // every segment is SMK-covered so mon_en is invisible here)
+        smk_mode(16'o000020, "S11 ALL");
+        check_ext(16'o100000, 4'd0, 3'd4, 1'b0, "S11 ALL seg0");
+        check_ext(16'o160000, 4'd0, 3'd2, 1'b0, "S11 ALL seg6");
+        check_extd(16'o177000, 4'd0, 3'd3, 1'b1, 1'b0, "S11 ALL extent readable");
+
+        // HLT10 - the SMK HALT debugger, the mode that exists FOR a BK-0010:
+        // seg 0 read-only, the 177674/76 HALT-entry stores caught by the
+        // write-only extent, the HALT vector then read from 160002/4 = seg 6.
+        smk_mode(16'o000100, "S11 HLT10");
+        check_ext(16'o100000, 4'd0, 3'd0, 1'b1, "S11 HLT10 seg0 RO");
+        check_ext(16'o110000, 4'd0, 3'd1, 1'b0, "S11 HLT10 seg1 rw");
+        check_ext(16'o160002, 4'd0, 3'd6, 1'b0, "S11 HLT10 HALT vector");
+        check_extd(16'o177674, 4'd0, 3'd7, 1'b0, 1'b1, "S11 HLT10 177674 catch");
+        check_extd(16'o177676, 4'd0, 3'd7, 1'b0, 1'b1, "S11 HLT10 177676 catch");
+
+        // HLT11: the ONE mode where mon_en is observable - the monitor ROM is
+        // deselected AND segs 0-3 are not SMK-covered, so 0100000-0137777 is
+        // dead on a BK-0010 (bk11 shows the banked window there instead).
+        smk_mode(16'o000000, "S11 HLT11");
+        check(16'o100000, MK_NONE, '0, "S11 HLT11 seg0 dead (mon_en=0)");
+        check(16'o117776, MK_NONE, '0, "S11 HLT11 seg1 dead (mon_en=0)");
+        check(16'o120000, MK_NONE, '0, "S11 HLT11 seg2 dead");
+        check(16'o137776, MK_NONE, '0, "S11 HLT11 seg3 dead");
+        check_ext(16'o140000, 4'd0, 3'd4, 1'b0, "S11 HLT11 seg4");
+        check_extd(16'o177676, 4'd0, 3'd7, 1'b0, 1'b1, "S11 HLT11 177676 catch");
+        // the same layout seen from bk11: segs 0-3 are the banked window
+        model_bk11 = 1'b1; #1;
+        check(16'o100000, MK_RAM037, ram_page(3'd0, 16'o100000), "S11 HLT11 bk11 std");
+        model_bk11 = 1'b0; #1;
+
+        // page-bit scatter {v0,v3,v2,v10} works the same from bk10
+        smk_mode(16'o002135, "S11 page15 RAM10");
+        check_ext(16'o100000, 4'd15, 3'd0, 1'b0, "S11 page15 seg0");
+        check_ext(16'o176776, 4'd15, 3'd7, 1'b0, "S11 page15 seg7 top");
+
+        // DIP 8 off in bk10 = a stock BK-0010 again (the sim/romwr contract)
+        smk_en = 1'b0; #1;
+        sweep_bk10("S11 bk10 sweep smk-off");
 
         if (errors == 0) $display("COSIM PASS");
         else             $display("COSIM FAIL (%0d errors)", errors);

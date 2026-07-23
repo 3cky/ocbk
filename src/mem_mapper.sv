@@ -102,9 +102,37 @@
 //     in HLT10); every other mode = neither -> MK_NONE (the cap).
 //   * reset = DCLO ONLY to mode SYS / page 0 / strobe disarmed (BkEmu init()
 //     re-inits on hardwareReset only - the map/662/spk nINIT-exception family).
-//   * bk10 + SMK is NOT wired: every SMK term here and in qbus_mem is gated
-//     smk_en && model_bk11, so DIP8 + BK-0010 is a no-op. BkEmu's
-//     BK_0010_SMK512 config (monitor-ROM deselect) is a later item.
+//   * BK-0010 + SMK (BkEmu BK_0010_SMK512) IS wired: the SMK is an МПИ
+//     expansion board and SmkMemoryManager is ONE class shared by both
+//     configurations. The only model-dependent part of its layout logic is
+//     WHICH standard machine memory a mode deselects: on BK-0011M the BOS ROM
+//     + the second banked window (selectBk11BosRom /
+//     selectBk11SecondBankedMemory = the seg_std vector below), on BK-0010 the
+//     MONITOR ROM (selectBk10MonitorRom = the mon_en flag below). Everything
+//     else - the 177130 strobe, the 8 modes x 8 segments, the +4 rotation, the
+//     rom6/rom7 BIOS windows, the seg-7 extents, the DCLO-only reset - is
+//     model-independent, so those terms are gated on smk_en ALONE.
+//     BK-0010 coverage of 0100000-0177777 (transcribed from
+//     setupMemoryLayout under the BK_0010_SMK512 wiring; segs 0,1 =
+//     0100000-0117777 = the monitor ROM's extent, and that config carries NO
+//     BASIC ROMs at all):
+//       SYS   segs 0,1 monitor | 2-5 SMK P+6,7,0,1 | 6 rom6 | 7 rom7
+//       STD10 segs 0,1 monitor | 2-5 SMK P+2..5    | 6 rom6 | 7 SMK P+7 capped
+//       RAM10 all eight SMK P+0..7 (seg 7 capped)
+//       ALL   all eight SMK rotated (seg 7 = P+3, extent READABLE)
+//       STD11 segs 0,1 monitor | 2-5 NONE          | 6 rom6 | 7 SMK P+7 capped
+//       RAM11 segs 0,1 monitor | 2,3 NONE | 4-6 SMK P+4..6 | 7 SMK P+7 capped
+//       HLT10 all eight SMK P+0..7, seg 0 READ-ONLY, extent WRITABLE
+//       HLT11 segs 0,1 NONE (mon_en=0!) | 2,3 NONE | 4-7 SMK P+4..7, extent W
+//     The machine's own BASIC ROM region (0120000-0177577) is therefore
+//     MK_NONE wherever the SMK does not cover it - BkEmu's bk10 SMK config
+//     has nothing there, and on real hardware the SMK drives those addresses
+//     in every other mode (an SMK'd BK-0010 has its BASIC out of the way).
+//     With the SMK absent (DIP 8 off) bk10 is untouched: a stock machine.
+//     The BIOS auto-detects the model itself (doc/smk64.mac START): it writes
+//     0177662 with vector 4 planted, and a BK-0010's un-decoded 662 write
+//     bus-times-out -> trap 4 -> the MODE_STD10 commit path. That works for
+//     free here because qbus_mem keeps sel_vreg BK-0011M-only.
 // The refined 177130 invariant (pinned by the oracles): the mapper never
 // claims the WRITE reply at 177130 - the qbus_mem positive write decode is
 // the sole write owner. In SYS its translation is MK_ROM (read-only kind;
@@ -120,7 +148,7 @@ module mem_mapper #(
     input  logic        rst,         // active high = ~dclo_n (DCLO ONLY - no nINIT)
     input  logic        model_bk11,  // DIP 1 latched during DCLO hold (quasi-static)
     input  logic        smk_en,      // DIP 8 latched during DCLO hold (quasi-static):
-                                     // SMK512 present (BK-0011M only this increment)
+                                     // SMK512 present (BOTH models - see header)
     input  logic        sync_n,
     input  logic        dout_n,
     input  logic        wtbt_n,      // at DOUT time: 0 = byte op (dual-purpose WTBT)
@@ -224,11 +252,15 @@ module mem_mapper #(
                              // space - the boot overlay (SYS only)
     logic       ext7_r;      // seg-7 restricted extent readable (ALL)
     logic       ext7_w;      // seg-7 restricted extent writable (HLT10/HLT11)
+    logic       mon_en;      // BK-0010: the monitor ROM (segs 0,1) is SELECTED
+                             // (BkEmu selectBk10MonitorRom; the bk10 analogue
+                             // of the seg_std vector - see the header table)
 
     // A plain addressed write - no SEL pin (177130 is inside the ROM window;
     // qbus_mem carves the matching write reply out of sel_rom). Same
-    // DOUT-window sampling as the banking snoop above.
-    wire smk_reg_wr = smk_en && model_bk11 && !sync_n && !dout_n
+    // DOUT-window sampling as the banking snoop above. Model-independent:
+    // the SMK is an МПИ expansion board (see the BK-0010 note in the header).
+    wire smk_reg_wr = smk_en && !sync_n && !dout_n
                       && (addr[15:1] == 15'(16'o177130 >> 1));
     // BkEmu Computer.writeMemory lane dispatch: an odd-byte write arrives as
     // value << 8, an even-byte write as the raw byte, a word write whole. The
@@ -263,6 +295,7 @@ module mem_mapper #(
             rom7_en    <= 1'b1;           // the 177716 boot overlay is live
             ext7_r     <= 1'b0;
             ext7_w     <= 1'b0;
+            mon_en     <= 1'b1;           // MODE_SYS keeps the bk10 monitor ROM
         end else if (smk_reg_wr) begin
             smk_strobe <= smk_eff_arm;
             if (smk_strobe && !smk_eff_arm) begin
@@ -272,6 +305,9 @@ module mem_mapper #(
                 rom7_en  <= 1'b0;
                 ext7_r   <= 1'b0;
                 ext7_w   <= 1'b0;
+                // BK-0010 monitor-ROM select: on by default, cleared by the
+                // four modes that call selectBk10MonitorRom(false) below.
+                mon_en   <= 1'b1;
                 unique case (smk_eff[6:4])
                     // SYS: seg2..5 = P+6,7,0,1; seg6/7 = BIOS ROM (rom7 = the
                     // register-space boot overlay); win1 + BOS deselected ->
@@ -283,11 +319,12 @@ module mem_mapper #(
                     3'd3:    begin seg_smk <= 8'b1011_1100; seg_std <= 8'b0000_0000; seg_rot <= 1'b0;
                                    rom6_en <= 1'b1; end
                     // RAM10: all eight segments = P+0..7 (extent neither)
-                    3'd5:    begin seg_smk <= 8'b1111_1111; seg_std <= 8'b0000_0000; seg_rot <= 1'b0; end
+                    3'd5:    begin seg_smk <= 8'b1111_1111; seg_std <= 8'b0000_0000; seg_rot <= 1'b0;
+                                   mon_en  <= 1'b0; end
                     // ALL: all eight, rotated (seg0..3 = P+4..7, seg4..7 =
                     // P+0..3); extent READABLE
                     3'd1:    begin seg_smk <= 8'b1111_1111; seg_std <= 8'b0000_0000; seg_rot <= 1'b1;
-                                   ext7_r  <= 1'b1; end
+                                   ext7_r  <= 1'b1; mon_en <= 1'b0; end
                     // STD11: seg0..5 standard (window-1 banking + BOS),
                     // seg6 = BIOS ROM, seg7 = P+7 (extent neither)
                     3'd6:    begin seg_smk <= 8'b1000_0000; seg_std <= 8'b0011_1111; seg_rot <= 1'b0;
@@ -296,11 +333,14 @@ module mem_mapper #(
                     3'd2:    begin seg_smk <= 8'b1111_0000; seg_std <= 8'b0000_1111; seg_rot <= 1'b0; end
                     // HLT10: all eight = P+0..7, seg0 READ-ONLY, extent WRITABLE
                     3'd4:    begin seg_smk <= 8'b1111_1111; seg_std <= 8'b0000_0000; seg_rot <= 1'b0;
-                                   seg0_ro <= 1'b1; ext7_w <= 1'b1; end
+                                   seg0_ro <= 1'b1; ext7_w <= 1'b1; mon_en <= 1'b0; end
                     // HLT11: seg0..3 standard window 1, seg4..7 = P+4..7,
-                    // extent WRITABLE
+                    // extent WRITABLE. The ONE mode where mon_en is
+                    // observable: on a bk10 it deselects the monitor ROM
+                    // while segs 0..3 are not SMK-covered either, so
+                    // 0100000-0137777 is dead (BkEmu: no memory there).
                     default: begin seg_smk <= 8'b1111_0000; seg_std <= 8'b0000_1111; seg_rot <= 1'b0;
-                                   ext7_w  <= 1'b1; end
+                                   ext7_w  <= 1'b1; mon_en <= 1'b0; end
                 endcase
             end
         end
@@ -390,7 +430,16 @@ module mem_mapper #(
     // Every mode has rom7_en or seg_smk[7] set, so the I/O page is always
     // overlay-owned when SMK is on; its non-covered cases (the capped extent)
     // resolve to MK_NONE, exactly what kind_std says there.
-    wire smk_act  = smk_en && model_bk11 && addr[15];
+    wire smk_act  = smk_en && addr[15];
+    // Which segments show the STANDARD machine memory (= fall through to
+    // kind_std). BK-0011M: the seg_std vector (window-1 banking / BOS / the
+    // top ROM). BK-0010: ONLY segs 0,1 = the monitor ROM, and only while
+    // mon_en (BkEmu selectBk10MonitorRom); everything else is MK_NONE - that
+    // config has no BASIC ROMs and the SMK owns those addresses in every
+    // other mode. Muxed on the RAW model_bk11 (not model_bk11_q): the mapper
+    // oracle flips the model and compares this decode combinationally.
+    wire [7:0] std_vec = model_bk11 ? seg_std
+                                    : (mon_en ? 8'b0000_0011 : 8'b0000_0000);
     // Seg-7 restricted extent: segment offsets >= 0o7000 bytes (words >=
     // 03400) = 177000-177777, per-mode readable/writable (see the header).
     wire seg_ext  = (smk_seg == 3'b111) && (addr[11:9] == 3'b111);
@@ -417,11 +466,14 @@ module mem_mapper #(
                 // the HLT-mode write-only extent
                 smk_wo = seg_ext && !ext7_r;
             end
-        end else if (smk_act && !seg_std[smk_seg] && (addr < IO_BASE)) begin
-            kind = MK_NONE;     // deselected window (SYS/STD10 segs 0,1)
+        end else if (smk_act && !std_vec[smk_seg] && (addr < IO_BASE)) begin
+            kind = MK_NONE;     // deselected window (bk11 SYS/STD10 segs 0,1;
+                                // bk10 the whole ex-BASIC region + HLT11 segs
+                                // 0,1 - see the std_vec note above)
             phys = '0;
         end else begin
-            kind = kind_std;    // SMK off, bk10, or a std segment / I/O page
+            kind = kind_std;    // SMK off, or a std segment / the I/O page
+                                // (bk10: segs 0,1 = the monitor ROM)
             phys = phys_std;
         end
     end

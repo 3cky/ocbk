@@ -20,7 +20,7 @@ BK-0010.01 ROM in SDRAM + EPCS loader), 6 (keyboard/audio/tape: PS/2 →
 two-pass EPCS loader with the 0011M ROM set, authentic DRAM power-on pattern)
 are done — both models boot and run on hardware**; see README.md for the
 current result. **Phase 8 (SMK512) is in progress**: increment 1 (the 512 KB
-segmented RAM extension on **DIP 8**, BK-0011M only) and increment 2 (the
+segmented RAM extension on **DIP 8**) and increment 2 (the
 SMK BIOS ROM + the SYS register-space boot overlay — **DIP-8-ON boots the
 SMK BIOS, confirmed on hardware 2026-07-17: it shows its banner**) are done;
 **IDE increment (a) — the drive engine (`src/smk_ide.sv`: task file, ATA
@@ -51,7 +51,13 @@ FIXED, CONFIRMED ON HARDWARE 2026-07-22** by re-registering
 for the `bank_wr` term (see the mapper bullet): sys_clk went
 −0.230 → **+0.420 ns, TNS 0, zero negative paths**, and the worst path
 is now an ordinary `sd_backend` register-to-register path.
-Remaining open items: bk10+SMK, the
+**bk10+SMK (BkEmu `BK_0010_SMK512`) is DONE IN SIM 2026-07-23, hardware
+confirmation pending**: DIP 8
+works in BOTH models now (the SMK is an МПИ expansion board — only the
+per-mode monitor-ROM deselect, `mon_en`, is model-dependent; see the
+SMK512 bullet). The real BIOS cold-boots on the bk10 stack in
+`run_boot_check +smk10`; fit 6,938 LE, sys_clk +0.430 ns / TNS 0.
+Remaining open items: the
 SMK-RAM `ram_init` pattern, `N_*` recalibration, and BK-0011M
 cycle-accuracy vs a reference (deferred, reference-tb-first).
 
@@ -131,8 +137,9 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   banking, `bank_wr` mutual exclusion, DCLO-only re-init, model_bk11 flips
   keeping register content). **Phase 8 (SMK512):** a differential smk_en=0
   reference instance pins every non-SMK configuration bit-identical over
-  full-64K sweeps (smk_en=0 both models, smk_en=1+bk10, disabled-time and
-  bk10-time 177130 writes never snooping), plus the directed BkEmu
+  full-64K sweeps (smk_en=0 both models, disabled-time 177130 writes never
+  snooping) and the SMK-live low 32K (000000-077777) identical in BOTH
+  models, plus the directed BkEmu
   `SmkMemoryManager` contract: the 177130 two-phase strobe (arm/commit
   edges, re-arm-not-commit, byte-lane masking incl. the junk-low-lane
   vector), the 8-mode × 8-seg table with the SYS/ALL +4 rotation, the
@@ -148,7 +155,15 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   **Mutation-tested ×10** (increment 1: scatter swap, arm-edge commit, cap
   drop, lane-mask drop, mode-mask break; increment 2: rom7 drop, rom6/rom7
   selection swap, extent direction swap, extent boundary off-by-one, wrong
-  BIOS base bit — all fail).
+  BIOS base bit — all fail). **bk10+SMK (S2 + S11):** the whole 8-mode x
+  8-segment table walked from BK-0010 — the monitor ROM at segs 0,1 in
+  SYS/STD10/STD11/RAM11 (`mon_en`), the ex-BASIC region MK_NONE wherever
+  the SMK does not cover it, HLT11 the one mode where `mon_en` shows (segs
+  0-3 dead), HLT10's seg-0 `smk_ro` + the 177674/76 write-only extent, the
+  page scatter and rotation shared with bk11 across a model flip, and
+  DIP-8-off returning the plain bk10 pass-through (**+5 mutations**: drop
+  `mon_en`, widen `std_vec` in bk10, force segs 0/1 to MK_NONE, restore the
+  `model_bk11` gate on `smk_act` / on `smk_reg_wr` — all fail).
 - `sim/smk/run.sh` — the Phase-8 SMK512 SoC **functional** oracle
   (data-checking, sim/bk11 conventions: pinned parks 001004/001012, vector
   4 → fail, `COSIM PASS`): the `mem/gen_smk_test.py` program **boots
@@ -179,6 +194,15 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   stored PC via the ALL alias), then a **tb DCLO replay**: the second boot
   re-runs the real boot mechanism and re-verifies SYS + BIOS windows
   restored + SMK RAM content survived + the 662 taps back at defaults.
+  **A SECOND LEG (`--bk10` / `+bk10`) re-runs the whole contract on a
+  BK-0010 stack** (model_bk11=0, /32 rate, the program resident in the
+  machine's own RAM at SDRAM 0x0000, SYS_START = 0100000): the monitor ROM
+  at segs 0,1 (read + write-traps) in SYS/STD10/STD11/RAM11, the ex-BASIC
+  region dead in STD11/RAM11 (a tb marker at SDRAM 0x5000 must never show),
+  HLT11's `mon_en` kill, RAM11's mixed layout, and the BIOS's own
+  MODEL-DETECT mechanism (a SYS 177662 write must trap on a bk10 — the tb
+  additionally requires the 662 taps still at their DCLO defaults at the
+  park).
   **Mutation-tested ×8 at the SoC level** (see the run.sh header — incl.
   the increment-1 documented masked mutation, now KILLED by the reworked
   issued-legs done-gate).
@@ -375,7 +399,13 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   **`+smk +sdspi`** swaps the disk model for the real
   `sd_backend`+`sd_model` SPI stack (a runtime mux in the tb): attach +
   the AltPro geometry parse ride the full card-init + SPI path under
-  the real BIOS boot, same pass conditions.
+  the real BIOS boot, same pass conditions. **`+smk10`** (bk10+SMK) boots
+  the SAME real BIOS on a BK-0010 stack: model_bk11=0, the /32 rate, the
+  bk10 ROM blob plus the bk11 blob for the BIOS image at 0x3A000 (both
+  are flash-resident on hardware whatever DIP 1 says); pass conditions as
+  `+smk` MINUS the 177662 write — on a BK-0010 that write must NOT reply,
+  it is the BIOS's own model detect — and a 550 ms bound (the startup SOB
+  delay at the slower clock). `+smk10 +sdspi` works too.
 
 Any change touching the core, the Q-bus, memory, video, or clocking must keep all
 of it passing. When tuning bus/RPLY timing, trace the **reference** waveform first
@@ -443,15 +473,16 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   mono-512; the `kbd_ps2bk` `key_scrmode` radial output → the `smode_sr` 2-FF
   sync; power-on-only, so it survives a warm reset like the real
   monitor-cable switch and the video pipeline). **DIP 8 = SMK512 enable**
-  (Phase 8; ON = present, BK-0011M only — every SMK term is gated
-  `smk_en && model_bk11`), latched in the SAME DCLO-hold block as DIP 1, so
-  model and SMK config switch together on a warm reset; since increment 2
-  **DIP-8-ON boots the SMK BIOS** (the SYS rom7 register-space overlay
-  redirects the 177716 start vector to 166400 — see the SMK512 bullet; the
-  SYS reset layout deselects BOS, so it is the BIOS or nothing). With no
-  IDE engine yet the BIOS's drive probes bus-time-out — behavior past the
-  boot is whatever the real BIOS does with an absent drive; DIP 8 OFF +
-  reset returns a stock machine. **DIP 2 is unused** — it
+  (Phase 8; ON = present, **BOTH models** — the SMK is an МПИ expansion
+  board, so every SMK term is gated on `smk_en` alone), latched in the SAME
+  DCLO-hold block as DIP 1, so model and SMK config switch together on a
+  warm reset. **DIP-8-ON boots the SMK BIOS in either model** (the SYS rom7
+  register-space overlay redirects the 177716 start vector to 166400 — see
+  the SMK512 bullet; the SYS reset layout deselects BOS / covers the BASIC
+  region, so it is the BIOS or nothing) and the BIOS **auto-detects the
+  model itself** by writing 177662 with vector 4 planted: replied on a
+  bk11, bus-timeout → trap 4 → `MODE_STD10` on a bk10. DIP 8 OFF + reset
+  returns a stock machine of whichever model DIP 1 selects. **DIP 2 is unused** — it
   forced the on-chip test ROM, removed 2026-07-10 (ROM is always the loaded
   SDRAM image).
 - **Authentic DRAM power-on pattern (`src/ram_init.sv`):** the board SDRAM has
@@ -869,13 +900,40 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   out of reset — resetting that flop to 0 disabled the backend on every
   reset even with a card present (caught by the `-DSD_STACK` leg).
   Post-fix sys_clk +0.572 ns / TNS 0.
-  **Still deferred:** bk10+SMK, the SMK-RAM
+  **BK-0010 + SMK (BkEmu `BK_0010_SMK512`) — DONE:** the SMK is an МПИ
+  expansion board and `SmkMemoryManager` is ONE class shared by both
+  configurations, so every SMK term (`smk_reg_wr`, `smk_act`, `sel_fdd`,
+  `sel_ide`, the `smk_ide`/`sd_backend` enables) is gated on `smk_en`
+  ALONE. The only model-dependent part of the layout logic is WHICH
+  standard memory a mode deselects: on bk11 the BOS ROM + the second
+  banked window (the `seg_std` vector), on bk10 the **monitor ROM** —
+  the new commit-decoded `mon_en` flag (`selectBk10MonitorRom`; set in
+  SYS/STD10/STD11/RAM11), consumed through
+  `std_vec = model_bk11 ? seg_std : (mon_en ? 8'b0000_0011 : 0)`. So on a
+  bk10 a "standard" segment is covered ONLY for segs 0,1 (0100000–0117777
+  = the monitor ROM) and only while `mon_en`; **the machine's own BASIC
+  region 0120000–0177577 is MK_NONE wherever the SMK does not cover it**
+  (STD11 segs 2–5, RAM11/HLT11 segs 2,3) — BkEmu's bk10 SMK config has no
+  BASIC ROMs at all, and on real hardware the SMK drives those addresses
+  in every other mode. HLT11 is the ONE mode where `mon_en` is observable
+  (segs 0–3 all dead). Everything else is shared, so a model flip finds
+  the same layout. The BIOS **auto-detects the model** (doc/smk64.mac
+  `START`): with vector 4 planted it writes 0177662 — replied on a bk11
+  (qbus_mem's model-gated `sel_vreg`), un-decoded on a bk10 where under
+  SYS it is a rom7 ROM write → trap 4 → the `MODE_STD10` commit ("для
+  10"). HLT10, the SMK HALT-debugger mode (СТОП's HALT-entry stores
+  caught by the write-only 177674/76 extent, vector from 160002/4 = SMK
+  RAM seg 6) is what that machine is for. No blob change: `epcs_boot`
+  loads both blobs unconditionally, so the BIOS is resident at
+  `SMK_BIOS_BASE` whatever DIP 1 says.
+  **Still deferred:** the SMK-RAM
   `ram_init` pattern, real data CRC16, MMC cards, and
   `N_EXT`/`N_SMKREG`/`N_IDE` recalibration (reference-tb-first).
-  Oracles: `sim/run_mapper.sh` + `sim/smk/run.sh` + `sim/ide/run.sh`
+  Oracles: `sim/run_mapper.sh` + `sim/smk/run.sh` (**both legs** — bk11
+  and `+bk10`) + `sim/ide/run.sh`
   (BOTH passes — disk model AND the `-DSD_STACK` real SPI stack) +
   `sim/ide/run_soc.sh` + `sim/ide/run_sd.sh` (see the sim list) +
-  `sim/run_boot_check.sh +smk` / `+smk +sdspi`.
+  `sim/run_boot_check.sh +smk` / `+smk +sdspi` / `+smk10`.
 - **Framebuffer conventions** (mirrored by `fb_video_tb`/`gen_expected.py`
   alike): FB = 512 slots/line × 4-bit colour nibble × 256 lines, 128
   words/line, slot `s` of a word at bits `[4s+3:4s]`, LSB-first in beam order;

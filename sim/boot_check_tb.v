@@ -37,6 +37,13 @@
 // profile (e.g. a RAM test before the clear) needs it. +warmreset is
 // bk10-only for now (ignored under +bk11).
 //
+// +smk10 (Phase 8, bk10+SMK): the same real-SMK-BIOS cold boot on a BK-0010
+// stack (BkEmu BK_0010_SMK512) - model_bk11=0, the /32 CPU rate, the bk10 ROM
+// blob (the monitor ROM is what mon_en selects at segs 0,1) plus the bk11
+// blob purely for the BIOS image at 0x3A000. Pass conditions as +smk MINUS
+// the 177662 write: on a BK-0010 that write must NOT reply - it is the BIOS's
+// own model detect (doc/smk64.mac START: trap 4 -> the MODE_STD10 commit).
+//
 // +smk (Phase 8): cold-boot the REAL SMK512 BIOS - +bk11 stack plus
 // smk_en=1, the 43008-word blob incl. the BIOS image at SDRAM 0x3A000, a
 // deepened SDRAM model (SMK RAM at 0x40000+, left zeroed - real hardware
@@ -75,11 +82,17 @@ module boot_check_tb;
     localparam integer SMK_FETCH_TARGET = 200;
 
     // ---- model select (+bk11 = BK-0011M BOS boot; +smk = BK-0011M + SMK512,
-    //      boots the REAL SMK BIOS through the 177716 overlay) ---------------
-    reg model11, smk;
+    //      boots the REAL SMK BIOS through the 177716 overlay; +smk10 = the
+    //      same SMK BIOS boot on a BK-0010 stack - BkEmu BK_0010_SMK512, the
+    //      bk10 ROM blob with the monitor at 100000 and the SMK covering the
+    //      rest of the ROM window). NOTE $test$plusargs is a PREFIX match, so
+    //      +smk10 satisfies $test$plusargs("smk") too - that is what makes
+    //      `smk` true for both legs. -----------------------------------------
+    reg model11, smk, smk10;
     initial begin
+        smk10   = $test$plusargs("smk10");
         smk     = $test$plusargs("smk");
-        model11 = $test$plusargs("bk11") || smk;
+        model11 = ($test$plusargs("bk11") || smk) && !smk10;
     end
 
     // ---- clocks (as ref037_soc_video_tb / bk11_soc_tb) --------------------------
@@ -505,8 +518,11 @@ module boot_check_tb;
     // the LIVE smk_ide attached (media present), so the whole boot runs
     // against the sel_ide decode with the no-X monitors armed.
     always @(posedge clk) begin
+        // +smk10: no 662 write in the pass condition - on a BK-0010 that
+        // write is exactly what must NOT reply (it is the BIOS's own model
+        // detect: 177662 bus-times-out -> trap 4 -> the MODE_STD10 commit).
         if (smk && bios_fetches >= SMK_FETCH_TARGET
-            && saw_662w && vid_writes >= VID_TARGET) begin
+            && (saw_662w || smk10) && vid_writes >= VID_TARGET) begin
             if (!vec_checked) begin
                 $display("BOOTCHK-VEC-ERROR: BIOS ran but 177716 never read");
                 xerrs = xerrs + 1;
@@ -593,7 +609,11 @@ module boot_check_tb;
         for (ii = 0; ii < 16320; ii = ii + 1)
             u_mem.mem[16'h4000 + ii] =
                 {blob['h40008 + 2*ii + 1], blob['h40008 + 2*ii]};
-        if (model11) begin                   // +bk11: window-ROM banks + top ROM
+        // +bk11/+smk: the window-ROM banks + top ROM; +smk10 needs the same
+        // blob purely for the SMK BIOS image at 0x3A000 (on real hardware
+        // epcs_boot loads BOTH blobs unconditionally at power-on, exactly so
+        // the BIOS is resident whatever DIP 1 says).
+        if (model11 || smk) begin
             // 43008 words: incl. the SMK BIOS at 0x3A000 (only reachable
             // under +smk; SMK RAM itself stays zeroed - real hardware powers
             // on garbage there and the BIOS must not depend on it)
@@ -621,6 +641,7 @@ module boot_check_tb;
         // 60 ms stays the bound for the bk10/bk11 boots. +longbound (DEBUG)
         // stretches to 2 s for exploring the post-EMT-0 boot flow.
         if ($test$plusargs("longbound"))    #2_000_000_000;
+        else if (smk10)                     #550_000_000;   // /32: ~4/3 longer
         else if ($test$plusargs("smk"))     #400_000_000;
         else                                #60_000_000;
         $display("BOOTCHK-TIMEOUT: only %0d video-RAM writes (%0d X errors)",

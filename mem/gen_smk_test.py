@@ -49,6 +49,20 @@ boot mechanism and only reaches the success park if DCLO restored SYS (BIOS
 windows + overlay back, RUN_FLAG routes to a re-verify which also proves SMK
 RAM content SURVIVED the warm reset).
 
+--bk10 (BkEmu BK_0010_SMK512) builds the SAME program for a BK-0010 stack,
+emitting smk_low10.hex (16384 words = the machine's own RAM 000000-077777 at
+SDRAM 0x0000) instead of smk_page6.hex - identical layout, since the SMK never
+touches anything below 0100000. The SMK machinery is model-independent, so
+only the standard-memory legs differ: the MONITOR ROM stands in for BOS + the
+banked window at segs 0,1 (mon_en; read-checked against tb-poked markers and
+write-traps like any ROM), the ex-BASIC region 0120000-0157777 is DEAD
+wherever the SMK does not cover it (STD11/RAM11 - that configuration carries
+no BASIC ROMs), HLT11 is the one mode where mon_en is observable (segs 0-3 all
+trap), the STD11 window-1-banking/662/top-ROM section is replaced by those
+dead-segment checks, the 177716 merges are against SYS_START = 0100000, and
+under SYS a 177662 write must TRAP - the model-detect mechanism the real BIOS
+uses (doc/smk64.mac START; a bk11 replies there).
+
 Park loops (pinned, the tb keys off them):
   success self-loop PC = 001004
   failure self-loop PC = 001012
@@ -61,6 +75,7 @@ from gen_mem import Asm, BR, BEQ
 from gen_bk11_test import expect_eq, cmp_mem_imm, bank_write, expect_trap4
 
 PAGE_WORDS = 8192
+LOW10_WORDS = 16384          # --bk10: the whole BK-0010 RAM (000000-077777)
 BIOS_WORDS = 2048            # one 4 KB image = one segment
 PROG_BASE = 0o001000
 
@@ -115,6 +130,15 @@ EXTPAT16 = 0o120421          # planted @ 137716 (RAM10) -> ALL merged 177716
                              # (bit 15 SET - agrees with the 037 AD15 assist;
                              # no VOLATILE bits)
 
+# --- BK-0010 leg (--bk10; BkEmu BK_0010_SMK512) -----------------------------
+# tb-poked markers in the bk10 ROM image (SDRAM 0x4000+ = BK 100000+): the
+# MONITOR ROM at segs 0,1 (what mon_en selects) and one word inside the
+# ex-BASIC region that must NEVER show through - in that configuration there
+# are no BASIC ROMs, so every segment the SMK does not cover is DEAD.
+MONPAT0 = 0o152525           # BK 100000 (SDRAM 0x4000)
+MONPAT1 = 0o063636           # BK 117776 (SDRAM 0x4FFF), the seg-1 top
+BASPAT = 0o177077            # BK 120000 (SDRAM 0x5000) - must stay invisible
+
 
 def seg(n):
     return 0o100000 + n * 0o10000
@@ -138,8 +162,10 @@ def cmp_reg_imm(a, addr, imm, mask):
     expect_eq(a)
 
 
-def build_stage2():
+def build_stage2(bk10=False):
     a = Asm(base=PROG_BASE)
+    # the 177716 system-register start bits (BkEmu Sel1RegisterSystemBits)
+    sys_start = 0o100000 if bk10 else 0o140000
 
     # --- fixed park block (addresses hardcoded in the tb) -------------------
     a.br(BR, "start")                       # 001000
@@ -163,10 +189,15 @@ def build_stage2():
 
     # --- 1. the register + the SYS BIOS windows -----------------------------
     # 1a. a commit attempt WITHOUT a prior arm: the write must be REPLIED
-    # (parking at fail via trap 4 if not) but must NOT commit - SYS seg 0
-    # stays deselected (trap 4 on read).
+    # (parking at fail via trap 4 if not) but must NOT commit - the SYS layout
+    # stays live. bk11 proves it through seg 0 (deselected -> trap 4); on a
+    # bk10 seg 0 is the monitor ROM, so the proof is the rom7 register-space
+    # overlay instead (RAM10 would show the FDD stub's 0 at 177130).
     a.emit(0o012737, RAM10, REG)
-    expect_trap4(a, lambda: a.emit(0o005737, seg(0)))   # TST @#100000
+    if bk10:
+        cmp_mem_imm(a, REG, BIOSPAT130)
+    else:
+        expect_trap4(a, lambda: a.emit(0o005737, seg(0)))   # TST @#100000
     # 1b. ONE image, BOTH windows: rom6 @160000, rom7 @170000
     cmp_mem_imm(a, seg(6), BIOSPAT0)
     cmp_mem_imm(a, seg(7), BIOSPAT0)
@@ -183,6 +214,12 @@ def build_stage2():
     # read data; the overlay must stay silent - the tb's X monitor is the
     # real check here, this read is its tripwire)
     a.emit(0o013700, 0o177712)              # MOV @#177712,R0 (no compare)
+    # 1g. BK-0010: segs 0,1 are the machine's own MONITOR ROM (mon_en - the
+    # bk10 analogue of the bk11 seg_std vector), read-only like any ROM.
+    if bk10:
+        cmp_mem_imm(a, seg(0), MONPAT0)
+        cmp_mem_imm(a, 0o117776, MONPAT1)
+        expect_trap4(a, lambda: a.emit(0o012737, 0o123123, seg(0)))
 
     # --- 2. the I/O-page overlay OR-merge ------------------------------------
     # 177714 (nSEL2, io_word = 0): the merge returns the pure BIOS word
@@ -219,7 +256,7 @@ def build_stage2():
     cmp_mem_imm(a, REG, 0)
     cmp_mem_imm(a, REG + 2, 0)                  # 177132 data reg: ditto
     # no overlay outside SYS: 177716 is the plain SEL1 register again
-    cmp_reg_imm(a, 0o177716, 0o140000, VOLATILE)
+    cmp_reg_imm(a, 0o177716, sys_start, VOLATILE)
     # plant the ALL-extent probes at abs P+3 (RAM10 seg3 = P+3): the ALL
     # extent maps 177xxx -> abs P+3 (seg 7 ^ 4)
     a.emit(0o012737, EXTPAT74, seg(3) + 0o7674)
@@ -256,7 +293,10 @@ def build_stage2():
     # BOTH modes, so its own fetches stay put - then JMPs back here.
     a.emit(0o000137, ROUTINE)               # JMP @#124000
     a.label("ret5")
-    expect_trap4(a, lambda: a.emit(0o005737, seg(0)))   # STD10 seg0 deselected
+    if bk10:                                # STD10 seg0 = the monitor ROM
+        cmp_mem_imm(a, seg(0), MONPAT0)
+    else:                                   # STD10 seg0 deselected on a bk11
+        expect_trap4(a, lambda: a.emit(0o005737, seg(0)))
     cmp_mem_imm(a, ROUTINE, 0o012737)       # seg2 still S2: its own opcode
     cmp_mem_imm(a, seg(6), BIOSPAT0)        # STD10 seg6 = the BIOS window
     expect_trap4(a, lambda: a.emit(0o005737, 0o177000))  # STD10 extent capped
@@ -288,6 +328,18 @@ def build_stage2():
     a.emit(0o012737, 0o000120, REG)
     cmp_mem_imm(a, seg(0) + OFF_S, pat_s(0))            # still HLT10 page 0
 
+    # --- 8b. BK-0010 HLT11: the ONE mode where mon_en is observable ----------
+    # HLT11 deselects the monitor ROM (BkEmu selectBk10MonitorRom(false)) AND
+    # leaves segs 0..3 SMK-uncovered, so 0100000-0137777 is DEAD on a BK-0010
+    # (on a bk11 the same mode shows the standard banked window there).
+    if bk10:
+        smk_mode(a, HLT11)
+        expect_trap4(a, lambda: a.emit(0o005737, seg(0)))       # monitor gone
+        expect_trap4(a, lambda: a.emit(0o005737, 0o117776))     # ...seg 1 too
+        expect_trap4(a, lambda: a.emit(0o012737, 0o123123, seg(1)))  # write
+        expect_trap4(a, lambda: a.emit(0o005737, seg(2)))       # seg 2 dead
+        cmp_mem_imm(a, seg(4) + OFF_S, pat_s(4))                # seg4 = P+4
+
     # --- 9. ALL: the READABLE extent + the cross-mode aliases ----------------
     smk_mode(a, ALL)
     # extent reads (ALL seg7 -> abs P+3): the RAM10-planted probe
@@ -301,7 +353,7 @@ def build_stage2():
     expect_trap4(a, lambda: a.emit(0o012737, 0o123123, 0o177674))
     # 177716 through the ALL extent: SMK RAM word | SEL1 (the merge again,
     # now with the extent as the memory side)
-    cmp_reg_imm(a, 0o177716, EXTPAT16 | 0o140000, VOLATILE)
+    cmp_reg_imm(a, 0o177716, EXTPAT16 | sys_start, VOLATILE)
 
     # --- 10. a COMMITTED SYS re-selects both BIOS windows --------------------
     # (reset-SYS is covered by boot; this exercises the register-commit SYS
@@ -310,21 +362,36 @@ def build_stage2():
     smk_mode(a, SYS)
     cmp_mem_imm(a, seg(6), BIOSPAT0)        # rom6 back via the commit
     cmp_mem_imm(a, REG, BIOSPAT130)         # rom7 overlay back via the commit
+    if bk10:
+        cmp_mem_imm(a, seg(0), MONPAT0)     # ...and the monitor ROM with it
+        # THE model-detect mechanism the real BIOS uses (doc/smk64.mac START):
+        # under SYS the rom7 window makes 177662 a ROM write -> no reply ->
+        # trap 4 -> its vector-4 handler commits MODE_STD10 ("для 10"). On a
+        # bk11 the very same write is REPLIED (qbus_mem's sel_vreg positive
+        # decode is model-gated), which is how the BIOS tells the two apart.
+        expect_trap4(a, lambda: a.emit(0o012737, 0o145000, 0o177662))
 
     # --- 10b. STD11 passthrough: the standard machine under the SMK ----------
-    smk_mode(a, STD11)
-    bank_write(a, BIT11 | (1 << 8))         # window 1 -> RAM page 1
-    a.emit(0o012737, W1PAT, seg(0) + OFF_S) # std win-1 RAM (037 path) write
-    cmp_mem_imm(a, seg(0) + OFF_S, W1PAT)
-    bank_write(a, BIT11 | 0o001)            # window 1 -> ROM overlay bank 0
-    cmp_mem_imm(a, seg(0), ROMPAT0)         # the tb-poked overlay marker
-    cmp_mem_imm(a, 0o140000, 0o000137)      # std top ROM (BOS socket) visible
-    cmp_mem_imm(a, 0o140004, TOPPAT)
-    cmp_mem_imm(a, seg(6), BIOSPAT0)        # 160000: the SMK shadows MSTD
-    cmp_mem_imm(a, seg(7) + OFF_S, pat_s(7))            # seg7 = P+7 (page 0)
-    # a 177662 write must be replied; value keeps IRQ2 MASKED (no ISR here).
-    # The tb checks the vid taps (page=1, mask=1, pal=0o12) at the first park.
-    a.emit(0o012737, 0o145000, 0o177662)
+    if bk10:
+        # On a BK-0010 "standard" means the monitor ROM at segs 0,1 and
+        # NOTHING at segs 2..5: the BK_0010_SMK512 configuration carries no
+        # BASIC ROMs, so the loaded ROM image must not show through there.
+        smk_mode(a, STD11)
+        cmp_mem_imm(a, seg(0), MONPAT0)
+        cmp_mem_imm(a, 0o117776, MONPAT1)
+        expect_trap4(a, lambda: a.emit(0o005737, seg(2)))       # ex-BASIC dead
+        expect_trap4(a, lambda: a.emit(0o005737, 0o157776))     # ...to seg 5
+        expect_trap4(a, lambda: a.emit(0o012737, 0o123123, seg(3)))
+        cmp_mem_imm(a, seg(6), BIOSPAT0)                        # seg6 = BIOS
+        cmp_mem_imm(a, seg(7) + OFF_S, pat_s(7))                # seg7 = P+7
+        # RAM11 on a bk10: monitor at segs 0,1, segs 2,3 dead, 4..7 SMK
+        smk_mode(a, RAM11)
+        cmp_mem_imm(a, seg(0), MONPAT0)
+        expect_trap4(a, lambda: a.emit(0o005737, seg(3)))
+        cmp_mem_imm(a, seg(4) + OFF_S, pat_s(4))
+        cmp_mem_imm(a, seg(6) + OFF_S, pat_s(6))
+    else:
+        build_std11_bk11(a)
 
     # --- 11. the RESET instruction preserves the layout (DCLO-only reset) ----
     smk_mode(a, RAM10)
@@ -359,7 +426,10 @@ def build_stage2():
     # --- second pass (post-DCLO): SYS + the BIOS windows restored, SMK RAM
     # content survived --------------------------------------------------------
     a.label("second")
-    expect_trap4(a, lambda: a.emit(0o005737, seg(0)))   # seg0 deselected again
+    if bk10:
+        cmp_mem_imm(a, seg(0), MONPAT0)            # monitor back (SYS mon_en)
+    else:
+        expect_trap4(a, lambda: a.emit(0o005737, seg(0)))  # seg0 deselected
     cmp_mem_imm(a, seg(6), BIOSPAT0)           # rom6 back (SYS restored)
     cmp_mem_imm(a, REG, BIOSPAT130)            # rom7 overlay back over 177130
     cmp_mem_imm(a, seg(2) + OFF_S, pat_s(6))   # SYS seg2 = abs S6 (pattern kept)
@@ -369,6 +439,23 @@ def build_stage2():
 
     words = a.resolve()
     return words, a.labels
+
+
+def build_std11_bk11(a):
+    """The BK-0011M STD11 leg: the standard machine seen under the SMK."""
+    smk_mode(a, STD11)
+    bank_write(a, BIT11 | (1 << 8))         # window 1 -> RAM page 1
+    a.emit(0o012737, W1PAT, seg(0) + OFF_S) # std win-1 RAM (037 path) write
+    cmp_mem_imm(a, seg(0) + OFF_S, W1PAT)
+    bank_write(a, BIT11 | 0o001)            # window 1 -> ROM overlay bank 0
+    cmp_mem_imm(a, seg(0), ROMPAT0)         # the tb-poked overlay marker
+    cmp_mem_imm(a, 0o140000, 0o000137)      # std top ROM (BOS socket) visible
+    cmp_mem_imm(a, 0o140004, TOPPAT)
+    cmp_mem_imm(a, seg(6), BIOSPAT0)        # 160000: the SMK shadows MSTD
+    cmp_mem_imm(a, seg(7) + OFF_S, pat_s(7))            # seg7 = P+7 (page 0)
+    # a 177662 write must be replied; value keeps IRQ2 MASKED (no ISR here).
+    # The tb checks the vid taps (page=1, mask=1, pal=0o12) at the first park.
+    a.emit(0o012737, 0o145000, 0o177662)
 
 
 # tb-poked markers, shared with the bk11 oracle conventions (keep in sync
@@ -393,9 +480,11 @@ def build_bios():
 
 
 def main():
-    outdir = sys.argv[1] if len(sys.argv) > 1 else "."
+    args = [x for x in sys.argv[1:] if not x.startswith("--")]
+    bk10 = "--bk10" in sys.argv
+    outdir = args[0] if args else "."
 
-    s2, labels = build_stage2()
+    s2, labels = build_stage2(bk10)
 
     def word_at(label):
         return PROG_BASE + 2 * labels[label]
@@ -406,19 +495,25 @@ def main():
     assert PROG_BASE + 2 * len(s2) <= 0o030000, \
         f"stage 2 too large ({len(s2)} words)"
 
-    page6 = [0] * PAGE_WORDS
-    page6[0o004 >> 1] = word_at("fail")     # trap 4 (bus timeout) -> fail park
-    page6[0o006 >> 1] = 0o000340
+    # The residence image: BK-0011M physical RAM page 6 (the fixed
+    # 000000-037777 region, SDRAM 0x2C000) or, for the bk10 leg, the whole
+    # BK-0010 RAM (000000-077777, SDRAM 0x0000). Identical layout either way -
+    # the SMK never touches addresses below 0100000.
+    ram_words = LOW10_WORDS if bk10 else PAGE_WORDS
+    ram = [0] * ram_words
+    ram[0o004 >> 1] = word_at("fail")       # trap 4 (bus timeout) -> fail park
+    ram[0o006 >> 1] = 0o000340
     for i, w in enumerate(s2):
-        page6[(PROG_BASE >> 1) + i] = w
+        ram[(PROG_BASE >> 1) + i] = w
 
     bios = build_bios()
+    ram_name = "smk_low10.hex" if bk10 else "smk_page6.hex"
 
-    for name, img in (("smk_page6.hex", page6), ("smk_bios.hex", bios)):
+    for name, img in ((ram_name, ram), ("smk_bios.hex", bios)):
         with open(f"{outdir}/{name}", "w") as f:
             for w in img:
                 f.write(f"{w:04x}\n")
-    print(f"wrote {outdir}/smk_page6.hex + smk_bios.hex "
+    print(f"wrote {outdir}/{ram_name} + smk_bios.hex "
           f"(stage 2 {len(s2)} words at {oct(PROG_BASE)})")
 
 

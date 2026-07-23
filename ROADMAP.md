@@ -754,7 +754,8 @@ is not a single peripheral:
   this failure class exists here and not there.) **Deferred:** real data
   CRC16, MMC cards.
 - **512 KB segmented RAM extension** — ✅ **increment 1 DONE IN SIM 2026-07-17**
-  (BK-0011M only, enable = **DIP 8**, DCLO-hold-latched like DIP 1). The
+  (enable = **DIP 8**, DCLO-hold-latched like DIP 1; BK-0011M only until the
+  bk10+SMK increment below). The
   memory-layout piece, and it *was* the Phase-7 coupling: 8 × 4 KB segments
   (seg = `addr[14:12]`) mapped into the `100000–177777` window from the
   0177130 control register (the floppy control register the SMK "ab-uses";
@@ -773,10 +774,35 @@ is not a single peripheral:
   SYS not STD11, low-nibble strobe compare, per-BkEmu byte-lane masking).
   **Deliberately deferred (now landed in increment 2 — see the next
   bullet):** the BIOS ROM windows and the seg-7 extents. Still deferred:
-  bk10+SMK (BkEmu `BK_0010_SMK512`); the SMK-RAM power-on DRAM pattern
-  (`ram_init`). Oracles: `sim/run_mapper.sh` (differential smk_en=0
+  the SMK-RAM power-on DRAM pattern (`ram_init`). Oracles:
+  `sim/run_mapper.sh` (differential smk_en=0
   reference + the directed contract, mutation-tested) and `sim/smk/run.sh`
   (SoC functional oracle with a DCLO-replay second pass, mutation-tested).
+- **BK-0010 + SMK (BkEmu `BK_0010_SMK512`)** — ✅ **DONE IN SIM 2026-07-23**:
+  DIP 8 now works in BOTH models. The SMK is an МПИ expansion board and
+  `SmkMemoryManager` is ONE class shared by both configurations, so every
+  SMK term (the 177130 snoop, the segment overlay, the 177130/132 FDD stub,
+  the IDE decode, the `smk_ide`/`sd_backend` enables) drops its
+  `model_bk11` gate. The only model-dependent part is WHICH standard memory
+  a mode deselects — on bk10 the **monitor ROM** (`selectBk10MonitorRom`),
+  added as the commit-decoded `mon_en` flag and consumed through
+  `std_vec = model_bk11 ? seg_std : (mon_en ? segs 0,1 : none)`. Consequence
+  (BkEmu-faithful, decided deliberately): the machine's own **BASIC region
+  0120000–0177577 is MK_NONE wherever the SMK does not cover it** — that
+  configuration carries no BASIC ROMs, and on real hardware the SMK drives
+  those addresses in every other mode. HLT11 is the one mode where `mon_en`
+  is observable. The BIOS **detects the model itself** (doc/smk64.mac
+  `START`: a 177662 write with vector 4 planted — replied on a bk11,
+  bus-timeout → trap 4 → the `MODE_STD10` commit on a bk10), so no RTL
+  model plumbing is needed for it; HLT10, the SMK HALT-debugger mode, is
+  what a BK-0010 wants the SMK for. No blob/EPCS change (both blobs load
+  unconditionally, so the BIOS is always resident). Oracles:
+  `sim/run_mapper.sh` sections S2/S11 (+5 mutations), the `+bk10` leg of
+  `sim/smk/run.sh`, and `sim/run_boot_check.sh +smk10` (the real BIOS
+  cold-booting on the bk10 stack - PASS: the merged 166400 start vector, the
+  BIOS executing from rom6, and its banner drawn into the BK-0010 screen RAM
+  at 042000). Fit 6,938 LE (58%), sys_clk worst setup **+0.430 ns**, TNS 0,
+  zero negative paths. **Hardware confirmation pending.**
 - **SMK BIOS ROM + boot** — ✅ **increment 2 DONE, CONFIRMED ON HARDWARE
   2026-07-17** (DIP-8-ON boots the SMK BIOS to its banner on the board): ONE
   4 KB image (`mem/roms/smk512_v205.rom`, BkEmu res/raw) backing BOTH
@@ -866,11 +892,11 @@ frame interrupt is wired (sim-proven, bk11-only), and the BK-0011M ROM set now
 rides a second EPCS blob with SYS_START 140000 — **Phase 7 is done and
 confirmed on hardware 2026-07-16: BK-0011M boots and runs BOS, the reset
 button switches models**. Phase 8 has started: increment 1 (the SMK512
-512 KB segmented RAM extension on DIP 8, BK-0011M only) and increment 2 (the
+512 KB segmented RAM extension on DIP 8) and increment 2 (the
 SMK BIOS ROM + the SYS register-space boot overlay — DIP-8-ON boots the SMK
 BIOS through the merged 177716 start vector) are done, **increment 2 confirmed
 on hardware 2026-07-17: the SMK BIOS boots to its banner** (see the Phase-8
-section). Remaining deferred items: the SMK IDE/SD increment, bk10+SMK, the
+section). Remaining deferred items: the SMK IDE/SD increment, the
 SMK-RAM ram_init pattern, `N_VREG`/`N_EXT`/`N_SMKREG` calibration and 0011M
 cycle-accuracy vs a reference (reference-tb-first).*
 *See also the project memory notes `bk-on-1chipmsx-feasibility` (bring-up history),

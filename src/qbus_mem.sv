@@ -62,8 +62,8 @@ module qbus_mem #(
     input  logic        model_bk11, // DIP-1 model select, latched during DCLO
                                     // hold (quasi-static): 1 = BK-0011M banking
     input  logic        smk_en,     // DIP-8 SMK512 enable, latched during DCLO
-                                    // hold (quasi-static); BK-0011M only - every
-                                    // consumer gates it with model_bk11
+                                    // hold (quasi-static); BOTH models (the SMK
+                                    // is an МПИ expansion board - see mem_mapper)
 
     // ---- SMK512 IDE read data (Phase-8 IDE increment) ---------------------
     // smk_ide's registered TRUE-bus-value word: ~packed register data inside
@@ -297,7 +297,9 @@ module qbus_mem #(
     // write order), so a mode write can never re-map its own in-flight
     // cycle. With the SMK absent the decode is dead and 177130 stays plain
     // ROM: reads return the MSTD word, writes trap (sim/romwr).
-    wire sel_fdd = model_bk11 && smk_en_q && !sync_n
+    // Model-independent since the bk10+SMK increment (the SMK is an МПИ
+    // expansion board; BkEmu attaches FloppyController in BOTH SMK configs).
+    wire sel_fdd = smk_en_q && !sync_n
                    && (addr[15:2] == 14'(16'o177130 >> 2));
 
     // ---- 177740-177757: SMK512 IDE task file (Phase-8 IDE increment) ------
@@ -312,7 +314,9 @@ module qbus_mem #(
     // reply). The block sits outside cpu_blk/kbd_blk, so the carve-outs
     // are not involved. Reply = fixed N_IDE (N_ROM family per the I/O-page
     // rule; placeholder - see qbus_pkg).
-    wire sel_ide = model_bk11 && smk_en_q && !sync_n
+    // Model-independent like sel_fdd above (BkEmu attaches SmkIdeController
+    // in BK_0010_SMK512 and BK_0011M_SMK512 alike).
+    wire sel_ide = smk_en_q && !sync_n
                    && (addr[15:4] == 12'hFFE);
 
     // ROM reads are always served from SDRAM through cpu_sdram_dp (port 0).

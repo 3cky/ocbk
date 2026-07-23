@@ -66,7 +66,7 @@
 module smk_ide (
     input  logic        sclk,        // sys_clk
     input  logic        reset,       // = ~dclo_n (DCLO-only; NOT nINIT)
-    input  logic        enable,      // smk_en && model_bk11 (quasi-static)
+    input  logic        enable,      // = smk_en, DIP 8 (quasi-static)
 
     // ---- Q-bus taps (observe-only; never driven) --------------------------
     input  logic [15:0] ad_n,
