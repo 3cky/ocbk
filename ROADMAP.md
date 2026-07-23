@@ -773,11 +773,20 @@ is not a single peripheral:
   BkEmu `SmkMemoryManager` beat MiSTer on every divergence (reset default
   SYS not STD11, low-nibble strobe compare, per-BkEmu byte-lane masking).
   **Deliberately deferred (now landed in increment 2 — see the next
-  bullet):** the BIOS ROM windows and the seg-7 extents. Still deferred:
-  the SMK-RAM power-on DRAM pattern (`ram_init`). Oracles:
+  bullet):** the BIOS ROM windows and the seg-7 extents.
+  **The SMK-RAM power-on fill landed 2026-07-23 (sim):** `ram_init` gained a
+  second fill segment over the 256 Kwords at `SMK_RAM_BASE`, **zero-filled**
+  rather than patterned — bkemu-QT has no SMK512 board, so no authoritative
+  power-on pattern exists (`Board_EXT32`/`Board_*_FDD` only continue the *host
+  machine's* rule across their own extension arrays), and all-zeros is both a
+  defined state and what every SMK oracle already assumes. Sticky `smk_valid`
+  ⇒ power-on or a DIP-8 0→1 only; a model change never re-fills it and a
+  same-configuration warm reset preserves it (the BIOS's RAM-BIOS copy must
+  survive a reset). Oracles:
   `sim/run_mapper.sh` (differential smk_en=0
-  reference + the directed contract, mutation-tested) and `sim/smk/run.sh`
-  (SoC functional oracle with a DCLO-replay second pass, mutation-tested).
+  reference + the directed contract, mutation-tested), `sim/smk/run.sh`
+  (SoC functional oracle with a DCLO-replay second pass, mutation-tested) and
+  `sim/raminit/run.sh` (the segment sequence + the zero fill, +5 mutations).
 - **BK-0010 + SMK (BkEmu `BK_0010_SMK512`)** — ✅ **DONE, CONFIRMED ON
   HARDWARE 2026-07-23** (DIP 1 OFF + DIP 8 ON: the SMK BIOS boots and loads
   an OS from the SD-backed image on a BK-0010 as well):
@@ -898,8 +907,8 @@ button switches models**. Phase 8 has started: increment 1 (the SMK512
 SMK BIOS ROM + the SYS register-space boot overlay — DIP-8-ON boots the SMK
 BIOS through the merged 177716 start vector) are done, **increment 2 confirmed
 on hardware 2026-07-17: the SMK BIOS boots to its banner** (see the Phase-8
-section). Remaining deferred items: the SMK IDE/SD increment, the
-SMK-RAM ram_init pattern, `N_VREG`/`N_EXT`/`N_SMKREG` calibration and 0011M
+section). Remaining deferred items: the SMK IDE/SD increment,
+`N_VREG`/`N_EXT`/`N_SMKREG` calibration and 0011M
 cycle-accuracy vs a reference (reference-tb-first).*
 *See also the project memory notes `bk-on-1chipmsx-feasibility` (bring-up history),
 `bk-video-pipeline-decision` (Phase 3/4 design) and `bkemu-reference-and-roms`

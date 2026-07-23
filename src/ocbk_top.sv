@@ -322,7 +322,10 @@ module ocbk_top (
     // Fills the model's RAM region in SDRAM with the К565РУ6/РУ5 power-on
     // garbage pattern (bkemu-QT InitMemoryValues) at power-on and on a
     // model-change warm reset, so the BK startup screen looks like real
-    // hardware instead of undefined SDRAM noise. Shares arbiter port 0 with the
+    // hardware instead of undefined SDRAM noise. With DIP 8 set it also
+    // zero-fills the SMK512's 256 Kwords at SMK_RAM_BASE (a second fill
+    // segment, power-on / DIP-8-enable only - see the ram_init header for why
+    // that region is zeroed rather than patterned). Shares arbiter port 0 with the
     // EPCS loader through the 2:1 mux below - the two never overlap (the fill
     // starts only after boot_done, still inside the DCLO hold). fill_busy holds
     // the CPU until the fill completes (see the reset sequencer); blank_pulse
@@ -335,6 +338,7 @@ module ocbk_top (
         .clk        (sys_clk),
         .rst_n      (srst_n),
         .model_bk11 (model_bk11),
+        .smk_en     (smk_en),
         .enable     (boot_done & ~boot_active),
         .w_req      (fi_req),
         .w_addr     (fi_addr),

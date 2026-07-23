@@ -615,8 +615,9 @@ module boot_check_tb;
         // the BIOS is resident whatever DIP 1 says).
         if (model11 || smk) begin
             // 43008 words: incl. the SMK BIOS at 0x3A000 (only reachable
-            // under +smk; SMK RAM itself stays zeroed - real hardware powers
-            // on garbage there and the BIOS must not depend on it)
+            // under +smk; SMK RAM itself stays zeroed - which is exactly what
+            // the board produces since ram_init gained its second, zero-filled
+            // segment, so this replica is faithful and not an approximation)
             $readmemh("../mem/boot_blob11_flash.hex", blob, 'h48000);
             for (ii = 0; ii < 43008; ii = ii + 1)
                 u_mem.mem['h30000 + ii] =

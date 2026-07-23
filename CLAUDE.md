@@ -57,8 +57,10 @@ the SD-backed image on a BK-0010 too**. DIP 8
 works in BOTH models now (the SMK is an МПИ expansion board — only the
 per-mode monitor-ROM deselect, `mon_en`, is model-dependent; see the
 SMK512 bullet); fit 6,938 LE, sys_clk +0.430 ns / TNS 0.
-Remaining open items: the
-SMK-RAM `ram_init` pattern, `N_*` recalibration, and BK-0011M
+**The SMK-RAM power-on fill is DONE (sim) 2026-07-23**: `ram_init` gained
+a second, ZERO-filled segment over the SMK512's 256 Kwords (see the
+`ram_init` bullet). Remaining open items:
+`N_*` recalibration and BK-0011M
 cycle-accuracy vs a reference (deferred, reference-tb-first).
 
 ## Build & test
@@ -342,8 +344,20 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   walk over the model's RAM range (bk10 0x0000–0x3FFF / bk11 0x20000–0x2FFFF),
   the served-mask ≥1-cycle req gap, the trigger (power-on fill, NO re-fill on a
   same-model reset, re-fill on a model change), and `blank_pulse` (silent on the
-  first fill, one pulse per re-fill). **Mutation-tested** (wrong pattern bit /
-  no gap both break it). The SoC-integration side is covered by
+  first fill, one pulse per re-fill). **Phase 8:** the SMK512 second segment —
+  the tb keeps an **independent shadow** of `ram_valid`/`model_seen`/`smk_valid`
+  and predicts, per pass, the *segment sequence* (seg 0 then seg 1, either
+  skipped when not needed), each segment's contiguous walk/count
+  (16384 / 65536 / **262144**) and data (pattern for seg 0, exactly `0x0000` for
+  seg 1): power-on-with-SMK-off (main only), a DIP-8 0→1 (SMK only, **no**
+  `blank_pulse`), a same-config reset (nothing), a DIP-8 off→on round trip
+  (nothing — `smk_valid` is sticky), a model change (main only), and a power
+  cycle with both set (one pass, both segments).
+  **Mutation-tested** (wrong pattern bit /
+  no gap break it; +5 Phase-8: seg-1 pattern instead of zeros, sticky
+  `smk_valid` dropped, `LASTSMK` off by one, the `seg_next` gap fix-up dropped,
+  `blank_pulse` losing its `need_main` term — see the run.sh header).
+  The SoC-integration side is covered by
   `sim/run_boot_check.sh` (real MONITOR/BOS cold-booting on the pattern) — the
   replica preloads the pattern rather than running ram_init through the
   boot-writer port (that datapath is `run_epcs_boot`'s).
@@ -513,7 +527,25 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   re-fill i.e. `ram_valid` already 1) it clears `fb_video`'s `fb_front_valid`,
   reusing the existing power-on black-out so the display goes black → reveals
   the fresh pattern → firmware clears it (the first power-on fill needs no pulse
-  — video is still in reset then). Oracle: `sim/raminit/run.sh` +
+  — video is still in reset then).
+  **Phase 8 — a SECOND fill segment (`seg`), the SMK512's 256 Kwords at
+  `SMK_RAM_BASE`, ZERO-filled** (2026-07-23): bkemu-QT has no SMK512 board, so
+  there is no authoritative power-on pattern for it — its `Board_EXT32` /
+  `Board_*_FDD` only continue the *host machine's* linear rule across their own
+  extension arrays, which says nothing about a third-party МПИ board with
+  unknown DRAM. All-zeros is a defined state and is exactly what every SMK
+  oracle already assumes, so the board now matches sim. Trigger: a sticky
+  `smk_valid` (power-on-reset like `ram_valid`), so seg 1 fills at power-on or
+  on a DIP-8 **0→1** transition only — a model change never re-fills it (the
+  fill is model-independent), and a same-configuration warm reset preserves it
+  (the BIOS's RAM-BIOS copy, `doc/smk64.mac` `MOD$S`, must survive a reset). One
+  `fill_active` pass covers every needed segment, seg 0 first, handing over in
+  the served-mask gap cycle (`seg_next` → `w_addr <= BASESMK`); `blank_pulse`
+  keeps its `need_main` term so an SMK-only fill never blacks the display out
+  (SMK RAM is never displayed). ~8 ms at power-on, invisible behind the ~77 ms
+  EPCS load. `BASESMK`/`LASTSMK` are localparams that must track
+  `qbus_pkg::SMK_RAM_BASE` — `ram_init` is compiled standalone by its oracle.
+  Oracle: `sim/raminit/run.sh` +
   `sim/run_boot_check.sh` (real MONITOR/BOS cold-boot on the pattern; the
   replica preloads it). **DCLO/model-change-only** — like the map/662/spk
   registers, it is deliberately NOT reset by nINIT (a RESET instruction must
@@ -927,8 +959,10 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   RAM seg 6) is what that machine is for. No blob change: `epcs_boot`
   loads both blobs unconditionally, so the BIOS is resident at
   `SMK_BIOS_BASE` whatever DIP 1 says.
-  **Still deferred:** the SMK-RAM
-  `ram_init` pattern, real data CRC16, MMC cards, and
+  **SMK-RAM power-on fill (done in sim 2026-07-23):** `ram_init` zero-fills
+  the 256 Kwords at `SMK_RAM_BASE` as a second fill segment — see the
+  `ram_init` bullet for the trigger and why zeros rather than a pattern.
+  **Still deferred:** real data CRC16, MMC cards, and
   `N_EXT`/`N_SMKREG`/`N_IDE` recalibration (reference-tb-first).
   Oracles: `sim/run_mapper.sh` + `sim/smk/run.sh` (**both legs** — bk11
   and `+bk10`) + `sim/ide/run.sh`
