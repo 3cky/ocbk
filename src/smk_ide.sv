@@ -265,11 +265,11 @@ module smk_ide (
             8'd24: identify_word = 16'h2E30;             // ".0"
             8'd25: identify_word = 16'h3120;             // "1 "
             8'd26: identify_word = 16'h2020;
-            8'd27: identify_word = 16'h424B;             // "BK"
-            8'd28: identify_word = 16'h454D;             // "EM"
-            8'd29: identify_word = 16'h5520;             // "U "
-            8'd30: identify_word = 16'h4844;             // "HD"
-            8'd31: identify_word = 16'h4420;             // "D "
+            8'd27: identify_word = 16'h4F43;             // "OC"
+            8'd28: identify_word = 16'h424B;             // "BK"
+            8'd29: identify_word = 16'h2048;             // " H"
+            8'd30: identify_word = 16'h4444;             // "DD"
+            8'd31: identify_word = 16'h2020;             // "  "
             8'd32, 8'd33, 8'd34, 8'd35, 8'd36, 8'd37, 8'd38, 8'd39,
             8'd40, 8'd41, 8'd42, 8'd43, 8'd44, 8'd45, 8'd46:
                    identify_word = 16'h2020;             // model pad
