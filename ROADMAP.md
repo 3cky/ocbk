@@ -778,7 +778,9 @@ is not a single peripheral:
   `sim/run_mapper.sh` (differential smk_en=0
   reference + the directed contract, mutation-tested) and `sim/smk/run.sh`
   (SoC functional oracle with a DCLO-replay second pass, mutation-tested).
-- **BK-0010 + SMK (BkEmu `BK_0010_SMK512`)** — ✅ **DONE IN SIM 2026-07-23**:
+- **BK-0010 + SMK (BkEmu `BK_0010_SMK512`)** — ✅ **DONE, CONFIRMED ON
+  HARDWARE 2026-07-23** (DIP 1 OFF + DIP 8 ON: the SMK BIOS boots and loads
+  an OS from the SD-backed image on a BK-0010 as well):
   DIP 8 now works in BOTH models. The SMK is an МПИ expansion board and
   `SmkMemoryManager` is ONE class shared by both configurations, so every
   SMK term (the 177130 snoop, the segment overlay, the 177130/132 FDD stub,
@@ -802,7 +804,7 @@ is not a single peripheral:
   cold-booting on the bk10 stack - PASS: the merged 166400 start vector, the
   BIOS executing from rom6, and its banner drawn into the BK-0010 screen RAM
   at 042000). Fit 6,938 LE (58%), sys_clk worst setup **+0.430 ns**, TNS 0,
-  zero negative paths. **Hardware confirmation pending.**
+  zero negative paths.
 - **SMK BIOS ROM + boot** — ✅ **increment 2 DONE, CONFIRMED ON HARDWARE
   2026-07-17** (DIP-8-ON boots the SMK BIOS to its banner on the board): ONE
   4 KB image (`mem/roms/smk512_v205.rom`, BkEmu res/raw) backing BOTH

@@ -40,7 +40,9 @@ start-vector read returns the BIOS word and the CPU boots into the BIOS at
 boots and shows its banner. It works in **both models** (the SMK is an
 МПИ expansion board; on a BK-0010 the machine's monitor ROM takes the
 place BOS and the banked window hold on a BK-0011M, and the BIOS detects
-which machine it is running on by whether a 177662 write replies); increment 3 = the IDE drive engine + the
+which machine it is running on by whether a 177662 write replies) —
+**confirmed on hardware 2026-07-23: a BK-0010 with the SMK boots the BIOS
+and loads an OS from the SD-backed image too**; increment 3 = the IDE drive engine + the
 SD/SPI backend: the SMK ATA task file served from a **raw AltPro HDD
 image dd'd onto an SD card** in the board's SD slot — **confirmed on
 hardware 2026-07-18: the SMK BIOS detects the drive and boots an OS

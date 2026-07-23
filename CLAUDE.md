@@ -51,12 +51,12 @@ FIXED, CONFIRMED ON HARDWARE 2026-07-22** by re-registering
 for the `bank_wr` term (see the mapper bullet): sys_clk went
 −0.230 → **+0.420 ns, TNS 0, zero negative paths**, and the worst path
 is now an ordinary `sd_backend` register-to-register path.
-**bk10+SMK (BkEmu `BK_0010_SMK512`) is DONE IN SIM 2026-07-23, hardware
-confirmation pending**: DIP 8
+**bk10+SMK (BkEmu `BK_0010_SMK512`) is DONE, CONFIRMED ON HARDWARE
+2026-07-23: DIP 1 OFF + DIP 8 ON boots the SMK BIOS and loads an OS from
+the SD-backed image on a BK-0010 too**. DIP 8
 works in BOTH models now (the SMK is an МПИ expansion board — only the
 per-mode monitor-ROM deselect, `mon_en`, is model-dependent; see the
-SMK512 bullet). The real BIOS cold-boots on the bk10 stack in
-`run_boot_check +smk10`; fit 6,938 LE, sys_clk +0.430 ns / TNS 0.
+SMK512 bullet); fit 6,938 LE, sys_clk +0.430 ns / TNS 0.
 Remaining open items: the
 SMK-RAM `ram_init` pattern, `N_*` recalibration, and BK-0011M
 cycle-accuracy vs a reference (deferred, reference-tb-first).
@@ -900,7 +900,8 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   out of reset — resetting that flop to 0 disabled the backend on every
   reset even with a card present (caught by the `-DSD_STACK` leg).
   Post-fix sys_clk +0.572 ns / TNS 0.
-  **BK-0010 + SMK (BkEmu `BK_0010_SMK512`) — DONE:** the SMK is an МПИ
+  **BK-0010 + SMK (BkEmu `BK_0010_SMK512`) — DONE, CONFIRMED ON HARDWARE
+  2026-07-23 (the BIOS boots and loads an OS on a BK-0010):** the SMK is an МПИ
   expansion board and `SmkMemoryManager` is ONE class shared by both
   configurations, so every SMK term (`smk_reg_wr`, `smk_act`, `sel_fdd`,
   `sel_ide`, the `smk_ide`/`sd_backend` enables) is gated on `smk_en`
