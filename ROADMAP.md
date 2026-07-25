@@ -322,9 +322,10 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   (DAC unit + directed 177716-capture).
 - **Tape (магнитофон) — WORKS ON HARDWARE (2026-07-10):** the **esemsx3
   CMT-jack scheme** — the right sound-DAC ladder doubles as the cassette
-  port. **PS/2 Scroll Lock toggles CMT mode** (the same key esemsx3 uses;
-  `key_cmt` radial output → 2-FF sys_clk sync, power-on default = audio,
-  survives warm reset like a plugged cable; `pLed[1]` = mode tap). In CMT
+  port. **DIP 4 selects CMT mode (CONFIRMED ON HARDWARE 2026-07-25)**
+  (`~pDip[3]` read live through a 2-FF
+  sys_clk sync, so flipping it needs no reset; `pLed[6]` = mode tap. Through
+  Phase 8 this was the PS/2 Scroll Lock key → a `key_cmt` radial toggle). In CMT
   mode `bk_audio` switches `pDac_SR` from push-pull audio to the comparator
   network: `[5]` = tape **input** pad (tri-stated, 2-FF-sampled), `[3:2]` =
   `{lvl, ~lvl}` Schmitt positive feedback through the ladder resistors,
@@ -341,8 +342,8 @@ BK ROMs are non-restricted for emulator use) boots from SDRAM:
   `mot_bit` stays captured in `qbus_mem` (oracle-pinned register semantics)
   but unused in the top. Oracles: `sim/run_audio.sh` (CMT drive pattern +
   feedback in `bk_audio_tb`; bit-5 reads, bit-7 capture and the nINIT
-  survival in `spk_capture_tb`); `sim/run_ps2.sh` (the Scroll Lock radial
-  toggle). No goldens changed (bit 5 reads 0 with the tie-off).
+  survival in `spk_capture_tb`); `sim/run_ps2.sh` (Scroll Lock now emits no
+  event). No goldens changed (bit 5 reads 0 with the tie-off).
   **Still open:** Covox; tape-out 3-level fidelity (real BK mixes write
   bits 6+5 resistively — bit 6 alone is the dominant component); an
   optional slow MONITOR-load cosim oracle.

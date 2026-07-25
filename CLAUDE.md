@@ -125,8 +125,8 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   hand-written expected event list: BkEmu case algebra over ЛАТ/РУС ×
   ЗАГЛ/СТР × НР, СУ masking, АР2 + the silicon auto-274 code group,
   typematic suppression, multi-key `key_down`, СТОП strobes, the Print
-  Screen / Scroll Lock radial toggles (screen_mode / CMT tape mode),
-  parity-error and stale-prefix recovery.
+  Screen radial toggle (screen_mode), Scroll Lock now emitting no event
+  (CMT tape mode moved to DIP 4), parity-error and stale-prefix recovery.
 - `sim/run_audio.sh` — Phase-6 audio + tape unit oracles: `bk_audio_tb`
   (push-pull DAC pattern, mid-scale reset, activity one-shot, and the CMT-mode
   right-channel comparator network incl. the `cmt_in_pad` → `tape_lvl`
@@ -507,7 +507,12 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   region, so it is the BIOS or nothing) and the BIOS **auto-detects the
   model itself** by writing 177662 with vector 4 planted: replied on a
   bk11, bus-timeout → trap 4 → `MODE_STD10` on a bk10. DIP 8 OFF + reset
-  returns a stock machine of whichever model DIP 1 selects. **DIP 2 is unused** — it
+  returns a stock machine of whichever model DIP 1 selects. **DIP 4 = CMT
+  tape-in mode (CONFIRMED ON HARDWARE 2026-07-25)** (ON = the right sound jack `pDac_SR` is the cassette port;
+  `~pDip[3]` read LIVE — a 2-FF sys_clk sync, NOT DCLO-latched, since CMT
+  never touches the CPU — so flipping it needs no reset; `pLed[6]` = mode
+  tap; was the PS/2 Scroll Lock key through Phase 8, see the tape bullet).
+  **DIP 2 is unused** — it
   forced the on-chip test ROM, removed 2026-07-10 (ROM is always the loaded
   SDRAM image).
 - **Authentic DRAM power-on pattern (`src/ram_init.sv`):** the board SDRAM has
@@ -552,9 +557,10 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
     while РУС/ЛАТ are ordinary matrix keys emitting 016/017 — mapped here as
     CapsLock = the ЗАГЛ/СТР trigger, LCtrl = РУС, Home = ЛАТ, Insert = СУ
     (held), either Shift = НР, either Alt = АР2, **Delete = СТОП**,
-    **Print Screen = screen_mode toggle**, **Scroll Lock = CMT tape-mode
-    toggle** (both radial control outputs like СТОП, never matrix codes,
-    power-on-only — see the screen_mode and tape notes);
+    **Print Screen = screen_mode toggle** (a radial control output like
+    СТОП, never a matrix code, power-on-only — see the screen_mode note;
+    Scroll Lock is now unused — CMT tape mode moved to **DIP 4**, see the
+    tape note);
   - case algebra per BkEmu (`latin ^ (caps | shift)` on letters, СУ = `&037`
     on 01xx codes); the **silicon auto-274 code group**
     {0,1,2,4,5,6,7,011,013,021} vectors to 0274 without АР2 (measured over
@@ -584,9 +590,11 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
     IAK vector capture relies on it — bus-charge physics on the real board).
 - **Tape (Phase 6):** the esemsx3 **CMT-jack scheme** — `pDac_SR` (right sound
   channel, now `inout`) doubles as the cassette port while CMT mode is on:
-  the **PS/2 Scroll Lock key toggles it** (`key_cmt` radial output, the same
-  key esemsx3 uses; power-on default = audio, power-on-only state so it
-  survives a warm reset like a plugged cable; `pLed[1]` = mode tap). **Do NOT
+  **DIP 4 selects it** (`~pDip[3]`, ON = CMT; read LIVE through a 2-FF
+  sys_clk sync in `ocbk_top` — `cmt_sr` — so flipping the switch changes the
+  mode with no reset, since CMT never touches the CPU; `pLed[6]` = mode tap.
+  Through Phase 8 this was the **PS/2 Scroll Lock** key → a `key_cmt` radial
+  toggle, the esemsx3 convention). **Do NOT
   gate CMT on the 177716 motor bit** — that was tried first (authentic:
   MONITOR d6.mac `KPUSK=020`/`KSTOP=220`, bit 7 = 1 = stopped, held 1 outside
   tape ops) but **real BK software writes bit 7 = 0 outside tape operations

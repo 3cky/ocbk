@@ -22,7 +22,7 @@ module ps2_tb;
 
     logic [7:0] rx_byte;
     logic       rx_stb;
-    logic       key_stb, key_ar2, key_down, key_stop, key_scrmode, key_cmt;
+    logic       key_stb, key_ar2, key_down, key_stop, key_scrmode;
     logic [6:0] key_code;
 
     ps2_rx u_rx (
@@ -33,8 +33,7 @@ module ps2_tb;
     kbd_ps2bk u_tr (
         .clk(clk), .aclo_n(1'b1), .ps2_byte(rx_byte), .ps2_stb(rx_stb),
         .key_stb(key_stb), .key_code(key_code), .key_ar2(key_ar2),
-        .key_down(key_down), .key_stop(key_stop), .key_scrmode(key_scrmode),
-        .key_cmt(key_cmt)
+        .key_down(key_down), .key_stop(key_stop), .key_scrmode(key_scrmode)
     );
 
     // ---- device-side frame sender (~16 kHz clock, data before fall) --------
@@ -130,15 +129,6 @@ module ps2_tb;
         if (key_scrmode !== v) begin
             errors = errors + 1;
             $display("PS2-ERROR: key_scrmode=%b, want %b (%s)", key_scrmode, v, what);
-        end
-    end
-    endtask
-
-    task check_cmt (input v, input string what);
-    begin
-        if (key_cmt !== v) begin
-            errors = errors + 1;
-            $display("PS2-ERROR: key_cmt=%b, want %b (%s)", key_cmt, v, what);
         end
     end
     endtask
@@ -241,18 +231,10 @@ module ps2_tb;
         prtsc_brk;  check_scrmode(1'b1, "typematic release holds");
         prtsc_mk;   prtsc_brk; check_scrmode(1'b0, "PrtSc back to colour-256");
 
-        // 12c: Scroll Lock toggles the CMT tape-in mode (esemsx3 convention;
-        //      same radial/typematic contract as Print Screen - a plain 7E
-        //      make, never a matrix event).
-        check_cmt(1'b0, "cmt power-on = audio");
-        mk(8'h7E);              check_cmt(1'b1, "ScrLk press 1 -> CMT on");
-        brk(8'h7E);             check_cmt(1'b1, "release holds the mode");
-        mk(8'h7E);              check_cmt(1'b0, "ScrLk press 2 -> CMT off");
-        brk(8'h7E);
-        // typematic: two makes without an intervening break flip only once
-        mk(8'h7E);  mk(8'h7E);  check_cmt(1'b1, "ScrLk typematic = one toggle");
-        brk(8'h7E);             check_cmt(1'b1, "typematic release holds");
-        mk(8'h7E);  brk(8'h7E); check_cmt(1'b0, "ScrLk back to audio");
+        // 12c: Scroll Lock (7E) is now unused (CMT tape-in mode moved to DIP 4);
+        //      a make/break pair must emit no matrix event - the scoreboard
+        //      flags any unexpected key_stb.
+        mk(8'h7E);  brk(8'h7E);
 
         // 13: parity-corrupted frame is dropped (no event)
         send_frame(8'h1C, 1'b0);          // bad 'a' make

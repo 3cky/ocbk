@@ -139,10 +139,10 @@ ROM always runs from the loaded SDRAM image).
 - **pLed[7]** — SMK512 drive access: **blinks at ~11.5 Hz** while the drive is
   busy (a boot, a multi-sector load), one ~43 ms flash for an isolated op
   (`ide_act` stretched to ~87 ms), dark when idle.
-- **pLed[1]** — CMT tape-in mode (Scroll Lock toggle; lit = the right jack is
-  the cassette port).
+- **pLed[6]** — CMT tape-in mode (DIP 4; lit = the right jack is the cassette
+  port).
 - **pLed[0]** — BK speaker activity (solid while a tone plays; audio bring-up tap).
-- **pLed[6:2]** — unused.
+- **pLed[5:1]** — unused.
 
 ## Known items (for later phases)
 
@@ -168,10 +168,9 @@ ROM always runs from the loaded SDRAM image).
   the timeout-fidelity question is deferred to Phase 9.
 - Keyboard (177660–177663, the 1801ВП1-014), the 1-bit speaker and the tape
   interface are in (Phase 6). **Tape** uses the right sound-jack channel as
-  the cassette port (esemsx3 CMT scheme), toggled by the PS/2 **Scroll Lock**
-  key (`pLed[1]` lights while CMT mode is on; the key esemsx3 uses for the
-  same jack trick): toggle it on, play a BK tape recording (e.g. a WAV
-  rendered from a `.BIN`) into the right channel and use MONITOR's СЧИТ /
-  BASIC CLOAD; ЗАПИС/CSAVE records BK→PC through the same jack. Toggle it
-  off to get right-channel audio back. Interrupts (50 Hz EVNT/IRQ2) arrive
-  with Phase 7.
+  the cassette port (esemsx3 CMT scheme), selected by **DIP 4**
+  (`pLed[6]` lights while CMT mode is on): switch it on, play a BK tape
+  recording (e.g. a WAV rendered from a `.BIN`) into the right channel and
+  use MONITOR's СЧИТ / BASIC CLOAD; ЗАПИС/CSAVE records BK→PC through the
+  same jack. Switch it off to get right-channel audio back. Interrupts
+  (50 Hz EVNT/IRQ2) arrive with Phase 7.

@@ -22,8 +22,8 @@
 //
 //  CMT (cassette) mode - the ONE intentional tri-state use of the ladder,
 //  esemsx3's board-proven Cassette Magnetic Tape trick (emsx_top.vhd, the
-//  CmtScro block): while cmt_mode is on (the PS/2 Scroll Lock toggle in the
-//  top - the same key esemsx3 uses; gating on the 177716 motor bit was tried
+//  CmtScro block): while cmt_mode is on (DIP 4 in the top, read live; it was
+//  the PS/2 Scroll Lock toggle through Phase 8; gating on the 177716 motor bit was tried
 //  first but real BK software writes bit 7 = 0 outside tape ops and wrongly
 //  killed the right audio channel), the right-channel ladder becomes a
 //  comparator at the jack:
@@ -50,7 +50,7 @@ module bk_audio (
     input  logic       sys_clk,   // 96.65 MHz fabric clock
     input  logic       rst_n,     // power-on reset (active low)
     input  logic       spk_bit,   // BK speaker level (cpu_clk domain)
-    input  logic       cmt_mode,  // 1 = motor running: right channel is the CMT jack
+    input  logic       cmt_mode,  // 1 = CMT mode (DIP 4): right channel is the CMT jack
     input  logic       cmt_in_pad,// raw pDac_SR[5] pad value (async)
     output logic       tape_lvl,  // registered CMT comparator level (sys_clk)
     output logic [5:0]  dac_l,     // pDac_SL  (Sound-L)
