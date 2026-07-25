@@ -496,8 +496,14 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   to the pre-Phase-7 `divc[4]` tap (the SoC tbs replicate the divider locally,
   so that oracle is the divider's only sim coverage). In /32 mode CPU edges
   coincide with the 037 `en_pos`/`en_neg` strobes (CPU=CLKIN/2, the reference
-  phase); in /24 they walk a deterministic 48-sys_clk pattern — 0011M
-  cycle-accuracy vs a reference is a later Phase-7 item.
+  phase); in /24 they walk a deterministic 48-sys_clk pattern.
+  **The /24 rate is 4.0270 MHz against a real BK-0011M's 4.000 — +0.67 %**, an
+  unavoidable consequence of the one-PLL rule and the board's 21.47727 MHz
+  crystal. The Phase-9 tone calibration measured this directly (two independent
+  legs implying 3.998 and 3.994 MHz; see the `N_EXT` bullet), and it is now the
+  design's **only** known sub-1 % timing error against real hardware — a
+  frequency offset, not a cycle-count one, so no oracle can see it and nothing
+  in the RTL can fix it short of a different crystal.
 - **Soft reset (Phase 5.5):** the board's reset button (`pSltRst_n`, PIN_153 =
   the slot RESET net, external pull-up) re-enters the `ocbk_top` reset
   sequencer via `warm_rst_req` (pressed = hold, release + ~22 ms tail = the
@@ -1033,16 +1039,31 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   `golden_037_rom.txt`), and the gap was 567 cycles / 197 accesses = 2.88 —
   i.e. the real board replies **within the strobe cycle**, like any async
   external SRAM board, the same reason `N_KBD = 1`.
-  **The hardware result also identifies what the residual is**, and it is NOT
-  the uniform global bias it looked like from the sim alone: SMK RAM came out
-  at +0.17 % while ordinary RAM stayed at +0.84 %, so a clock/core error can
-  be at most ~0.17 % and the other ~0.67 % belongs to **the 037
-  cycle-stealing model alone** — 36 cycles short over 197 accesses, i.e. we
-  steal ~0.18 cycles per access too FEW (1.31 vs the real ~1.49). That is the
-  next thing this method can calibrate, and `sim/smktime`'s control leg is
-  already the instrument. (The board reading HIGHER than the sim's 599 is
-  expected and was predicted: the tb's port-2 model saturates the arbiter
-  while the shipped video fetch is paced — see the residual note below.)
+  **The hardware result also identifies what the residual is: our CPU clock,
+  and essentially nothing else.** Both legs run the identical instruction
+  stream, so `C = C_internal + reply_overhead + 037_steal`, and the `N_EXT`=4
+  board pair separates the terms (at N=4 both legs carry the same 197×3
+  overhead, so their *difference* is the steal): `C_internal` = 3326.3,
+  steal = 260.1 = 1.320/access. Ask what real CPU clock would reconcile the
+  real machine's measured tones with **those** cycle counts and the two legs
+  answer independently — **3.998 MHz** from the SMK leg, **3.994 MHz** from
+  the control leg, agreeing to 0.12 %, i.e. **4.000 MHz**, the documented
+  BK-0011M rate. Ours is 96.6477/24 = **4.0270 MHz, +0.67 %**: the
+  OneChipBook's 21.47727 MHz crystal cannot make exactly 4.000 under the
+  one-PLL rule. Two independent legs landing on the same implied clock is the
+  signature of *the cycle counts are right, the clock is different*.
+  Normalised to 4.000 MHz the leftovers are `C_internal` **+1.5 cyc
+  (+0.04 %)** and steal **+5.2 cyc (+0.027/access)** — both inside the ±8.7
+  cycles that ±1 Hz on the 478 Hz reading is worth. **So no memory-model debt
+  remains, the 037 steal included**, and `N_EXT` = 1 is tighter than the raw
+  numbers suggested: against a 4.000 MHz machine the real SMK leg is 3327.8
+  cycles vs our ideal 3326.3 (N=2 would be 3523).
+  ⚠️ Do NOT re-derive a per-access error by dividing a whole-leg gap by the
+  access count — 35 cyc / 197 = "0.18/access" double-counts everything that is
+  not memory. That mistake was made once here and shipped for a few hours.
+  (The board reading HIGHER than the sim's 599 is expected and was predicted:
+  the tb's port-2 model saturates the arbiter while the shipped video fetch is
+  paced — see the residual note below.)
   Two mechanisms make N=1 expressible, **both gated on `N_EXT == 1` so they
   constant-fold away if it is ever raised**:
   * **`qbus_mem`'s `ext_fast`** — the wait FSM counts `N-2` edges and cannot

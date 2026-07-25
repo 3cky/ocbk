@@ -55,12 +55,23 @@
 # sim towards 602 by weakening the contention - the saturator is the pessimal
 # case on purpose.
 #
-# The board result also identifies the LEFTOVER error, which the sim alone made
-# look like a uniform global bias: SMK RAM is +0.17 % but ordinary RAM is still
-# +0.84 %, so a clock/core error is at most ~0.17 % and the other ~0.67 % is
-# THE 037 CYCLE-STEALING MODEL - 36 cycles short over 197 accesses, i.e. ~0.18
-# cycles per access too few (1.31 against the real ~1.49). The control leg of
-# this oracle is already the instrument to calibrate that next.
+# The board result also identifies the LEFTOVER error, and it is OUR CPU CLOCK,
+# not the memory model.  Both legs run the identical instruction stream, so
+#   C = C_internal + reply_overhead + 037_steal
+# and the N=4 board pair separates the terms (at N=4 both legs carry the same
+# 197*3 overhead, so their DIFFERENCE is the steal): C_internal = 3326.3,
+# steal = 260.1 = 1.320/access.  Ask what real CPU clock reconciles the real
+# machine's tones with THOSE cycle counts and the legs answer independently -
+# 3.998 MHz (SMK) and 3.994 MHz (control), agreeing to 0.12 %, i.e. 4.000 MHz,
+# the documented BK-0011M rate, against our 96.6477/24 = 4.0270 (+0.67 %; the
+# OneChipBook's 21.47727 MHz crystal cannot make 4.000 under the one-PLL rule).
+# Normalised to 4.000 MHz the leftovers are C_internal +0.04 % and steal
+# +0.027 cycles/access, both INSIDE the +-8.7 cycles that +-1 Hz on the 478 Hz
+# reading is worth - so no memory-model debt remains, the 037 steal included.
+#
+# TRAP, made once here and shipped for a few hours: do NOT get a per-access
+# error by dividing a whole-leg gap by the access count (35 cyc / 197 =
+# "0.18/access").  That charges the memory for every non-memory error too.
 #
 # The control leg being right to +0.8 % is what makes this a measurement of
 # N_EXT and not of anything else.  The gap is 567 cycles / 197 accesses =

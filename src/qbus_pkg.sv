@@ -97,13 +97,33 @@ package qbus_pkg;
    // the board lands HIGHER than the sim, at 602. The bk10 leg, whose slower
    // CPU clock gives the fetch more head start, already reaches 3328 = ideal.
    //
-   // WHAT THE RESIDUAL IS, now that the board has been measured: NOT a uniform
-   // global bias. SMK RAM is +0.17% while ordinary RAM stays +0.84%, so a
-   // clock/core error can be at most ~0.17% - the other ~0.67% belongs to the
-   // 037 CYCLE-STEALING model alone. In cycles: the control leg is 36 short
-   // over 197 accesses, i.e. we steal ~0.18 cycles per access too FEW (1.31
-   // against the real ~1.49). That is the next thing this method can calibrate,
-   // and sim/smktime's control leg is already the instrument for it.
+   // WHAT THE RESIDUAL IS: **our CPU clock, and essentially nothing else.**
+   // Both legs run the identical instruction stream, so
+   //   C = C_internal + reply_overhead + 037_steal
+   // and the N_EXT=4 board pair separates the terms (at N=4 both legs carry the
+   // same 197*3 overhead, so their difference IS the steal):
+   //   C_internal  ours 3326.3   037 steal  ours 260.1 = 1.320/access
+   // Ask what real CPU clock would make the real machine's measured tones agree
+   // with THOSE cycle counts, and the two legs answer independently:
+   //   from the SMK leg (601 Hz): 3.998 MHz    from the control leg (478 Hz):
+   //   3.994 MHz - agreeing with each other to 0.12%, i.e. **4.000 MHz**, the
+   // documented BK-0011M rate. Ours is 96.6477/24 = 4.0270 MHz, +0.67%: the
+   // OneChipBook's 21.47727 MHz crystal cannot make exactly 4.000 under the
+   // one-PLL rule. Two independent legs landing on the same implied clock is
+   // the signature of "the cycle counts are right, the clock is different".
+   //
+   // Normalised to a 4.000 MHz real machine the leftovers are C_internal +1.5
+   // cyc (+0.04%) and steal +5.2 cyc (+0.027/access) - both INSIDE the +-8.7
+   // cycles that +-1 Hz on the 478 Hz reading is worth. So there is no evidence
+   // of any remaining memory-model error, the 037 steal included. It also
+   // tightens N_EXT itself: against a 4.000 MHz machine the real SMK leg is
+   // 3327.8 cycles against our ideal 3326.3, where N=2 would be 3523.
+   //
+   // (An earlier revision of this comment claimed the leftover ~0.67% belonged
+   // to the 037 steal, from dividing the WHOLE control-leg gap by the access
+   // count - 35 cyc / 197 = 0.18/access. That double-counts everything that is
+   // not memory at all. Correctly decomposed it is 0.056/access, and once the
+   // clock is accounted for, 0.027 and not significant.)
    //
    // N = 1 is a reply at the detection edge itself, which the wait FSM's wcnt
    // cannot count (see `ext_fast` in qbus_mem) AND which lands before the SDRAM

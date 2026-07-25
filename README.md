@@ -59,6 +59,14 @@ frequency is set purely by the memory the delay loop executes from
 same loop run from ordinary RAM as a control: the board went **514 Hz → 602 Hz
 against the real machine's 601**. Oracle: `sim/smktime/run.sh`.
 
+Those two measurements also settle what is left over. Decomposed, both legs
+independently imply the real machine's CPU clock is **4.000 MHz** against our
+**4.0270** (+0.67 %) — the board's 21.47727 MHz crystal cannot make 4.000
+under the one-PLL rule. Normalised to that, the cycle counts agree to +0.04 %
+and the 037 cycle-stealing to 0.027 cycles per access, both inside measurement
+resolution: the remaining error is a clock *frequency* offset, not a
+cycle-accuracy one.
+
 - Fits in **6953 / 12060 LEs (58%)**, **3 M4Ks**, **1 ASMI block**, **1 PLL**;
   timing closes.
 - Cycle accuracy holds under full 4-port SDRAM contention for RAM *and* ROM

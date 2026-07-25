@@ -892,10 +892,15 @@ is not a single peripheral:
   (the `N_KBD = 1` case). `N_EXT` 4 → **1**: the board went 514 Hz → **602 Hz
   against the real machine's 601, +0.17 %** (sim reads 599 — its port-2 model
   saturates the arbiter where the shipped video fetch is paced). That result
-  also pins down what is left: ordinary RAM stays +0.84 %, so a clock/core
-  error is at most ~0.17 % and the rest belongs to the **037 cycle-stealing
-  model** — we steal ~0.18 cycles per access too few. Next target for the same
-  method. N=1 needed a
+  also pins down what is left, and it is **our CPU clock, not the memory
+  model**: decomposing `C = C_internal + reply_overhead + steal` with the
+  `N_EXT`=4 board pair and asking what real clock reconciles the real
+  machine's tones with those cycle counts, the two legs independently answer
+  3.998 and 3.994 MHz — agreeing to 0.12 %, i.e. **4.000 MHz**, the documented
+  BK-0011M rate, against our 4.0270 (+0.67 %; the OneChipBook crystal cannot
+  make 4.000 under the one-PLL rule). Normalised to that, `C_internal` is
+  +0.04 % and the 037 steal +0.027 cycles/access — both inside measurement
+  resolution, so **no memory-model debt remains**. N=1 needed a
   reply at the detection edge (`qbus_mem`'s `ext_fast`, since the wait FSM
   counts `N-2` edges) and, because that lands before a DIN-issued SDRAM read
   could finish, an **early SYNC-time read issue** (`cpu_sdram_dp`'s `fast_rd`)
