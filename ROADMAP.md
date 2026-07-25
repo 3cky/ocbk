@@ -877,6 +877,38 @@ is not a single peripheral:
   no-retro-fire-on-unmask guard and now sets 177664 full-screen as real BOS
   does. Hardware acceptance (both models booting + a beam-racing demo)
   pending.
+- **Status (2026-07-26): second increment DONE & CONFIRMED ON HARDWARE** — the
+  **SMK512 memory access time**, `N_EXT`, calibrated against real hardware. This was one of the
+  Phase-8 leftovers, and the first `N_*` constant in the design to be settled
+  by measuring a real machine rather than a reference netlist. Method: a tone
+  program (`doc/sndtestsmk.mac` — 192 `SOB` iterations around a 177716 speaker
+  toggle, so one half-period is 197 instruction fetches from the resident
+  memory and nothing else touches memory) run on a real BK-0011M + SMK512 and
+  on the board, plus the SAME loop run from ordinary RAM as a control. The
+  control landed at +0.8 %, validating the clock rate, the access-count model
+  and the CPU core, and isolating the whole −14.5 % error to `N_EXT`: at one
+  CPU cycle per unit of N, 567 cycles / 197 accesses = 2.88, i.e. the real
+  board replies **within the strobe cycle** like any async external SRAM board
+  (the `N_KBD = 1` case). `N_EXT` 4 → **1**: the board went 514 Hz → **602 Hz
+  against the real machine's 601, +0.17 %** (sim reads 599 — its port-2 model
+  saturates the arbiter where the shipped video fetch is paced). That result
+  also pins down what is left: ordinary RAM stays +0.84 %, so a clock/core
+  error is at most ~0.17 % and the rest belongs to the **037 cycle-stealing
+  model** — we steal ~0.18 cycles per access too few. Next target for the same
+  method. N=1 needed a
+  reply at the detection edge (`qbus_mem`'s `ext_fast`, since the wait FSM
+  counts `N-2` edges) and, because that lands before a DIN-issued SDRAM read
+  could finish, an **early SYNC-time read issue** (`cpu_sdram_dp`'s `fast_rd`)
+  — a new general rule: *a fixed reply shorter than the SDRAM latency requires
+  the fetch to start at the address phase, not at the strobe*. Both are gated
+  on `N_EXT == 1` and fold away if it is raised. New oracle
+  `sim/smktime/run.sh` (three legs — SMK RAM, ordinary RAM as the control, and
+  bk10+SMK; goldens on the per-instruction gap table, mutation-tested ×5).
+  Two STA knock-ons, both fixed structurally and both in modules the change
+  never touched — the design is placement-fragile at 58 % LE: `smk_ide`'s
+  `scount` cone (the 9-bit `ptr == 256` compare → the 1-bit `ptr[8]`) and the
+  mapper↔bus-pad loop again (`rdata_oe` now off the `oe_arm` flop instead of
+  decoding the FSM state). sys_clk +0.190 ns / TNS 0, 6,953 LE.
 - Cycle-accuracy regression vs reference traces; turbo (6 MHz) mode.
 - Optional CRT effects (scanline dim/gamma) in the upscaler.
 - Config: DIP/menu for model, turbo, video filter.

@@ -360,6 +360,17 @@ module smk_ide (
     // sequential model), then the capture/edge bookkeeping.
     wire [8:0] eff_count = (scount == 9'd0) ? 9'd256 : scount;
 
+    // "the 256-word block is complete". ptr only ever holds 0..256: the
+    // DATA-read advance runs solely in E_DRAIN while drq is up (and E_DRAIN
+    // clears or reloads ptr the moment it sees 256), and the E_FILL advance is
+    // explicitly guarded by ptr != 256 - so bit 8 alone IS the test.
+    // STA: this used to be spelled `ptr == 9'd256`, which put nine ptr bits
+    // into scount[0]'s next-state cone. That cone became the design's worst
+    // sys_clk path (-0.414 ns) when the Phase-9 N_EXT work re-placed the
+    // fitter; the 1-bit decode is the structural cure (the sd_backend
+    // `widx_last` idiom - precompute, never re-derive at the decision point).
+    wire ptr_full = ptr[8];
+
     always_ff @(posedge sclk) begin
         if (reset) begin
             status <= SR_DRDY; error <= 8'h01;
@@ -577,7 +588,7 @@ module smk_ide (
                 end
                 E_DRAIN: begin
                     // pointer moves in the DIN-release block below; chain here
-                    if (ptr == 9'd256) begin
+                    if (ptr_full) begin
                         if (xfer_ident || scount == 9'd0) begin
                             status <= SR_DRDY | SR_DSC; drq <= 1'b0;
                             if (!xfer_ident) error <= 8'h00;
@@ -623,7 +634,7 @@ module smk_ide (
                     end
                 end
                 E_FILL: begin
-                    if (ptr == 9'd256) begin    // full block -> writeSector
+                    if (ptr_full) begin         // full block -> writeSector
                         status <= SR_BSY; drq <= 1'b0;  // committing
                         ptr <= '0;
                         st <= E_LBA1;

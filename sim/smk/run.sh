@@ -28,6 +28,15 @@
 # model-gated sel_vreg decode, which is exactly how the BIOS tells the two
 # machines apart). The 177716 merge is checked against SYS_START = 0100000.
 #
+# SECTION 12 (СТОП/HALT entry) NOTE, 2026-07-25: the stored-PC check accepts
+# stop_spin OR stop_handler. nIRQ1 is a fixed 64-cpu_clk one-shot while the
+# HALT entry (two extent stores + two SMK-RAM vector fetches) takes ~30, so
+# whether СТОП re-enters at the handler's first instruction is purely a
+# question of how fast SMK RAM is - it did not at the Phase-8 placeholder
+# N_EXT = 4, it does at the calibrated N_EXT = 1. Neither the vm1 (СТОП
+# ignores PSW priority) nor the program (the re-entry pre-empts instruction 1)
+# can suppress it, and both outcomes prove the same thing. See gen_smk_test.py.
+#
 # MUTATION-TESTED (2026-07-17, increment 1):
 #   * qbus_mem `selected` without the sel_ext term -> FAIL (the first SMK
 #     access bus-times-out -> fail park): the reply path is load-bearing;

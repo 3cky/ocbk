@@ -70,6 +70,19 @@ detector off WTI/SYNCO replaces the Phase-7 "nIRQ2 = vgate" model, which
 was MiSTer's and fired **452 CLKIN (~1.18 scanlines, ~301 cpu_clk) early
 every frame** — displacing every beam-raced multicolor/gigascreen
 effect. See the EVNT/IRQ2 bullet and `sim/evnt/README.md`.
+**Phase-9 increment 2 — the SMK512 memory access time (`N_EXT`) is
+CALIBRATED against real hardware, DONE & CONFIRMED ON HARDWARE
+2026-07-26**: a tone-frequency measurement (`doc/sndtestsmk.mac`, run on a
+real BK-0011M + SMK512 and on the board) put the Phase-8 placeholder
+`N_EXT = 4` **14.5 % slow**, with a standard-RAM control leg right to
++0.8 % — so the whole error was in that one constant. `N_EXT` is now **1**
+(an async external SRAM board replies inside the strobe cycle, the
+`N_KBD = 1` case), which needed an N=1 reply path in `qbus_mem` and an
+early SYNC-time read issue in `cpu_sdram_dp`. **The board went 514 Hz →
+602 Hz against the real machine's 601 — +0.17 %**; fit 6,953 LE, sys_clk
++0.190 ns / TNS 0 (after two structural STA fixes in modules the change
+never touched — see the `N_EXT` bullet).
+See the `N_EXT` bullet and `sim/smktime/run.sh`.
 
 ## Build & test
 
@@ -358,6 +371,25 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   combinational gate, the QA feedback — all fail). Mutations rewrite a *copy*
   of the real RTL via sed, so there is no inline replica to drift. See
   `sim/evnt/README.md`. **Never regenerate the golden from a va_037_sync run.**
+- `sim/smktime/run.sh` — **slow (~1 min), not in `make sim`**: the Phase-9
+  **SMK512 memory-access-time oracle**, i.e. the calibration of `N_EXT` and the
+  regression that keeps it calibrated. Runs `doc/sndtestsmk.bin` **verbatim**
+  (the exact bytes measured on a real BK-0011M + SMK512) on the sim/smk SoC
+  stack and reports the emitted tone: one half-period = 197 instruction
+  fetches, all from the memory the loop is resident in, nothing else touching
+  memory, so the frequency is a direct high-gain readout of that memory's
+  access time — one unit of N moves it ~6 %. **Two legs, one image, two entry
+  points** (byte-identical loop code, so the only variable is which memory runs
+  it): the loop copied to 0140000 = **SMK RAM** (`MK_EXT`), and the CONTROL leg
+  entered at START so the same loop runs in place in **ordinary RAM**
+  (`MK_RAM037`, N_RAM=4 + the 037 steal — already calibrated, so it validates
+  the clock rate and the access-count model and isolates any error to `N_EXT`).
+  Goldens pin the per-instruction gap table (`LOOP addr n min max`), each
+  half-period and the `EXTRD fast/slow` fallback rate; `dbg_romgate` must never
+  fire. `--sweep` reproduces the N_EXT = 1..4 ladder from the RTL by
+  sed-patching a *copy* of `qbus_pkg.sv` (the `sim/evnt` idiom). Run it
+  whenever `N_EXT`, the `qbus_mem` reply FSM or the `cpu_sdram_dp` issue path
+  changes. **Mutation-tested ×5** (see the run.sh header).
 - `sim/raminit/run.sh` — the Phase-7 `ram_init` unit oracle (the authentic
   DRAM power-on pattern filler): drives ram_init through a served-mask-honoring
   grant model and checks, per fill pass, the exact per-model word pattern
@@ -932,7 +964,16 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   the moment it sees `!enable_q`, and it is evaluated on the first cycle
   out of reset — resetting that flop to 0 disabled the backend on every
   reset even with a card present (caught by the `-DSD_STACK` leg).
-  Post-fix sys_clk +0.572 ns / TNS 0.
+  Post-fix sys_clk +0.572 ns / TNS 0. **The same shape bit `smk_ide` in
+  Phase 9 (2026-07-25):** `scount`'s next-state cone carried the 9-bit
+  `ptr == 9'd256` block-complete compare, and when the `N_EXT` work
+  re-placed the fitter (+19 LE) that cone went **+0.481 → −0.414 ns** —
+  a module the change never touched, which is exactly how placement-
+  fragile this design is at 58 % LE. Cure in the same idiom: `ptr` only
+  ever holds 0..256 (the E_DRAIN advance runs only with drq and reloads
+  at 256; the E_FILL advance is guarded by `ptr != 256`), so the test is
+  the single bit `ptr[8]` — `wire ptr_full = ptr[8]`, nine inputs out of
+  the cone.
   **BK-0010 + SMK (BkEmu `BK_0010_SMK512`) — DONE, CONFIRMED ON HARDWARE
   2026-07-23 (the BIOS boots and loads an OS on a BK-0010):** the SMK is an МПИ
   expansion board and `SmkMemoryManager` is ONE class shared by both
@@ -962,12 +1003,88 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   `SMK_BIOS_BASE` whatever DIP 1 says.
   **Still deferred:** the SMK-RAM
   `ram_init` pattern, real data CRC16, MMC cards, and
-  `N_EXT`/`N_SMKREG`/`N_IDE` recalibration (reference-tb-first).
+  `N_SMKREG`/`N_IDE` recalibration (`N_EXT` is done — see the next bullet).
   Oracles: `sim/run_mapper.sh` + `sim/smk/run.sh` (**both legs** — bk11
   and `+bk10`) + `sim/ide/run.sh`
   (BOTH passes — disk model AND the `-DSD_STACK` real SPI stack) +
   `sim/ide/run_soc.sh` + `sim/ide/run_sd.sh` (see the sim list) +
-  `sim/run_boot_check.sh +smk` / `+smk +sdspi` / `+smk10`.
+  `sim/run_boot_check.sh +smk` / `+smk +sdspi` / `+smk10` +
+  `sim/smktime/run.sh`.
+- **SMK512 access time `N_EXT` = 1 (Phase 9, CALIBRATED against real hardware
+  and CONFIRMED ON HARDWARE 2026-07-26; was the Phase-8 placeholder
+  `N_RAM` = 4):** measured with a
+  tone-frequency program (`doc/sndtestsmk.mac` — 192 `SOB` iterations around a
+  177716 speaker toggle, so one half-period is 197 fetches from the resident
+  memory and nothing else), run on a **real BK-0011M + SMK512** and on the
+  board, with the SAME loop run from ordinary RAM as a control:
+
+  |                       | loop in SMK RAM | loop in ordinary RAM (control) |
+  |-----------------------|-----------------|--------------------------------|
+  | real                  | 601 Hz (3351 cyc) | 478 Hz (4212 cyc) |
+  | board, `N_EXT` = 4    | 514 Hz (3918 cyc) | 482 Hz (4177 cyc) |
+  | **board, `N_EXT` = 1**| **602 Hz  (+0.17 %)** | 482 Hz (+0.84 %) |
+  | `sim/smktime`, `N_EXT` = 1 | 599 Hz (3362 cyc) | 482 Hz (4176 cyc) |
+
+  The control leg landing at +0.8 % is what makes this a measurement of
+  `N_EXT` and not of the clock rate, the access count or the CPU core — all
+  three are thereby validated, and the entire −14.5 % sat in that one
+  constant. One unit of N is exactly one CPU cycle (independently: `BR` costs
+  16 cycles at `N_RAM=4` in `sim/bk10/golden.txt` and 13 at `N_ROM=2` in
+  `golden_037_rom.txt`), and the gap was 567 cycles / 197 accesses = 2.88 —
+  i.e. the real board replies **within the strobe cycle**, like any async
+  external SRAM board, the same reason `N_KBD = 1`.
+  **The hardware result also identifies what the residual is**, and it is NOT
+  the uniform global bias it looked like from the sim alone: SMK RAM came out
+  at +0.17 % while ordinary RAM stayed at +0.84 %, so a clock/core error can
+  be at most ~0.17 % and the other ~0.67 % belongs to **the 037
+  cycle-stealing model alone** — 36 cycles short over 197 accesses, i.e. we
+  steal ~0.18 cycles per access too FEW (1.31 vs the real ~1.49). That is the
+  next thing this method can calibrate, and `sim/smktime`'s control leg is
+  already the instrument. (The board reading HIGHER than the sim's 599 is
+  expected and was predicted: the tb's port-2 model saturates the arbiter
+  while the shipped video fetch is paced — see the residual note below.)
+  Two mechanisms make N=1 expressible, **both gated on `N_EXT == 1` so they
+  constant-fold away if it is ever raised**:
+  * **`qbus_mem`'s `ext_fast`** — the wait FSM counts `N-2` edges and cannot
+    express N=1, so the reply is issued at the *detection edge itself*. Only
+    the mem-region `MK_EXT` leg (`sel_ext && !ovl_zone`) takes it; the I/O-page
+    extent keeps `N_ROM` for the start-vector-assist reason above. Reads
+    require `mem_ready`; **writes do not** — a posted write whose data was
+    captured one sclk after DOUT, and u_dp is single-threaded so the next
+    cycle's fetch cannot overtake it.
+  * **`cpu_sdram_dp`'s `fast_rd`** — at N=1 the reply lands *before* a
+    DIN-issued read could have finished, so the MK_EXT read starts at **SYNC**
+    instead. **Rule: a fixed reply shorter than the SDRAM latency requires the
+    fetch to start at the address phase, not at the strobe.** Three things it
+    needs, each a bug that was actually hit: WTBT must be **latched** one sclk
+    into the SYNC (`wtbt_hold`) because its address-phase meaning is only on
+    the wire for ~120 ns — sampling it live makes every write look like a read,
+    fire an early fetch and get **dropped**; `early_pend` must suspend
+    `D_DONE`'s strobes-idle exit until DIN arrives, or the fetch completes and
+    `mem_ready` falls again during the address phase; and `pre_done` keeps it
+    to one issue per SYNC so a DATIO's write half still goes out normally.
+    Sampled at `sync_sr[1]` (2 sclk), **not** [0]: that arc is `qbus_sync`,
+    false-pathed in the SDC, so STA checks none of it — one sclk earlier is
+    worth 601.7 Hz vs 598.9 and halves the margin on a path no tool is
+    watching (the SEED-3 lesson).
+
+  Residual: the early read gets ~22 sclk of head start and the SDRAM needs ~8,
+  but the arbiter grant costs 4..14 more, so a minority of reads miss by one
+  edge and take the ordinary S_WAIT path (+1 cycle, no `dbg_romgate`) — that
+  is the 3362 vs the ideal 3327, and `sim/smktime`'s `EXTRD fast/slow` pins it.
+  The shipped design's port 2 is paced rather than saturating like the tb, so
+  the board should read slightly faster than the sim. Knock-on: the speed-up
+  makes СТОП re-enter once inside its fixed 64-cpu_clk one-shot (the HALT entry
+  now fits), which `sim/smk` §12 was pinning too tightly — see the note there.
+  **Two STA knock-ons, both in modules this change never touched** — worth
+  internalising, because it is what "placement-fragile at 58 % LE" means in
+  practice: +19 LE re-placed the fitter and took sys_clk +0.481 → −0.414 via
+  `smk_ide`'s `scount` cone, then → −0.023 via the mapper↔bus-pad loop. Both
+  fixed structurally in the established idioms (`ptr_full = ptr[8]`;
+  `rdata_oe = oe_arm && !din_n`), never an SDC exception. Final: **+0.190 ns,
+  TNS 0, 6,953 LE**. Rule of thumb: after any increment here, budget for an
+  STA chase somewhere else in the design.
+  Oracle: **`sim/smktime/run.sh`** (three legs — the third is bk10+SMK).
 - **Framebuffer conventions** (mirrored by `fb_video_tb`/`gen_expected.py`
   alike): FB = 512 slots/line × 4-bit colour nibble × 256 lines, 128
   words/line, slot `s` of a word at bits `[4s+3:4s]`, LSB-first in beam order;
@@ -1065,6 +1182,18 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   listed Verilog files, so the core's config selectors are set as global
   `VERILOG_MACRO` in `ocbk_common.qsf` (mirroring `src/cpu/vm1_config.v`, which the
   sim flow includes directly; the macros are `ifndef`-guarded to stay idempotent).
+- **A wildcard-imported package parameter must never make its FIRST appearance
+  inside a port-connection expression** (Icarus, cost half an hour in Phase 9).
+  Written as `.fast_rd((N_EXT == 1) & sel_ext & ...)`, Icarus does not resolve
+  `N_EXT` there — port connections are where implicit nets get created, so it
+  silently declares a 1-bit **net** of that name, which then **shadows the
+  parameter as X for the whole rest of the module**. Everything downstream
+  (`(N_EXT == 1)`, `3'(N_EXT-2)`) evaluates to X, with no warning: the symptom
+  was a wait FSM whose `wcnt` was X and which therefore never replied. Assign
+  the expression to a named `wire` first and connect that. The same import also
+  refuses a module-level `localparam` derived from a package parameter ("a
+  reference to a net or variable ... is not allowed in a constant expression")
+  — spell such expressions inline where they are used.
 - **`vm1_simlib.v` is sim-only** (dual-write-port behavioural RAM → "multiple
   constant drivers" in Quartus). The FF register-file path
   (`CONFIG_VM1_CORE_REG_USES_RAM=0`) leaves that RAM unused, so the Quartus build
@@ -1087,7 +1216,15 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   the live `sel_ram||sel_romr` (behaviour-identical: the selects are
   SYNC-framed and stable by D_DONE; ref037's goldens pin the cycle identity).
   Rule: keep translate outputs out of pad-OE cones — register the selection
-  at issue, never re-check it live at the drive point.
+  at issue, never re-check it live at the drive point. **Phase 9 had to take
+  that one level further** (2026-07-25): the loop came back as the worst
+  sys_clk path (−0.023 ns) once the `N_EXT` work re-placed the fitter, so
+  `rdata_oe` no longer decodes the FSM state either — the whole
+  `(state == D_DONE && was_read && was_drive)` term is precomputed into the
+  `oe_arm` flop at the transitions into/out of D_DONE (identical by
+  construction: D_DONE is entered from D_RD_WAIT with was_read=1, from
+  D_WR_REQ with was_read=0, and left only to D_IDLE), leaving
+  `rdata_oe = oe_arm && !din_n`. Same rule, one level shorter.
 - **A quasi-static signal with big fanout still costs real setup time**
   (Phase 8, fixed 2026-07-22). `model_bk11` (DIP 1, latched during a DCLO
   hold, frozen while the CPU runs) fans out across the mapper, clkgen,

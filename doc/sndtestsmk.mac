@@ -1,0 +1,30 @@
+    make_bin
+    make_wav
+
+    .LINK 2000
+
+    MOV #6, @#177130
+    MOV #60, @#177130
+    MOV #0, @#177130
+
+    MOV #140000, R2
+    MOV #START, R1
+    MOV #(END-START)/2, R0
+COPY:
+    MOV (R1)+, (R2)+
+    SOB R0, COPY
+    JMP 140000
+
+START:
+    MOV #177716, R0
+    MOV #360, R1
+    MOV #160, R2
+SND:
+    MOV R1, (R0)
+    XOR R2, R1
+    MOV #300, R3
+DELAY:
+    SOB R3, DELAY
+    BR SND
+END:
+    NOP

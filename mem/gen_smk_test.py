@@ -414,11 +414,28 @@ def build_stage2(bk10=False):
     a.label("stop_spin")
     a.emit(0o000777)                        # BR . (СТОП lands here)
     a.label("stop_handler")
-    # verify the stored PC through the ALL seg-3 alias (abs P+7 word 0o3736)
+    # Verify the stored PC through the ALL seg-3 alias (abs P+7 word 0o3736).
+    # TWO acceptable values, and which one shows up is a pure speed question:
+    # nIRQ1 is a fixed 64-cpu_clk one-shot (ocbk_top), while the HALT entry
+    # (two extent stores + the two vector fetches from SMK RAM) takes ~30, so
+    # whether СТОП re-enters at the handler's first instruction depends on how
+    # fast the machine's SMK RAM is. It did not re-enter at the Phase-8
+    # placeholder N_EXT = 4; it does at the calibrated N_EXT = 1 (2026-07-25),
+    # and then the second entry's PC - stop_handler itself - is what stays in
+    # the extent. Both outcomes prove exactly what this leg is here to prove:
+    # the stores replied, a real PC round-tripped through the write-only
+    # extent into SMK RAM, and it reads back through the ALL alias. The vm1
+    # cannot suppress the re-entry (СТОП ignores PSW priority) and neither can
+    # the program (the re-entry pre-empts instruction 1), so accepting both is
+    # the only stable form of this check.
     smk_mode(a, ALL)
     a.emit(0o023727, 0o137674)              # CMP @#137674,#stop_spin
     a.addr("stop_spin")
+    a.br(BEQ, "stop_pc_ok")
+    a.emit(0o023727, 0o137674)              # CMP @#137674,#stop_handler
+    a.addr("stop_handler")
     expect_eq(a)
+    a.label("stop_pc_ok")
     smk_mode(a, RAM10)                      # the tb replay expects RAM10
     a.emit(0o000137)
     a.addr("success")

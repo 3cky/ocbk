@@ -65,11 +65,53 @@ package qbus_pkg;
    localparam logic [1:0] MK_EXT    = 2'd2;
    localparam logic [1:0] MK_ROM    = 2'd3;
 
-   // MK_EXT fixed reply count = the SMK512 RAM reply (Phase 8). PLACEHOLDER:
-   // the real SMK is an external Q-bus board (likely a faster, SRAM-like
-   // reply) - recalibrate reference-tb-first with the 0011M cycle-accuracy
-   // item; the wait FSM's 3-bit wcnt caps any N at 9.
-   localparam int unsigned N_EXT = N_RAM;
+   // MK_EXT fixed reply count = the SMK512 RAM reply. CALIBRATED 2026-07-25
+   // against a real BK-0011M + SMK512 (was the Phase-8 placeholder N_RAM = 4),
+   // CONFIRMED ON HARDWARE 2026-07-26: the board plays 602 Hz against the real
+   // machine's 601.
+   //
+   // Method (sim/smktime, the oracle that keeps it honest): doc/sndtestsmk.mac
+   // toggles the 177716 speaker bit around a 192-iteration SOB delay loop, so
+   // one tone half-period = 197 instruction fetches and NOTHING else that
+   // touches memory (the vm1 self-replies for 177700-177717). Run the loop
+   // from SMK RAM and the tone is a direct readout of this constant; run the
+   // same loop from ordinary RAM and it is a control for everything else.
+   //
+   //                     loop in SMK RAM     loop in ordinary RAM (control)
+   //     real            601 Hz (3351 cyc)   478 Hz (4212 cyc)
+   //     board @4        514 Hz (3918 cyc)   482 Hz (4177 cyc)  -14.5% / +0.84%
+   //     board @1        602 Hz              482 Hz             +0.17% / +0.84%
+   //     sim/smktime @1  599 Hz (3362 cyc)   482 Hz (4176 cyc)
+   //
+   // The control leg being right to +0.8% is what makes this a measurement of
+   // N_EXT and not of the clock rate or the CPU core. One unit of N is exactly
+   // one CPU cycle, and the gap was 567 cycles / 197 accesses = 2.88, putting
+   // the real board at N ~= 1: it replies WITHIN the strobe cycle, like any
+   // async external SRAM board - the same reason N_KBD = 1 for the 1801ВП1-014.
+   //
+   // The sim reads 599 rather than the ideal 3327 cyc / 605 Hz because a
+   // minority of reads miss the detection edge by one and take the S_WAIT
+   // fallback (see the cpu_sdram_dp note; sim/smktime's EXTRD line pins the
+   // rate). That is a testbench artefact: its port-2 model SATURATES the
+   // arbiter, while the shipped video fetch is paced - which is exactly why
+   // the board lands HIGHER than the sim, at 602. The bk10 leg, whose slower
+   // CPU clock gives the fetch more head start, already reaches 3328 = ideal.
+   //
+   // WHAT THE RESIDUAL IS, now that the board has been measured: NOT a uniform
+   // global bias. SMK RAM is +0.17% while ordinary RAM stays +0.84%, so a
+   // clock/core error can be at most ~0.17% - the other ~0.67% belongs to the
+   // 037 CYCLE-STEALING model alone. In cycles: the control leg is 36 short
+   // over 197 accesses, i.e. we steal ~0.18 cycles per access too FEW (1.31
+   // against the real ~1.49). That is the next thing this method can calibrate,
+   // and sim/smktime's control leg is already the instrument for it.
+   //
+   // N = 1 is a reply at the detection edge itself, which the wait FSM's wcnt
+   // cannot count (see `ext_fast` in qbus_mem) AND which lands before the SDRAM
+   // read would normally have been issued - so the MK_EXT read leg starts its
+   // fetch at SYNC instead of at DIN (cpu_sdram_dp's fast_rd).
+   // Changing this constant back to >= 2 is safe: both mechanisms are gated on
+   // N_EXT == 1 and fold away. The wait FSM's 3-bit wcnt caps any N at 9.
+   localparam int unsigned N_EXT = 1;
 
    // SMK512 memory-layout register 177130 (the floppy control register the SMK
    // "ab-uses"; BkEmu SmkMemoryManager). Write-only fixed reply count for the

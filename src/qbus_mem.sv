@@ -371,12 +371,26 @@ module qbus_mem #(
     // u_dp fetches the word but the wait FSM below drives the OR-merged data
     // (see the carve-out block above). Note the extent write posts even in
     // cpu_blk (bus-passive broadcast; only the REPLY is carved out there).
+    // Phase-9: the MK_EXT mem-region read leg is the ONE access whose fixed
+    // reply (N_EXT = 1, the calibrated SMK512 access time - see qbus_pkg) is
+    // shorter than the SDRAM latency, so its read must start at SYNC instead of
+    // at DIN or the done-gate would extend it. Scoped to exactly that leg:
+    // MK_RAM037 and MK_ROM keep issuing at DIN, so no existing timing golden
+    // can move. Constant-folds away when N_EXT >= 2.
+    // NOTE (Icarus): a package parameter must NOT make its first appearance
+    // inside a port-connection expression - Icarus then creates an implicit
+    // NET of that name, which silently shadows the parameter (as X) for the
+    // whole rest of the module. Hence this named wire rather than the
+    // expression inline at .fast_rd() below.
+    wire dp_fast_rd = (N_EXT == 1) & sel_ext & ~ovl_zone & ~m_smk_wo;
+
     cpu_sdram_dp #(.ADDR_BITS(ADDR_BITS), .DQ_BITS(DQ_BITS)) u_dp (
         .clk(sclk), .rst_n(~reset),
         .sync_n(sync_n), .din_n(din_n), .dout_n(dout_n), .wtbt_n(wtbt_n),
         .sel_ram(sel_ram | (sel_ext & ~m_smk_ro & ~m_smk_wo)),
         .sel_romr(sel_romx | (sel_ext & m_smk_ro)),
         .sel_ramw(sel_ext & m_smk_wo),
+        .fast_rd(dp_fast_rd),
         .rd_noe((sel_romx | sel_ext) & ovl_zone),
         .addr(addr), .phys(mphys), .ad_true(~ad_n),
         .rdata(ram_rdata), .rdata_oe(ram_rdata_oe), .mem_ready(mem_ready),
@@ -477,6 +491,33 @@ module qbus_mem #(
                   | sel_fdd;    // КНГМД stub: ditto (a real SMK's floppy
                                 // controller always replies there)
 
+    // ---- the N=1 (calibrated SMK512 RAM) fast reply ------------------------
+    // N_EXT = 1 means "RPLY follows the strobe inside the cycle" - the N_KBD=1
+    // convention, and what an async external SRAM board actually does (the
+    // hardware calibration is in qbus_pkg / sim/smktime). The wait FSM's wcnt
+    // cannot express it (it counts N-2 edges), so the reply is issued at the
+    // detection edge itself, and the wcnt load below is clamped to >= 2 so it
+    // stays legal on the fallback path.
+    //   * READ  - u_dp started the fetch back at SYNC (fast_rd), so mem_ready
+    //             is already up. Requiring it here keeps the done-gate as a
+    //             visible safety net: if it is ever low we fall into S_WAIT and
+    //             raise dbg_romgate, which sim/smktime fails on.
+    //   * WRITE - a posted write; the data was captured off the bus one sclk
+    //             after DOUT and u_dp is single-threaded, so the next cycle's
+    //             fetch cannot overtake it. Replying at once is what the real
+    //             board does (and mem_ready cannot be up yet by construction).
+    // sel_ext && !ovl_zone is uniquely the mem-region MK_EXT leg: sel_io /
+    // sel_ide / sel_vreg all live in ovl_zone, and where sel_fdd coexists
+    // (0177130-133 inside an SMK-covered segment 7) its read contribution is
+    // 0 and drive_data is 0 either way - so none of the reply-point I/O
+    // machinery applies and u_dp drives the read data, exactly as in S_WAIT.
+    // (The clamp is spelled inline at the wcnt load rather than as a named
+    //  localparam - Quartus 11.0 and Icarus both refuse a module-level
+    //  constant expression derived from an imported package parameter.)
+    wire ext_fast = (N_EXT == 1) && sel_ext && !ovl_zone
+                  && ((is_read  && !m_smk_wo && mem_ready)
+                   || (is_write && !m_smk_ro));
+
     always_ff @(posedge cpu_clk) begin
         fetch_stb <= 1'b0;
         if (reset) begin
@@ -518,10 +559,28 @@ module qbus_mem #(
                         // claims what nothing else replies to)
                         wcnt  <= sel_vreg   ? 3'(N_VREG-2)
                                : sel_ide    ? 3'(N_IDE-2)
-                               : (sel_ext && !ovl_zone) ? 3'(N_EXT-2)
+                               : (sel_ext && !ovl_zone)
+                                            ? 3'((N_EXT < 2 ? 2 : N_EXT) - 2)
                                : sel_fdd    ? 3'(N_SMKREG-2)
                                : 3'(N_ROM-2);
-                        state <= S_WAIT;
+                        // N=1: reply at THIS detection edge (the N_KBD=1
+                        // convention - an async slave whose RPLY follows the
+                        // strobe inside the cycle). The only N=1 leg is
+                        // mem-region MK_EXT, the calibrated SMK512 RAM; its
+                        // reads are driven by u_dp (drive_data stays 0) and
+                        // sel_ext && !ovl_zone can never be 177716, so none of
+                        // the reply-point I/O machinery applies. mem_ready is
+                        // up because u_dp issued the read at SYNC (fast_rd);
+                        // if it somehow is not, fall through to S_WAIT with
+                        // wcnt=0 and let the done-gate there extend the reply
+                        // AND raise dbg_romgate - the safety net stays, and
+                        // stays observable (sim/smktime fails on it).
+                        if (ext_fast) begin
+                            reply     <= 1'b1;
+                            fetch_stb <= is_read;
+                            state     <= S_REPLY;
+                        end else
+                            state <= S_WAIT;
                     end
                 end
                 S_WAIT: begin

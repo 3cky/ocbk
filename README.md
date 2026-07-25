@@ -51,7 +51,15 @@ the drive reports cleanly absent and the BIOS exits to its command
 line; flip DIP 8 OFF and press reset for a stock machine). DIP 2 is
 unused.
 
-- Fits in **6938 / 12060 LEs (58%)**, **3 M4Ks**, **1 ASMI block**, **1 PLL**;
+**The SMK512's memory now runs at the right speed** (Phase 9, confirmed on
+hardware 2026-07-26). Its access-time constant had been a Phase-8 placeholder
+that made SMK RAM ~14.5 % too slow. It was calibrated by playing a tone whose
+frequency is set purely by the memory the delay loop executes from
+(`doc/sndtestsmk.mac`) on a real BK-0011M + SMK512 and on the board, with the
+same loop run from ordinary RAM as a control: the board went **514 Hz → 602 Hz
+against the real machine's 601**. Oracle: `sim/smktime/run.sh`.
+
+- Fits in **6953 / 12060 LEs (58%)**, **3 M4Ks**, **1 ASMI block**, **1 PLL**;
   timing closes.
 - Cycle accuracy holds under full 4-port SDRAM contention for RAM *and* ROM
   execution: the SoC cosims reproduce both goldens (`golden_037.txt`,
@@ -163,9 +171,16 @@ ROM always runs from the loaded SDRAM image).
 - **CDC:** the wait-state FSM (`cpu_clk`) and the SDRAM controller (`sys_clk`)
   exchange data only through a request-toggle handshake + synchronisers; the SDC
   false-paths both directions. Read data is sampled at the (fixed) RPLY point,
-  guaranteed stable because an SDRAM access finishes well within one CPU cycle.
-- **ROM writes are replied-to and ignored** (a real BK would time out to trap 4);
-  the timeout-fidelity question is deferred to Phase 9.
+  stable because an SDRAM access finishes inside the RPLY window — with **one
+  exception since the Phase-9 access-time calibration**: the SMK512 RAM's reply
+  (`N_EXT = 1`) lands sooner than a strobe-time SDRAM read could finish, so that
+  one leg starts its fetch at **SYNC**, the address phase, instead. General
+  rule: a fixed reply shorter than the SDRAM latency must prefetch from the
+  address phase, never from the strobe.
+- **ROM writes get NO reply** → the CPU's bus-timeout → **trap 4**, exactly as a
+  real BK's mask/overlay ROM (done in Phase 7; the conditionless "write until
+  trap 4" fast screen-clear idiom depends on it). Applies to the fixed top ROM
+  and the BK-0011M window-1 overlays alike. Oracle: `sim/romwr/run.sh`.
 - Keyboard (177660–177663, the 1801ВП1-014), the 1-bit speaker and the tape
   interface are in (Phase 6). **Tape** uses the right sound-jack channel as
   the cassette port (esemsx3 CMT scheme), selected by **DIP 4**
