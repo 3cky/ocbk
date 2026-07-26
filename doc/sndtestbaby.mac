@@ -1,0 +1,91 @@
+; ---------------------------------------------------------------------------
+; sndtestbaby - how many CPU cycles is ONE Babylona palette-switch block?
+;
+; Companion to doc/sndtest662.mac. Same tone technique, same purpose: get a
+; number off a real BK-0011M that can be compared with the board.
+;
+; WHAT IT MEASURES
+;   Babylona (Manwe/Ivanq, github.com/Manwe-SandS/Babylona) paints its
+;   12-colour picture with a fully unrolled chain of one 10-word block per
+;   scanline - `Code:` in Babylona.mac, 256 copies, no per-line resync:
+;
+;       MOV R1,(R0)     \
+;       MOV R2,(R0)      |  six writes to 0177662 (R0), with six
+;       MOV R3,(R0)      |  palette values preloaded in R1-R6
+;       MOV R4,(R0)      |
+;       MOV R5,(R0)      |
+;       MOV R6,(R0)     /
+;       MOV #pal,R1     \  two register reloads
+;       MOV #pal,R2     /
+;
+;   Because there is no resync, the cost of that block IS the vertical scale
+;   of the whole effect: whatever it costs, the palette switches walk that far
+;   along the raster on every successive line. ocbk executes it in 240 CPU
+;   cycles (measured in sim, flat, and identical in active video and in
+;   blanking). A BK-0011M scanline is 256 cycles (4.000 MHz, 64.00 us), so the
+;   block is 0.9375 of a line on ocbk. Whether the real machine agrees is the
+;   question this program answers, and it is the difference between "the image
+;   is authored for that walk" and "we run the chain at the wrong rate".
+;
+;   The half-period is 24 blocks, so one CPU cycle per block moves the tone by
+;   24 cycles in ~5800, i.e. 0.4 %. The interesting hypothesis is much bigger
+;   than that: 16 cycles per block would be 6.5 %, ~21 Hz.
+;
+; TO RUN
+;   Start at 0002000. One entry point only - the comparison is real-machine
+;   versus board on the same program.
+;
+;       ocbk (sim)                      see sim/vregtime notes
+;       real, if the block is 240 cyc   same pitch as the board
+;       real, if the block is 256 cyc   ~6.5 % LOWER than the board
+;
+; All six palette registers hold the SAME value (0047400 = the power-on
+; default: page 0, EVNT masked, palette 15), so the instruction stream is
+; byte-for-byte Babylona's while the screen simply sits at palette 15 - no
+; flicker, and nothing that could change the timing.
+; ---------------------------------------------------------------------------
+
+	make_bin
+	make_wav
+
+	.LINK 2000
+
+		Palette		= 177662	; video page / palette register
+		Speaker		= 177716	; bit 6 = speaker, bit 7 = motor (1 = off)
+		Value		= 47400		; page 0, EVNT masked, palette 15
+		Blocks		= 24.		; blocks per tone half-period
+
+Start:	MOV #Palette,R0
+	MOV #Value,R1
+	MOV #Value,R2
+	MOV #Value,R3
+	MOV #Value,R4
+	MOV #Value,R5
+	MOV #Value,R6
+	MOV R1,@#Palette		; mask EVNT before the measurement starts
+
+; Two half-periods written out, so the speaker bit is driven by an immediate
+; write and no register is stolen from the block.
+Snd:	MOV #360,@#Speaker		; bit 6 = 1
+	.repeat Blocks {
+		MOV R1,(R0)		; the Babylona per-scanline block, verbatim
+		MOV R2,(R0)		; in shape: six 0177662 writes through R1-R6
+		MOV R3,(R0)		; plus the two immediate reloads that close it
+		MOV R4,(R0)
+		MOV R5,(R0)
+		MOV R6,(R0)
+		MOV #Value,R1
+		MOV #Value,R2
+	}
+	MOV #220,@#Speaker		; bit 6 = 0
+	.repeat Blocks {
+		MOV R1,(R0)		; the Babylona per-scanline block, verbatim
+		MOV R2,(R0)		; in shape: six 0177662 writes through R1-R6
+		MOV R3,(R0)		; plus the two immediate reloads that close it
+		MOV R4,(R0)
+		MOV R5,(R0)
+		MOV R6,(R0)
+		MOV #Value,R1
+		MOV #Value,R2
+	}
+	JMP Snd				; out of BR range - the chain is ~1 KB

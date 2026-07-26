@@ -914,6 +914,112 @@ is not a single peripheral:
   `scount` cone (the 9-bit `ptr == 256` compare → the 1-bit `ptr[8]`) and the
   mapper↔bus-pad loop again (`rdata_oe` now off the `oe_arm` flop instead of
   decoding the FSM state). sys_clk +0.190 ns / TNS 0, 6,953 LE.
+- **Status (2026-07-26): third increment done (sim)** — investigating a
+  reported **progressive skew down the screen** in beam-raced palette effects
+  against a real BK-0011M. Two candidate causes were **ruled out by
+  measurement**, and one real divergence was found and fixed:
+  * **`N_VREG` (the 177662 write reply) is NOT the cause.** It was the only
+    uncalibrated timing left in such a loop, and being paid once per palette
+    write it had exactly the right shape to integrate into a skew. New oracle
+    `sim/vregtime` (`doc/sndtest662.bin`, 192 writes per tone half-period, a
+    RAM-write control leg): the `--sweep` over N = 1..4 gives **bit-identical
+    cycle counts**, on two instruction shapes, with the reply-path probe
+    confirming the FSM really switched paths. A DATO's RPLY in that range
+    lands inside the vm1's fixed write cycle. `N_VREG` is now 1 anyway
+    (schematic-derived: D6:C's write strobe also drives D34's OC inverter onto
+    S1-49 = D8:B's K input, so the board replies combinationally), but the
+    placeholder is closed in both directions — it cannot skew and cannot
+    regress.
+  * **The clock tree is NOT the cause.** Traced pin-by-pin: 12 MHz quartz
+    (BQ1), CPU = D39 ÷3 = **4.000 MHz** (with a 1/3 duty cycle — tested in
+    sim, cycle-neutral), 037 CLKIN = D8:A ÷2 = **6.000 MHz** into D19.33. The
+    real CLKIN:CPU ratio is **1.5, exactly ours**; with 384 CLKIN/line ×
+    320 lines that is 64.00 µs/line (15.625 kHz exactly), 48.83 Hz/frame, and
+    **256.0 CPU cycles per scanline on both machines**. Our design is
+    uniformly +0.674 % fast with the ratio preserved, so it cannot drift
+    beam-raced code relative to the raster.
+  * **Fixed: the palette sample instant.** `pal_idx` rode `vid_fetch`, but the
+    word only reaches the screen when WTI parallel-loads the К155ИР13 shift
+    registers (which sit straight on the DRAM data pins — no latch stage).
+    Measured on the reference netlist: slot = 8 CLKIN, fetch +0, CAS/WTI-rise
+    +1, WTI-fall **+3**. New `vid_pal_stb` tap + an `F_HOLD` pairing state in
+    `fb_video`; worth ~6 dots of constant boundary offset, not the skew.
+  * **Also ruled out earlier, and worth not re-trying: the ВЕ-timer
+    prescaler.** A 2026-07-24 session diagnosed misplaced palette switches as
+    `vm1_tve.v`'s free-running /128 prescaler (upstream never resets it on a
+    CSR write; BkEmu re-zeroes the phase to the write instant) and validated a
+    local hook in a PALTST15 sim harness — ~3400 sys_clk, deep active video →
+    the H-blank edge. **On hardware it changed the artefacts only slightly, so
+    it was stashed**, and the vendored core stays upstream-stock with a comment
+    saying so. The sim prediction did not transfer; note that harness had SDRAM
+    contention stripped.
+  All twelve ref037 goldens byte-identical, full `make sim` green, smktime
+  unchanged, real BOS cold-boot PASS; sys_clk **+0.278 ns** / TNS 0, 6,980 LE.
+  **The skew is now QUANTIFIED AND LOCALISED (2026-07-26), but not fixed.**
+  Four tone programs (`doc/sndtest662`, `sndtestbaby`, `sndtestimm`,
+  `sndtestimm2`; all `.mac`+`.bin`, pdpy11, `.wav` regenerable) were run on a
+  real BK-0011M and on the board:
+
+  | program | real | ocbk | per unit |
+  |---|---|---|---|
+  | 192 × write 0177662 | 297 Hz = 6734 cyc | 6734 cyc | **match** |
+  | 192 × write to RAM | 286 Hz = 6993 | 6734 | −1.35 cyc/write |
+  | 24 × Babylona block | 322 Hz = 6211 | 5824 | **−16.1 cyc/block** |
+  | 192 × `MOV #imm,Rn` | 302 Hz = 6622 | 5648 | **−5.08 cyc/instr** |
+
+  **The real Babylona block is 256.1 cycles = exactly one scanline** — the demo
+  is authored correctly and we run its chain 6.25 % fast (~32 dots/line). That
+  IS the slant. Every leg that matches contains only ONE-memory-read
+  instructions; every leg that diverges does TWO reads back to back.
+
+  * **The CPU core and `N_EXT` are RIGHT.** `doc/sndtestimm2.mac` runs the same
+    192 × `MOV #imm,R1` loop from **SMK RAM** (`MK_EXT` — not 037-fronted, no
+    video, no arbitration, no slot quantisation), with an ordinary-RAM control
+    leg in the same image. Real: **509 Hz = 3929 cycles**; our ideal is **3927**
+    (the sim's 4055 carries the documented `EXTRD slow` tb-saturation
+    inflation) — **0.05 %**. The control leg reproduced sndtestimm's 302 Hz.
+  * **So the whole 5.08 cyc/instr is in the 037-fronted DRAM path, and it is
+    PATTERN-DEPENDENT.** Subtracting the two legs of one program cancels every
+    overhead: per DRAM access the real machine costs **4.37** cycles more than
+    SMK RAM when accesses are ~3.85 slots apart (the SOB loop) but **6.60**
+    when they come in back-to-back pairs; ours is flat at ~4.2 either way.
+  * **The 037 model is NOT the /24 phase, and is exonerated four ways** (this
+    supersedes the earlier "037 cycle-steal phase in /24 mode" suspicion):
+    the **reference netlist** `sim/ref037/va_037.v` driven at the exact
+    BK-0011M ratio gives `MOV #imm,R1` = 26.46 cyc / `SOB` = 20.51 — *our*
+    numbers, not the real machine's, and with no SDRAM in the loop at all;
+    our retimed `va_037_sync` reproduces it (26.43/20.52); the board's **D8:B
+    RPLY re-timing flop** (the long-deferred fidelity item) is worth only
+    **+0.32 cyc**; and **CPU clock phase and duty are completely flat** — 12
+    combinations (phase 0..5 × symmetric vs the real 1/3-duty CLC) all give
+    26.455/26.457.
+  * **MiSTer cannot arbitrate it — it is the same design.** `BK0011M_MiSTer`
+    uses the same cpu11 vm1 core, the same divider ratios and phases
+    (`ce_6mp/n` = clk_sys/16; `cpu_div` 24/32 with the half at 12), and a
+    VP1-037 contention block identical gate-for-gate (same PC/PC90, RASEL set
+    at PC==4 / clear at PC==7, `ack = TRPLY & ~RASEL`, legacy RAM acked *only*
+    by the 037, no fixed `N_RAM`). Its differences are elsewhere and none can
+    make us fast: no `mem_ready` done-gate (ours can only extend a reply),
+    combinational ROM/extension ack (MiSTer is *faster* there, so it is no ROM
+    timing reference), a `~dio` TRPLY clear, contention decided on the mapped
+    rather than the CPU address, a dead `pin_rmw` output, and a dropped
+    `pin_rply_in |` term in the CPU self-reply at 177702 (ours matches upstream
+    cpu11). **Prediction worth checking: Babylona should slant on MiSTer too.**
+  * **Two arbiter rules tested and REJECTED:** "no grant in the slot
+    immediately after a grant" has *zero* effect (the CPU never asks that soon
+    — its two fetches sit 2.37 and 2.59 slots apart, never adjacent); "≥3 slots
+    between grants" fits `MOV` (31.44 vs the real 31.7) but wrecks `SOB`
+    (26.0 vs 21.4). Any uniform minimum-gap rule strong enough to push the
+    2.5-slot pair also ruins the 3.85-slot loop.
+
+  **Next:** a parametric study of the grant rule against BOTH tone legs at once
+  (they constrain it in opposite directions). **Caveat before adopting
+  anything:** it changes the /32 bk10 path too, so all twelve ref037 goldens
+  would move — and since those goldens are generated *from* the same netlist,
+  regenerating them would only re-pin the netlist's behaviour, not silicon's.
+  The real-hardware tones would have to become the authority for that path.
+  The PALTST15 harness (`sim/paltst/`, `doc/PALTST15.MAC`/`.EXE`) is not in the
+  tree; the recipe for rebuilding it survives in the project memory note.
 - Cycle-accuracy regression vs reference traces; turbo (6 MHz) mode.
 - Optional CRT effects (scanline dim/gamma) in the upscaler.
 - Config: DIP/menu for model, turbo, video filter.

@@ -1,0 +1,63 @@
+; ---------------------------------------------------------------------------
+; sndtestimm - how long does MOV #imm,Rn take?
+;
+; Third in the series (doc/sndtest662.mac, doc/sndtestbaby.mac). Same tone
+; technique; this one isolates a single instruction.
+;
+; WHY
+;   doc/sndtestbaby measured Babylona's per-scanline block on a real BK-0011M
+;   at 6211 cycles per 24 blocks = 256.1 cycles per block - exactly one
+;   scanline, which is why the demo is authored that way. ocbk runs the same
+;   block in 240, i.e. 6.25 % fast, and that is the slant.
+;
+;   The block is six `MOV Rn,(R0)` writes to 0177662 plus two `MOV #imm,Rn`
+;   reloads. doc/sndtest662 measured the 0177662 write path on real hardware
+;   and it MATCHES ocbk (real 6734 cycles vs ocbk 6734, 0.03 %). So the whole
+;   16.1-cycle-per-block deficit has to sit in the two immediate reloads:
+;   8.07 cycles each. Independent support: sim/smktime's control leg contains
+;   exactly ONE `MOV #imm,Rn` per half-period and showed exactly an 8-cycle
+;   residual, which had been put down to the clock offset.
+;
+;   This program puts 192 of them in each half-period, so if the 8 cycles are
+;   real the tone is ~25 % lower on a BK-0011M than on the board - not a
+;   subtle reading.
+;
+; WHAT IT IS
+;   The loop is nothing but `MOV #Value,R1` (mode-2 source: the operand word
+;   is fetched from memory at PC+2, so the instruction is TWO back-to-back
+;   memory reads and no write) plus the SOB that closes each pass. Nothing
+;   else in the loop touches memory - the 0177716 speaker write that marks the
+;   half-period is served by the CPU's own internal reply for 0177700-0177717.
+;
+; TO RUN
+;   Start at 0002000. One entry point; the comparison is real machine versus
+;   board on the same program.
+;
+;       ocbk (sim)                             see below
+;       real, if MOV #imm,Rn matches ours       same pitch as the board
+;       real, if it costs ~8 cycles more        ~25 % LOWER than the board
+;
+;   R1 is reloaded with the same constant every time, so nothing observable
+;   changes; the only variable is what the instruction costs.
+; ---------------------------------------------------------------------------
+
+	make_bin
+	make_wav
+
+	.LINK 2000
+
+		Speaker		= 177716	; bit 6 = speaker, bit 7 = motor (1 = off)
+		Value		= 47400		; arbitrary - never used, only loaded
+		Unroll		= 8.		; MOV #imm,Rn per inner pass
+		Outer		= 24.		; inner passes -> 192 per half-period
+
+Start:	MOV #Speaker,R5
+	MOV #360,R2			; bit 6 set, bit 7 set (motor stopped)
+	MOV #160,R3			; XOR mask: flips bit 6 every pass
+
+Snd:	MOV R2,(R5)			; half-period marker (CPU self-reply)
+	XOR R3,R2
+	MOV #Outer,R4
+Loop:	.repeat Unroll { MOV #Value,R1 }
+	SOB R4,Loop
+	BR Snd

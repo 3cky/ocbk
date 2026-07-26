@@ -160,7 +160,7 @@ module boot_check_tb;
     wire [13:1] video_va;
     wire        mem_ready;
     wire        mem_ext_ram;   // window-1 banked RAM -> 037 a15 force (from u_ms; 0 in bk10)
-    wire        va_vfetch, va_line_en, va_hgate, va_vgate;
+    wire        va_vfetch, va_palstb, va_line_en, va_hgate, va_vgate;
     va_037_sync pr037 (
         .clk(sys_clk), .en_pos(en_pos), .en_neg(en_neg), .mem_ready(mem_ready),
         .ext_ram(mem_ext_ram),
@@ -170,7 +170,7 @@ module boot_check_tb;
         .PIN_A(va_a), .PIN_nCAS(va_cas), .PIN_nRAS(va_ras), .PIN_nWE(va_we),
         .PIN_nE(va_ne), .PIN_nBS(va_nbs), .PIN_WTI(va_wti), .PIN_WTD(va_wtd),
         .PIN_nVSYNC(va_vsync), .cpu_grant(va_grant), .video_va(video_va),
-        .vid_fetch(va_vfetch), .vid_line_en(va_line_en),
+        .vid_fetch(va_vfetch), .vid_pal_stb(va_palstb), .vid_line_en(va_line_en),
         .hgate(va_hgate), .vgate(va_vgate)
     );
 
@@ -203,7 +203,7 @@ module boot_check_tb;
         .clk(sys_clk), .rst_n(dclo_cold), .blank_req(1'b0), .screen_mode(1'b1),
         .vram_base(model11 ? (vid_page ? VPAGE1 : VPAGE0) : 24'h002000),
         .pal_idx(model11 ? vid_pal : 4'd0),
-        .vid_fetch(va_vfetch), .vid_line_en(va_line_en),
+        .vid_fetch(va_vfetch), .vid_pal_stb(va_palstb), .vid_line_en(va_line_en),
         .hgate(va_hgate), .vgate(va_vgate), .video_va(video_va),
         .f_req(f_req), .f_addr(f_addr), .f_gnt(f_gnt), .f_rvalid(f_rvalid),
         .rdata_i(arb_rdata),

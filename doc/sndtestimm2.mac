@@ -1,0 +1,107 @@
+; ---------------------------------------------------------------------------
+; sndtestimm2 - is the two-read gap in the CPU, or in the 037-fronted DRAM?
+;
+; Fourth in the series (doc/sndtest662.mac, sndtestbaby.mac, sndtestimm.mac),
+; and the one that decides where the Babylona slant comes from.
+;
+; WHAT IS KNOWN SO FAR (all measured on a real BK-0011M vs the board)
+;
+;     program                            real        ocbk      per unit
+;     192 x MOV Rn,(R0) -> 0177662      6734 cyc    6734 cyc    MATCH
+;     192 x SOB (sndtestsmk control)    4212 cyc    4177 cyc    +0.8 %
+;     192 x SOB in SMK RAM              3351 cyc    3362 cyc    -0.3 %
+;     192 x MOV #imm,Rn (sndtestimm)    6622 cyc    5648 cyc    +5.1 cyc/instr
+;     24 x Babylona block               6211 cyc    5824 cyc    +16.1 cyc/block
+;
+;   Every leg that MATCHES contains only instructions with ONE memory read.
+;   The two legs that DIVERGE are the ones whose instructions do TWO reads
+;   back to back (opcode word, then the immediate operand word at PC+2).
+;   The gap is +5.1 CPU cycles per such instruction - and one 037 video slot
+;   is 8 CLKIN = 5.333 CPU cycles at 4 MHz, i.e. EXACTLY one slot.
+;
+;   The 037 grants the CPU its DRAM cycle once per 8-CLKIN slot (RASEL is set
+;   only at PC==4). So "the second read waits one more slot on real hardware"
+;   fits perfectly. But it has NOT been shown that the 037 is the culprit at
+;   all: an instruction that is one CPU cycle longer inside the CPU would be
+;   AMPLIFIED to a whole slot by exactly that quantisation, and would look
+;   identical from outside.
+;
+;   Ruled out already, by simulation against the REFERENCE va_037 netlist at
+;   the exact BK-0011M clock ratio (CPU 4.000 / CLKIN 6.000): our retimed 037,
+;   our reply path, the board's D8:B RPLY re-timing flop (+0.3 cyc), and the
+;   CPU clock phase and 1/3 duty cycle (flat across all 12 combinations).
+;
+; WHAT THIS PROGRAM DECIDES
+;   SMK512 RAM is NOT 037-fronted - it is an ordinary asynchronous external
+;   memory (MK_EXT, N_EXT = 1), with no video, no arbitration and no slot
+;   quantisation whatsoever. Running the SAME two-read loop there separates
+;   the CPU from the 037, and the three candidate answers are far apart:
+;
+;     entry 0002000 (SMK RAM)   board = 4055 cycles = 496.5 Hz
+;
+;       real ~493 Hz  -> the CPU core is RIGHT. The whole error is then in
+;                        the 037 grant policy for a second, back-to-back
+;                        DRAM read (and our 037 agrees with both the
+;                        reference netlist and MiSTer, so the netlist would
+;                        be the thing that is not the real chip).
+;       real ~471 Hz  -> the core is ONE cycle short per instruction, and
+;                        the 8-CLKIN slot quantisation AMPLIFIES that one
+;                        cycle into the whole 5.333-cycle slot seen in RAM.
+;                        This is the hypothesis this program was written for.
+;       real ~397 Hz  -> the core is genuinely ~5 cycles short; quantisation
+;                        is innocent and our vm1 core carries the debt.
+;
+;     entry 0002046 (ordinary RAM, control)   board = 5648 cycles = 356.5 Hz
+;
+;       This leg is bit-identical to doc/sndtestimm.mac (same 5648 cycles in
+;       sim), so it must reproduce that program's real-machine reading of
+;       302 Hz. If it does not, something about the session differs and the
+;       SMK reading cannot be trusted either.
+;
+; TWO ENTRY POINTS, ONE IMAGE - the loop code is BYTE-IDENTICAL in both and
+; the only difference is which memory executes it (exactly the sndtestsmk
+; arrangement, whose numbers are in the table above):
+;
+;     0002000   commit SMK mode 060, copy the loop to 0140000, run it there
+;               -> the loop runs in SMK RAM
+;     0002046   enter at START, so the same loop runs in place
+;               -> the loop runs in ordinary BK-0011M RAM (the control leg;
+;                  this one must reproduce sndtestimm's 302 Hz)
+;
+; Needs an SMK512 (DIP 8 on the board). R1 is reloaded with the same constant
+; every time, so nothing observable changes; the only variable is what the
+; instruction costs.
+; ---------------------------------------------------------------------------
+
+    make_bin
+    make_wav
+
+    .LINK 2000
+
+    MOV #6, @#177130
+    MOV #60, @#177130
+    MOV #0, @#177130
+
+    MOV #140000, R2
+    MOV #START, R1
+    MOV #(END-START)/2, R0
+COPY:
+    MOV (R1)+, (R2)+
+    SOB R0, COPY
+    JMP 140000
+
+; ---- the measured loop: 8 x 24 = 192 MOV #imm,R1 per tone half-period -------
+START:
+    MOV #177716, R5
+    MOV #360, R2                ; bit 6 set, bit 7 set (motor stopped)
+    MOV #160, R3                ; XOR mask: flips bit 6 every pass
+SND:
+    MOV R2, (R5)                ; half-period marker (CPU self-reply)
+    XOR R3, R2
+    MOV #24., R4
+LOOP:
+    .repeat 8. { MOV #47400, R1 }
+    SOB R4, LOOP
+    BR SND
+END:
+    NOP

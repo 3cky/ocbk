@@ -55,7 +55,7 @@ module video_pipe_tb;
     assign ad = ad_oe ? ad_drv : 16'hZZZZ;
     reg         sync_n = 1'b1, din_n = 1'b1, dout_n = 1'b1, wtbt_n = 1'b1;
 
-    wire        vfetch, line_en, hgate, vgate;
+    wire        vfetch, palstb, line_en, hgate, vgate;
     wire [13:1] video_va;
     va_037_sync u_037 (
         .clk(sys_clk), .en_pos(en_pos), .en_neg(en_neg), .mem_ready(1'b1), .ext_ram(1'b0),
@@ -65,7 +65,7 @@ module video_pipe_tb;
         .PIN_A(), .PIN_nCAS(), .PIN_nRAS(), .PIN_nWE(),
         .PIN_nE(), .PIN_nBS(), .PIN_WTI(), .PIN_WTD(), .PIN_nVSYNC(),
         .cpu_grant(), .video_va(video_va),
-        .vid_fetch(vfetch), .vid_line_en(line_en), .hgate(hgate), .vgate(vgate)
+        .vid_fetch(vfetch), .vid_pal_stb(palstb), .vid_line_en(line_en), .hgate(hgate), .vgate(vgate)
     );
 
     // ---- write pipeline: fb_video (ports 2+3) -------------------------------------
@@ -78,7 +78,7 @@ module video_pipe_tb;
                .FB0_BASE(FB0_BASE), .FB1_BASE(FB1_BASE)) u_fbv (
         .clk(sys_clk), .rst_n(dclo), .blank_req(1'b0), .screen_mode(1'b1),
         .vram_base(VRAM_BASE), .pal_idx(4'd0),    // bk10: fixed base, palette 0
-        .vid_fetch(vfetch), .vid_line_en(line_en), .hgate(hgate), .vgate(vgate),
+        .vid_fetch(vfetch), .vid_pal_stb(palstb), .vid_line_en(line_en), .hgate(hgate), .vgate(vgate),
         .video_va(video_va),
         .f_req(f_req), .f_addr(f_addr), .f_gnt(f_gnt), .f_rvalid(f_rvalid),
         .rdata_i(arb_rdata),

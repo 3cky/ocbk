@@ -43,12 +43,16 @@ module fb_video #(
     // fetch - a page flip takes effect at the next fetched word, as on the
     // real hardware (MiSTer applies screen_bank combinationally).
     input  logic [23:0]          vram_base,
-    // BK-0011M palette select (177662 bits 11:8); bk10 ties it to 0. Rides
-    // with each fetch (dest_pal below), so it is beam-raced like line_en.
+    // BK-0011M palette select (177662 bits 11:8); bk10 ties it to 0. Sampled
+    // at vid_pal_stb - the instant this word reaches the SCREEN, not the
+    // instant it is fetched (see dest_pal below), so it is beam-raced exactly
+    // as the real board's КР556РТ4А palette PROM is.
     input  logic [3:0]           pal_idx,
 
     // ---- va_037_sync Phase-4 taps (sys_clk domain) -----------------------
     input  logic                 vid_fetch,
+    input  logic                 vid_pal_stb, // fetch + 3 CLKIN: the ИР13
+                                              // shift-register load instant
     input  logic                 vid_line_en,
     input  logic                 hgate,
     input  logic                 vgate,
@@ -112,12 +116,34 @@ module fb_video #(
     // ------------------------------------------------------------------
     // Fetch FSM (arbiter port 2): one video word per vid_fetch pulse
     // ------------------------------------------------------------------
-    typedef enum logic [1:0] { F_IDLE, F_REQ, F_WAIT } fstate_t;
-    fstate_t    fstate;
-    logic [7:0] dest_row;
-    logic [4:0] dest_word;
-    logic       dest_len;         // vid_line_en latched with the fetch
-    logic [3:0] dest_pal;         // pal_idx latched with the fetch
+    typedef enum logic [1:0] { F_IDLE, F_REQ, F_WAIT, F_HOLD } fstate_t;
+    fstate_t     fstate;
+    logic [7:0]  dest_row;
+    logic [4:0]  dest_word;
+    logic        dest_len;        // vid_line_en latched with the fetch
+    logic [3:0]  dest_pal;        // pal_idx at the DISPLAY instant (vid_pal_stb)
+    logic        pal_seen;        // this slot's display-instant sample taken
+    logic [15:0] word_hold;       // the fetched word, held until it is paired
+                                  // with its display-instant palette
+
+    // The palette a word is drawn with is the one in force when the ИР13s load
+    // it (vid_pal_stb = fetch + 3 CLKIN), not the one in force when we issue
+    // the fetch: sampling at the fetch makes every raster palette boundary
+    // appear ~3 CLKIN (~6 dots) further right than on a real BK-0011M.
+    // vid_fetch and vid_pal_stb are 3 CLKIN apart and the slot is 8, so they
+    // never coincide and the pairing stays 1-deep.
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            dest_pal <= '0;
+            pal_seen <= 1'b0;
+        end else begin
+            if (vid_fetch)   pal_seen <= 1'b0;
+            if (vid_pal_stb) begin
+                dest_pal <= pal_idx;
+                pal_seen <= 1'b1;
+            end
+        end
+    end
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -127,7 +153,7 @@ module fb_video #(
             dest_row      <= '0;
             dest_word     <= '0;
             dest_len      <= 1'b0;
-            dest_pal      <= '0;
+            word_hold     <= '0;
             err_fetch_ovr <= 1'b0;
         end else begin
             if (vid_fetch && fstate != F_IDLE)
@@ -138,12 +164,20 @@ module fb_video #(
                     dest_row  <= row;
                     dest_word <= word_idx;
                     dest_len  <= vid_line_en;
-                    dest_pal  <= pal_idx;
                     f_req     <= 1'b1;
                     fstate    <= F_REQ;
                 end
                 F_REQ:  if (f_gnt)    begin f_req <= 1'b0; fstate <= F_WAIT; end
-                F_WAIT: if (f_rvalid) fstate <= F_IDLE;
+                // Hold the word until its display-instant palette has been
+                // sampled. That is +3 CLKIN into an 8-CLKIN slot, and the slot
+                // budget (err_fetch_ovr) already requires the fetch itself to
+                // finish inside the slot, so F_HOLD never straddles the next
+                // fetch - the pairing cannot slip a slot.
+                F_WAIT: if (f_rvalid) begin
+                    word_hold <= rdata_i;
+                    fstate    <= F_HOLD;
+                end
+                F_HOLD: if (pal_seen) fstate <= F_IDLE;
                 default: fstate <= F_IDLE;
             endcase
         end
@@ -157,7 +191,7 @@ module fb_video #(
         .screen_mode (screen_mode),
         .line_en     (dest_len),
         .pal_idx     (dest_pal),
-        .word        (rdata_i),
+        .word        (word_hold),
         .slots       (pal_slots)
     );
 
@@ -172,7 +206,7 @@ module fb_video #(
     logic [1:0] k;
     logic [63:0] slots_w;
 
-    wire push = (fstate == F_WAIT) && f_rvalid;
+    wire push = (fstate == F_HOLD) && pal_seen;
     wire pop  = (wstate == W_IDLE) && (f_cnt != 0);
     wire [FIFO_W-1:0] head = fifo[f_rd];
 

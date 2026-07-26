@@ -1,0 +1,93 @@
+; ---------------------------------------------------------------------------
+; sndtest662 - how long does a 0177662 (palette) WRITE take?
+;
+; A differential tone measurement for a real BK-0011M vs the ocbk board, in the
+; style of doc/sndtestsmk.mac (which calibrated the SMK512 access time N_EXT).
+;
+; WHY
+;   Beam-raced palette demos (e.g. Babylona/tweak.mac) run a fully unrolled
+;   block per scanline with NO per-line resync, so each block must cost exactly
+;   one scanline - 256 CPU cycles on a real BK-0011M (12 MHz quartz -> CPU /3 =
+;   4.000 MHz; 037 CLKIN /2 = 6.000 MHz; 384 CLKIN per line = 64.00 us).
+;   ocbk executes Babylona's block in 240 cycles, 6.25 % fast, which walks the
+;   palette bands ~32 dots per line - the observed slant.
+;   The block has 16 bus cycles: 10 instruction fetches and 6 palette writes.
+;   The FETCH side is already known good (sim/smktime's control leg is 197 RAM
+;   fetches per half-period and matched real hardware to 0.17 %). The WRITE
+;   side has never been compared against a real machine at all. This program
+;   compares it.
+;
+; HOW
+;   The 0177716 speaker bit is toggled once per pass of a loop containing 192
+;   writes, so the emitted TONE is a direct readout of what a write costs:
+;   one extra CPU cycle per write moves the tone by 192 cycles out of ~6700,
+;   i.e. ~4.5 % (~13 Hz), where the sndtestsmk readings resolved ~1 Hz.
+;
+;   TWO ENTRY POINTS, ONE IMAGE. The loop body is BYTE-IDENTICAL in both and
+;   the only difference in the entire machine state is R0:
+;
+;     0002000  the 192 writes go to 0177662  - the register under test
+;     0002006  the 192 writes go to SCRATCH  - an ordinary RAM word: the
+;              CONTROL leg (that path is hardware-calibrated), which also
+;              checks RAM *writes*, likewise never measured before
+;
+; TO RUN
+;   Load this once, then start it at 0002000, note the pitch; start it again
+;   at 0002006, note the pitch. Do it on a real BK-0011M and on the board.
+;
+; WHAT THE ANSWER MEANS
+;                                 entry 0002000     entry 0002006
+;     ocbk (sim)                    298.9 Hz          298.9 Hz     <- IDENTICAL
+;     real, if writes match ours   ~296.9 Hz         ~296.9 Hz
+;     real, if a 662 write costs
+;       ~2.7 cycles more           ~276 Hz           ~296.9 Hz
+;
+;   On ocbk the two legs are identical. If the real machine SPLITS them, that
+;   gap is the missing 16 cycles per Babylona block, measured in the same units
+;   as the N_EXT calibration. If the real machine's control leg also differs
+;   from ocbk's, RAM writes are off too.
+;
+; NOTE: no interrupt is masked here beyond what the first 0177662 write does
+; (bit 14 = 1 = EVNT masked). A stray keypress perturbs one half-period in
+; thousands; adding a 0177660 write would put a DATIO on the measurement path.
+;
+; The screen goes to palette 15 and stays there - every write writes the SAME
+; value, so nothing flickers.
+; ---------------------------------------------------------------------------
+
+	make_bin
+	make_wav
+
+	.LINK 2000
+
+		Palette		= 177662	; video page / palette register (write-only)
+		Speaker		= 177716	; bit 6 = speaker, bit 7 = tape motor (1 = off)
+		Value		= 47400		; = def_reg662: page 0, EVNT masked, palette 15
+		Unroll		= 8.		; writes per inner pass
+		Outer		= 24.		; inner passes  -> 8*24 = 192 writes/half-period
+
+; ---- entry 1: the writes go to the palette register ------------------------
+E662:	MOV #Palette,R0
+	BR Common
+
+; ---- entry 2 (control): the same writes go to ordinary RAM ------------------
+ERam:	MOV #Scratch,R0
+	BR Common
+
+Common:	MOV #Value,R1			; the value every write writes
+	MOV R1,@#Palette		; once here in BOTH legs, so the control leg
+					; runs with EVNT masked too
+	MOV #Speaker,R5
+	MOV #360,R2			; bit 6 set, bit 7 set (motor stopped)
+	MOV #160,R3			; XOR mask: flips bit 6 every pass
+
+Snd:	MOV R2,(R5)			; the half-period marker. The CPU self-replies
+					; for 0177700-0177717, so this write costs
+					; nothing on the external-bus side.
+	XOR R3,R2
+	MOV #Outer,R4
+Loop:	.repeat Unroll { MOV R1,(R0) }
+	SOB R4,Loop
+	BR Snd
+
+Scratch:.WORD 0				; the control leg's target

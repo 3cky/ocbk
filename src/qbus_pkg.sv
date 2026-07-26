@@ -161,9 +161,44 @@ package qbus_pkg;
 
    // 177662 write register (BK-0011M only; MiSTer rtl/video.sv is the
    // reference - BkEmu's handling is simplified). Fixed reply count for the
-   // qbus_mem write-only reply path. PLACEHOLDER like N_EXT: recalibrate
-   // reference-testbench-first with the 0011M cycle-accuracy item.
-   localparam int unsigned N_VREG = N_ROM;
+   // qbus_mem write-only reply path.
+   //
+   // N = 1 - "RPLY follows the strobe inside the cycle", the N_KBD convention.
+   // SCHEMATIC-DERIVED (doc/bk0011m.sch, traced 2026-07-26), not guessed: the
+   // palette register D35 (К555ТМ9) is clocked by net S1-78 = D6:C (К555ЛЕ4,
+   // 3-input NOR of the 037's BS D19.38, DOUT D19.40 and the latched address
+   // bit D27.9 Q2) - the write strobe itself - and THAT SAME NET drives D34.1
+   // (К555ЛН2, open-collector inverter) whose output D34.2 is wire-ORed with
+   // D21.12 onto net S1-49 = the K input of D8:B, the flip-flop that re-times
+   // RPLY onto the CPU's RPLY pin. So the 0011M generates the reply for its own
+   // added register COMBINATIONALLY, one gate delay after the strobe; the only
+   // quantisation is D8:B's CPU-clock re-time. It has to be that circuit: the
+   // bus RPLY net S1-21 has exactly four drivers (014, 037, the two RE2A ROMs),
+   // the 014 does NOT reply to a 662 write (sim/ref014/README.md) and the 037
+   // decodes only 177664 (va_037_sync RWR/ROE) - D34 is the whole reply.
+   //
+   // Was the N_ROM (=2) placeholder through Phase 8.  This is now the value the
+   // board actually implements - but note what sim/vregtime MEASURED while
+   // establishing it, because it closes the question permanently:
+   //
+   //   **N_VREG is invisible to the CPU.  The whole 1..4 ladder produces
+   //     BIT-IDENTICAL cycle counts.**
+   //
+   // A DATO's RPLY, arriving anywhere in that range, lands inside the vm1's
+   // fixed write cycle, so it never moves the next SYNC.  Checked on two
+   // instruction shapes (`MOV R1,(R0)` and the `MOV R1,@#177662` real code
+   // uses) and with the reply-path probe confirming the FSM really did take
+   // the other path (VREGWR fast=192 vs slow=192).  So this constant is NOT a
+   // cycle-accuracy risk in either direction - it is set to 1 because that is
+   // what the hardware does, not because anything depends on it.  In
+   // particular it is NOT the cause of the beam-raced-palette skew: that was
+   // the hypothesis this oracle was built to test, and it falsified it.
+   //
+   // Like N_EXT, the mechanism that expresses N=1 (qbus_mem's `vreg_fast`) is
+   // gated on N_VREG == 1 and folds away, so raising this back to >= 2 is safe.
+   // Oracle: sim/vregtime (doc/sndtest662.bin, 192 writes per tone
+   // half-period - deliberate high gain, and it still reads flat).
+   localparam int unsigned N_VREG = 1;
 
    // BK-0011M physical SDRAM layout (word addresses). The BK-0010 image
    // (RAM 0x0000-0x3FFF, ROM 0x4000-0x7F7F, FB0/FB1 up to 0x1FFFF) is

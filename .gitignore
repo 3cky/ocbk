@@ -54,6 +54,8 @@ sim/smk/smk_bios.hex
 sim/smktime/snd_page6.hex
 sim/smktime/snd_low10.hex
 sim/smktime/snd_bios.hex
+sim/vregtime/vreg_ram.hex
+sim/vregtime/vreg_top.hex
 sim/romwr/romwr_ram.hex
 
 # Local MCP servers

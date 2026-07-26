@@ -518,6 +518,20 @@ module qbus_mem #(
                   && ((is_read  && !m_smk_wo && mem_ready)
                    || (is_write && !m_smk_ro));
 
+    // The same mechanism for the 177662 video register (Phase 9). N_VREG = 1 is
+    // schematic-derived: the 0011M wire-ORs RPLY straight off the write strobe
+    // that clocks the register (D6:C -> D34 -> S1-49 -> D8:B; see qbus_pkg), so
+    // it is the fastest reply on the board, and the placeholder N_ROM count was
+    // one CPU cycle per palette write - the beam-raced-effect skew.
+    // Write-only by construction (sel_vreg is a write decode), so this is the
+    // WRITE case above verbatim: a posted write whose value was captured off
+    // the bus in the DOUT window one sclk after DOUT (the vid_* block below),
+    // nothing to fetch (drive_data / fetch_stb stay 0) and no done-gate to
+    // wait for. It can coexist with an SMK extent write at 177662 (ovl_zone),
+    // where ext_fast is excluded and u_dp posts to SMK RAM on the same
+    // single-threaded write port - same argument, same safety.
+    wire vreg_fast = (N_VREG == 1) && sel_vreg && is_write;
+
     always_ff @(posedge cpu_clk) begin
         fetch_stb <= 1'b0;
         if (reset) begin
@@ -557,7 +571,7 @@ module qbus_mem #(
                         // in the HLT/ALL modes an extent-covered 177130-133
                         // access keeps its N_EXT count (the FDD stub only
                         // claims what nothing else replies to)
-                        wcnt  <= sel_vreg   ? 3'(N_VREG-2)
+                        wcnt  <= sel_vreg   ? 3'((N_VREG < 2 ? 2 : N_VREG) - 2)
                                : sel_ide    ? 3'(N_IDE-2)
                                : (sel_ext && !ovl_zone)
                                             ? 3'((N_EXT < 2 ? 2 : N_EXT) - 2)
@@ -565,17 +579,20 @@ module qbus_mem #(
                                : 3'(N_ROM-2);
                         // N=1: reply at THIS detection edge (the N_KBD=1
                         // convention - an async slave whose RPLY follows the
-                        // strobe inside the cycle). The only N=1 leg is
-                        // mem-region MK_EXT, the calibrated SMK512 RAM; its
-                        // reads are driven by u_dp (drive_data stays 0) and
-                        // sel_ext && !ovl_zone can never be 177716, so none of
-                        // the reply-point I/O machinery applies. mem_ready is
-                        // up because u_dp issued the read at SYNC (fast_rd);
-                        // if it somehow is not, fall through to S_WAIT with
-                        // wcnt=0 and let the done-gate there extend the reply
-                        // AND raise dbg_romgate - the safety net stays, and
-                        // stays observable (sim/smktime fails on it).
-                        if (ext_fast) begin
+                        // strobe inside the cycle). Two N=1 legs: mem-region
+                        // MK_EXT, the calibrated SMK512 RAM, and the 177662
+                        // write (vreg_fast). MK_EXT reads are driven by u_dp
+                        // (drive_data stays 0) and sel_ext && !ovl_zone can
+                        // never be 177716, so none of the reply-point I/O
+                        // machinery applies; mem_ready is up because u_dp
+                        // issued the read at SYNC (fast_rd); if it somehow is
+                        // not, fall through to S_WAIT with wcnt=0 and let the
+                        // done-gate there extend the reply AND raise
+                        // dbg_romgate - the safety net stays, and stays
+                        // observable (sim/smktime fails on it). The 177662 leg
+                        // is a pure posted write: nothing to fetch, nothing to
+                        // gate (fetch_stb below is is_read = 0 there).
+                        if (ext_fast || vreg_fast) begin
                             reply     <= 1'b1;
                             fetch_stb <= is_read;
                             state     <= S_REPLY;

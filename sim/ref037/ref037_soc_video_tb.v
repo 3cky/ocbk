@@ -110,7 +110,7 @@ module ref037_soc_video_tb;
     wire       va_ras, va_we, va_ne, va_nbs, va_wti, va_wtd, va_vsync, va_grant;
     wire [13:1] video_va;
     wire        mem_ready;
-    wire        va_vfetch, va_line_en, va_hgate, va_vgate;
+    wire        va_vfetch, va_palstb, va_line_en, va_hgate, va_vgate;
     va_037_sync pr037 (
         .clk(sys_clk), .en_pos(en_pos), .en_neg(en_neg), .mem_ready(mem_ready), .ext_ram(1'b0),
         .PIN_R(~dclo_cold), .PIN_C(1'b0),
@@ -119,7 +119,7 @@ module ref037_soc_video_tb;
         .PIN_A(va_a), .PIN_nCAS(va_cas), .PIN_nRAS(va_ras), .PIN_nWE(va_we),
         .PIN_nE(va_ne), .PIN_nBS(va_nbs), .PIN_WTI(va_wti), .PIN_WTD(va_wtd),
         .PIN_nVSYNC(va_vsync), .cpu_grant(va_grant), .video_va(video_va),
-        .vid_fetch(va_vfetch), .vid_line_en(va_line_en),
+        .vid_fetch(va_vfetch), .vid_pal_stb(va_palstb), .vid_line_en(va_line_en),
         .hgate(va_hgate), .vgate(va_vgate)
     );
 
@@ -162,7 +162,7 @@ module ref037_soc_video_tb;
     fb_video #(.ADDR_BITS(AB), .DQ_BITS(DW)) u_fbv (
         .clk(sys_clk), .rst_n(dclo_cold), .blank_req(1'b0), .screen_mode(1'b1),
         .vram_base(24'h002000), .pal_idx(4'd0),   // bk10: fixed base, palette 0
-        .vid_fetch(va_vfetch), .vid_line_en(va_line_en),
+        .vid_fetch(va_vfetch), .vid_pal_stb(va_palstb), .vid_line_en(va_line_en),
         .hgate(va_hgate), .vgate(va_vgate), .video_va(video_va),
         .f_req(f_req), .f_addr(f_addr), .f_gnt(f_gnt), .f_rvalid(f_rvalid),
         .rdata_i(arb_rdata),

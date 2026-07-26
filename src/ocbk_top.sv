@@ -467,7 +467,7 @@ module ocbk_top (
     assign rply_n = (rply037_n === 1'b0) ? 1'b0 : 1'bZ;
 
     // 037 video-side taps consumed by the Phase-4 pipeline below
-    wire        vid_fetch, vid_line_en, hgate, vgate;
+    wire        vid_fetch, vid_pal_stb, vid_line_en, hgate, vgate;
     wire [13:1] video_va;
     // 037 pins driving the Phase-9 EVNT/IRQ2 detector (see bk_evnt.sv)
     wire        wti_037, synco_037;
@@ -498,6 +498,7 @@ module ocbk_top (
         .cpu_grant (),
         .video_va  (video_va),
         .vid_fetch (vid_fetch),
+        .vid_pal_stb(vid_pal_stb),
         .vid_line_en(vid_line_en),
         .hgate     (hgate),
         .vgate     (vgate)
@@ -876,6 +877,7 @@ module ocbk_top (
         .vram_base  (vram_base),
         .pal_idx    (pal_idx),
         .vid_fetch  (vid_fetch),
+        .vid_pal_stb(vid_pal_stb),
         .vid_line_en(vid_line_en),
         .hgate      (hgate),
         .vgate      (vgate),

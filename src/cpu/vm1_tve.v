@@ -78,6 +78,17 @@ begin
    tve_div     = 6'b000000;
 end
 
+//
+// NOTE (ocbk, 2026-07-26): the /128 prescaler below is deliberately left
+// UPSTREAM-STOCK, i.e. FREE-RUNNING - tve_pre/tve_div are never reset by a CSR
+// write. Re-zeroing them on tve_csr_wr (which is what BkEmu's Timer.java does:
+// (cpuTime - settingsChangeTime)/128 with updateSettingsChangeTime() on a
+// control write) has been TRIED as a local hook and REJECTED: it was validated
+// in a PALTST15-style sim harness in 2026-07, but ON HARDWARE it made only a
+// MINOR difference to the palette-effect artefacts it was meant to fix, so it
+// was stashed rather than kept. Do NOT re-apply it as "the fix" - it is not.
+// See the project memory note bk11-cycle-accuracy-paltst15.
+//
 always @(posedge tve_clk)
 begin
    if (tve_ena)

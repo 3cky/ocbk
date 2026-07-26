@@ -64,6 +64,9 @@ module va_037_sync (
 
     // ---- taps for the Phase-4 video pipeline (output-only, oracle-safe) ----
     output logic        vid_fetch,   // one sys_clk pulse per video word slot
+    output logic        vid_pal_stb, // same slot, at the shift-register load
+                                     // instant (fetch + 3 CLKIN) - when the
+                                     // word actually reaches the screen
     output logic        vid_line_en, // beam row is displayed (WTI line-mask term)
     output logic        hgate,       // horizontal blanking gate
     output logic        vgate        // vertical blanking gate
@@ -158,11 +161,33 @@ module va_037_sync (
 
    // Phase-4 taps: pure reads of existing state, no logic change.
    // vid_fetch pulses at PC==1 (VA[4:1] increments at PC==7, video CAS window is
-   // PC==2..3), so VA is stable and the pulse leads the slot by 6 CLKIN.
+   // PC==2..3), so VA is stable and the fetch is issued one CLKIN before the
+   // 037 CASes the word itself.
    assign vid_fetch   = en_neg & ~HGATE & ~VGATE & (PC == 3'd1);
    assign vid_line_en = M256 | (LC[6] & LC[7]);   // same line term as PIN_WTI
    assign hgate       = HGATE;
    assign vgate       = VGATE;
+
+   // Phase-9 tap: the instant the fetched word reaches the SCREEN, which is
+   // where the palette must be sampled - not the fetch. On the real board the
+   // video data path is DRAM -> К155ИР13 shift registers (D24/D25) -> КР556РТ4А
+   // palette PROM -> CRT, with NO latch in between: the ИР13s take their
+   // parallel data straight off the DRAM data pins (schematic nets S5-1..16)
+   // and their mode pin S0 is PIN_WTI, so the word is loaded during the WTI
+   // window and shifted out from there. Measured on this core and on the
+   // reference netlist (one slot = 8 CLKIN): vid_fetch at +0, video CAS and WTI
+   // rise at +1, WTI fall at +3. The load edge that counts is the LAST one
+   // inside WTI - the DRAM data is only valid late in its CAS window, and any
+   // earlier edge reloads the same word - so the word starts displaying at +3.
+   // (Residual uncertainty is the +1..+3 span, i.e. <= 2 CLKIN = 4 dots, which
+   // needs the D8/D10 dot-clock phase to pin down further.)
+   // Delayed UNCONDITIONALLY, deliberately: re-qualifying on ~HGATE would drop
+   // the last slot of every line, whose +3 lands after the gate edge.
+   logic [2:0] palstb_sr;
+   always_ff @(posedge clk)
+      if (RESET)       palstb_sr <= 3'b000;
+      else if (en_neg) palstb_sr <= {palstb_sr[1:0], vid_fetch};
+   assign vid_pal_stb = palstb_sr[2] & en_neg;
 
    // -----------------------------------------------------------------------
    // Clocked-transparent latches (updated every sys_clk, gated by condition)

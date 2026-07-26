@@ -390,6 +390,22 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   sed-patching a *copy* of `qbus_pkg.sv` (the `sim/evnt` idiom). Run it
   whenever `N_EXT`, the `qbus_mem` reply FSM or the `cpu_sdram_dp` issue path
   changes. **Mutation-tested ×5** (see the run.sh header).
+- `sim/vregtime/run.sh` — **slow (~1 min), not in `make sim`**: the Phase-9
+  **177662 write-time oracle**, same shape as `sim/smktime` on a stock
+  BK-0011M stack (smk_en=0, /24, port-2 contention, boot via the top-ROM
+  stage-0 stub). `doc/sndtest662.bin` (`mem/gen_vreg_test.py`, the same bytes
+  a real machine would run) puts **192 writes in each tone half-period** — 8
+  unrolled `MOV R1,(R0)` × 24 SOB iterations — with two entry points and a
+  byte-identical loop whose only difference is R0: the writes go to **177662**
+  or to a **scratch word in RAM** (`MK_RAM037`, the hardware-calibrated
+  control). The `LOOP addr n min max` table is the sharp output — eight
+  identical instructions, so min/max there *is* the cost of one write.
+  **It was built to test the hypothesis that `N_VREG` caused the beam-raced
+  palette skew, and it FALSIFIED it**: `--sweep` gives bit-identical cycle
+  counts for N = 1..4 (see the `N_VREG` note in the 177662 bullet). What the
+  golden pins is therefore the fetch path + 037 steal (the control leg's
+  min ≠ max is that beat) plus the `VREGWR fast/slow` line, which is the one
+  thing that moves when the reply FSM changes. `--regen` regenerates.
 - `sim/raminit/run.sh` — the Phase-7 `ram_init` unit oracle (the authentic
   DRAM power-on pattern filler): drives ram_init through a served-mask-honoring
   grant model and checks, per fill pass, the exact per-model word pattern
@@ -478,6 +494,21 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   nSEL1/nSEL2 for the 177716/177714 decode and a lone Z-idle OC driver is the
   Cyclone-I stuck-asserted trap (see the virq_n gotcha). Core config is via
   global Verilog macros (see below).
+  **`vm1_tve.v` (the 177712 ВЕ timer) is deliberately left upstream-stock —
+  a TRIED AND REJECTED hook, do not re-apply it.** Its /128 prescaler
+  (`tve_pre`/`tve_div`) is **free-running**: a CSR write reloads `tve_count`
+  but not the phase, so the first tick lands 0–127 cpu_clk later depending on
+  a phase dating back to power-on. BkEmu does the opposite (`Timer.java`:
+  `(cpuTime - settingsChangeTime)/128`, with `updateSettingsChangeTime()` on a
+  control write ⇒ phase re-zeroed to the write instant), and since beam-raced
+  palette effects restart this timer from each 50 Hz EVNT and count down to a
+  scanline, re-zeroing looked like the fix — a PALTST15-style sim harness
+  measured it moving the palette-switch train ~3400 sys_clk, out of deep
+  active video onto the H-blank edge. **On hardware it made only a MINOR
+  difference to the actual artefacts, so it was stashed.** The sim
+  prediction did not transfer (that harness had SDRAM contention stripped).
+  A comment in the file records this so it does not get re-applied a third
+  time.
 - The Q-bus is **inverted / active-low / open-collector**, carried as shared
   tri-state nets at the `cpu_test` level (no SystemVerilog `interface` — neither
   Quartus 11.0 nor Icarus handle tri-state interface members reliably). Every
@@ -504,6 +535,23 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   design's **only** known sub-1 % timing error against real hardware — a
   frequency offset, not a cycle-count one, so no oracle can see it and nothing
   in the RTL can fix it short of a different crystal.
+  **The real board's clock tree, traced pin-by-pin in `doc/bk0011m.sch`
+  (2026-07-26) — settles the CPU:CLKIN ratio question for good:** BQ1 is a
+  **12 MHz** quartz (D5 К555ЛН1 inverter oscillator → net S1-42). **CLC**
+  (the CPU clock, D14.1) comes from **D39** (К555ТМ2 wired as a 3-state
+  counter: D1 ← ~Q2, D2 ← Q1, FF2 async-**cleared** by Q1, clocked off the
+  *inverted* 12 MHz) = **12/3 = 4.000 MHz exactly** — and note its **1/3 duty
+  cycle**, high for one 12 MHz period in three, where ours is a symmetric
+  toggle (tested in sim: cycle counts identical, so this is cosmetic).
+  **The 037's CLKIN** is **D8:A pin 5 → net S1-29 → D19.33** = **12/2 =
+  6.000 MHz**; the same flop's `~Q` (S1-33) is the К155ИР13 pixel shift clock.
+  So **the real CLKIN:CPU ratio is 1.5 — exactly ours**, and with the 037's
+  384 CLKIN/line × 320 lines/frame that makes a real line **64.00 µs =
+  15.625 kHz** (the TV line rate, exactly), a frame **48.83 Hz** (not 50), and
+  **one scanline = 256.0 CPU cycles on both machines**. Our whole design is
+  therefore uniformly +0.674 % fast with the ratio preserved: no relative
+  drift, so **the clock tree cannot skew beam-raced code** — a whole class of
+  hypotheses is ruled out here rather than re-argued each time.
 - **Soft reset (Phase 5.5):** the board's reset button (`pSltRst_n`, PIN_153 =
   the slot RESET net, external pull-up) re-enters the `ocbk_top` reset
   sequencer via `warm_rst_req` (pressed = hold, release + ~22 ms tail = the
@@ -1127,6 +1175,28 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   (mono-512 / colour-256) is toggled by the PS/2 Print Screen key (power-on
   default = colour-256), touches only `palette_apply` (mono ignores the
   palette, as real hardware).
+  **The palette is sampled at the word's DISPLAY instant, not its fetch
+  (Phase 9, 2026-07-26).** `palette_apply` runs on the FB *write* side, so the
+  physical colour is baked in per fetched word — the granularity is right
+  (16 dots; two 177662 writes are ≥ ~10 CPU cycles ≈ ≥ 30 dots apart, so word
+  quantisation can never merge two), but the *instant* was wrong: `pal_idx`
+  rode `vid_fetch`, which is 3 CLKIN before the word actually reaches the
+  screen, pushing every raster palette boundary ~6 dots right. On the real
+  board the chain is DRAM → **К155ИР13** shift registers (D24/D25) → КР556РТ4А
+  palette PROM → CRT with **no latch in between**: the ИР13s take their
+  parallel data straight off the DRAM data pins (nets S5-1..16) and their mode
+  pin S0 *is* `PIN_WTI`, so the word starts displaying at the WTI load.
+  Measured on the reference netlist and the retimed core (one slot = 8 CLKIN):
+  `vid_fetch` +0, video CAS and WTI rise +1, **WTI fall +3** — the load edge
+  that counts, since the DRAM data is only valid late in its CAS window and
+  any earlier edge reloads the same word. Hence `va_037_sync`'s **`vid_pal_stb`**
+  tap (`vid_fetch` delayed 3 `en_neg`, generated UNCONDITIONALLY — re-qualifying
+  on `~HGATE` would drop the last slot of every line) and `fb_video`'s
+  **`F_HOLD`** state, which holds the fetched word until its display-instant
+  palette has been sampled. The fetch *address*/page stays on `vid_fetch`,
+  deliberately: the page bit re-addresses the DRAM, so its instant is CAS
+  (+1), not display. Residual uncertainty is the +1..+3 span (≤ 4 dots) — the
+  D8/D10 dot-clock phase would be needed to pin it further.
 - **177662 video register (Phase 7, BK-0011M):** **MiSTer `rtl/video.sv` is
   the reference** (BkEmu simplifies it). Write-only (662 reads belong to the
   014 keyboard data register in BOTH models) and bk11-only (a bk10 662 write
@@ -1138,10 +1208,74 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   (same deliberate nINIT exception as the map registers), defaults = MiSTer
   `def_reg662` 0o047400 (page 0, IRQ2 masked, palette 15). Implemented in
   `qbus_mem`: the ONE positive decode besides the nSEL pair — sclk
-  DOUT-window capture next to `spk_bit`, write reply = fixed `N_VREG`
-  (placeholder; recalibrate reference-tb-first with 0011M cycle accuracy).
+  DOUT-window capture next to `spk_bit`, write reply = fixed `N_VREG`.
   `bk_kbd014` is untouched. `ocbk_top` muxes `vram_base`/`pal_idx` on
   `model_bk11` (all sys_clk — no CDC).
+  **`N_VREG` = 1 (Phase 9, 2026-07-26; was the `N_ROM` placeholder) — and the
+  measurement that set it also proved the constant is UNOBSERVABLE.** The
+  schematic says the board replies combinationally: D35 (the palette register,
+  К555ТМ9) is clocked by net S1-78 = **D6:C** (К555ЛЕ4 NOR of the 037's BS
+  D19.38, DOUT D19.40 and the latched address bit D27.9), and *that same net*
+  drives **D34.1** (К555ЛН2, open-collector) whose output wire-ORs onto
+  **S1-49** = the K input of **D8:B**, the flop that re-times RPLY onto the
+  CPU's RPLY pin. It has to be that circuit — the bus RPLY net S1-21 has
+  exactly four drivers (014, 037, the two RE2A ROMs), the 014 does **not**
+  reply to a 662 write (`sim/ref014/README.md`) and the 037 decodes only
+  177664. So N=1 is the faithful value (expressed by `qbus_mem`'s `vreg_fast`,
+  the `ext_fast` mechanism reused, gated on `N_VREG == 1` so it folds away).
+  **But `sim/vregtime`'s `--sweep` shows N = 1..4 give BIT-IDENTICAL cycle
+  counts** on two instruction shapes, with the VREGWR probe confirming the FSM
+  really took the other path: a DATO's RPLY in that range lands inside the
+  vm1's fixed write cycle and never moves the next SYNC. This closes the
+  placeholder permanently in BOTH directions — no fidelity risk, and **not** a
+  candidate for beam-raced-palette timing artefacts (that was the hypothesis
+  the oracle was built to test, and it falsified it).
+- **Beam-raced palette skew: QUANTIFIED AND LOCALISED, NOT FIXED
+  (2026-07-26).** Demos like Babylona (`~/projects/other/bk/Babylona/`) paint
+  one unrolled block per scanline with no resync, so the block cost IS the
+  vertical scale of the effect. **The real block is 256.1 CPU cycles = exactly
+  one scanline; ocbk runs it in 240 — 6.25 % fast, ~32 dots/line. That is the
+  slant.** The tone-program family in `doc/` (`sndtest662`, `sndtestbaby`,
+  `sndtestimm`, `sndtestimm2` — `.mac` is the source of truth, `.bin` tracked,
+  `.wav` regenerable by pdpy11; same technique as `sndtestsmk`) measured it
+  against a real BK-0011M. **Every leg that MATCHES contains only ONE-read
+  instructions; every leg that DIVERGES does TWO reads back to back**
+  (`MOV #imm,Rn` = −5.08 cyc/instr). That is why every earlier calibration
+  missed it — `N_EXT` included, they all used 192 × `SOB`.
+  **The CPU core and `N_EXT` are RIGHT:** `doc/sndtestimm2.mac` runs the same
+  loop from SMK RAM (`MK_EXT` — not 037-fronted, no arbitration, no slot
+  quantisation) — real 509 Hz = 3929 cyc vs our ideal 3927 (the sim's 4055
+  carries the `EXTRD slow` tb-saturation inflation), **0.05 %**.
+  **So the whole error is in the 037-fronted DRAM path and is
+  PATTERN-DEPENDENT:** per DRAM access the real machine costs 4.37 cycles more
+  than SMK RAM when accesses are ~3.85 slots apart, but **6.60** when they come
+  in back-to-back pairs; ours is flat at ~4.2 either way.
+  **DO NOT re-investigate these — all ruled out by measurement:** `N_VREG`
+  (above); the clock tree (the real CLKIN:CPU ratio is 1.5, exactly ours); the
+  ВЕ-timer prescaler (hardware-rejected, see the `vm1_tve` note); the **/24
+  CPU-clock phase and the 1/3 duty cycle** (12 combinations, all flat at
+  26.455/26.457); the board's **D8:B RPLY re-timing flop** (+0.32 cyc only);
+  and our 037 retime itself — the **reference netlist** at the exact BK-0011M
+  ratio gives 26.46/20.51 against `va_037_sync`'s 26.43/20.52, i.e. *our*
+  numbers, not the real machine's, with no SDRAM in the loop.
+  **MiSTer cannot arbitrate this — it IS the same design:** same cpu11 vm1
+  core, same divider ratios/phases (`ce_6mp/n` = clk_sys/16, `cpu_div` 24/32
+  half at 12), and a gate-for-gate identical VP1-037 contention block (RASEL
+  set at PC==4 / clear at PC==7, `ack = TRPLY & ~RASEL`, legacy RAM acked only
+  by the 037, no fixed `N_RAM`). Its only relevant differences make it
+  *faster*, not slower (no `mem_ready` done-gate; combinational ROM/extension
+  ack — so it is **not** a ROM timing reference). Untested prediction:
+  Babylona should slant on MiSTer too.
+  **Two grant rules tried and REJECTED:** "no grant in the slot immediately
+  after a grant" changes *nothing* (the CPU never asks that soon — its two
+  fetches sit 2.37 and 2.59 slots apart, never adjacent); "≥3 slots between
+  grants" fits `MOV #imm` (31.44 vs the real 31.7) but wrecks `SOB` (26.0 vs
+  21.4). Next = a parametric study against BOTH legs at once. ⚠️ Any change
+  here also moves the /32 bk10 path, so all twelve ref037 goldens shift — and
+  they are generated FROM the same netlist, so regenerating them re-pins the
+  netlist, not silicon. The hardware tones must be the authority.
+  (Experiment note: an `inh`/`gnt_inh` register added to a scratch copy of
+  `va_037_sync` MUST be reset — without it RASEL goes X and the sim hangs.)
 - **EVNT/IRQ2 frame interrupt (Phase 9 rework, BK-0011M):** the 50 Hz system
   timer. **The 037 has NO vertical-blanking output pin** — the real board
   synthesises IRQ2 externally, and `src/bk_evnt.sv` is a gate-faithful replica
