@@ -282,22 +282,42 @@ It is at least a **falsifiable prediction**: a real BK-0010 running
 `doc/sndtestimm.bin` should come out ~15 % slower than the current firmware
 does. Getting that recording is the cheapest way to de-risk the follow-up.
 
-### Status: this is a SIM fit against RECORDED tones
+### Status: SHIPPED AND CONFIRMED ON HARDWARE (2026-07-26)
 
-Nothing in `src/` has been changed. What is established is that a two-parameter
-family containing one physically-certain ingredient reproduces seven
-independent hardware measurements to within their own reading resolution. What
-is **not** established:
+**After `make flash`: the Babylona colour smearing is gone and PALTST's colour
+ribbons are flat on the board.** Those two effects are why this investigation
+existed — both are beam-raced, both have the per-scanline block cost as their
+vertical scale, and both were the visible face of running that block 6.25 %
+fast. The fit predicted them and they went away.
 
-* that it holds on the board — the fit predicts the tones, so re-running the
-  seven programs on hardware after implementing it is a real test with a real
-  chance of failing;
+This bench is now the regression that keeps the calibration pinned.
+
+The fit is implemented — `va_037_sync`'s `GRANT_SETUP = 2` and `src/bk_rply.sv`
+— so a plain `./run.sh` prints the fit column above, and that is what must stay
+true. `./run.sh --setup 0 --nod8b` reproduces every pre-fix number exactly, so
+the change is cleanly reversible and the two configurations are exactly what
+they claim to be.
+
+`sim/ref037` keeps **two** golden sets rather than abandoning the netlist one:
+`golden_037{,_rom}.txt` are still the netlist's, byte-identical, with
+`va_037_sync @GRANT_SETUP=0` diffed against them — the retime guard did not
+weaken, it moved to the stock setting — and `golden_037_hw{,_rom}.txt` are the
+shipped machine's, generated from the same simplest stack, with all ten
+integration legs reproducing them.
+
+What is **still not** established:
+
+* **the tones have not been re-measured on the board.** The visual acceptance
+  (Babylona, PALTST) is qualitative; the quantitative check — replaying the
+  seven `doc/sndtest*.wav` on the flashed board and comparing against the
+  `real` column — is still available and still able to fail. Worth doing if a
+  residual ever needs chasing; it is the same recipe as the `N_EXT`
+  calibration.
 * that `setup = 2` is *the* physical mechanism rather than a proxy for something
   else with the same phase signature;
 * that the /32 BK-0010 path is right — it moves by 15 % on two-read
   instructions and nothing measures it (see above).
 
-Implementing it means the twelve `ref037` goldens move and the hardware tones
-become the authority for that path (decision recorded, see above). D is also not
-fully independent of A and C — Babylona's block is six of A's instruction plus
-two of C's — so the genuinely independent constraints are A, B, C, E, F, G.
+D is also not fully independent of A and C — Babylona's block is six of A's
+instruction plus two of C's — so the genuinely independent constraints are
+A, B, C, E, F, G.

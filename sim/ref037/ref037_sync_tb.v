@@ -58,8 +58,21 @@ tri1        sync, din, dout, wtbt, rply;
 reg         rply_ext_n;
 assign rply = rply_ext_n ? 1'bZ : 1'b0;
 
+// ---- the ONE switch between the two configurations this tb must cover -------
+// GRANT_SETUP = 0 is the STOCK / REFERENCE configuration: va_037_sync's grant
+// setup window folds away (bit-identical to the vendored netlist) AND the D8:B
+// re-timing flop is bypassed, so this tb still reproduces golden_037.txt
+// bit-for-bit and therefore still guards the sys_clk retime, exactly as it did
+// before Phase 9 put a deliberate deviation into the shipped core.
+// GRANT_SETUP = 2 (the default, = the shipped value) is the calibrated machine
+// and is diffed against golden_037_hw.txt instead.  Override with
+// `iverilog -Pref037_sync_tb.GRANT_SETUP=0`.
+parameter integer GRANT_SETUP = 2;
+
 wire        rply037_n;
-assign rply = (rply037_n === 1'b0) ? 1'b0 : 1'bZ;
+wire        rply037_rt_n;
+wire        rply037_eff_n = (GRANT_SETUP == 0) ? rply037_n : rply037_rt_n;
+assign rply = (rply037_eff_n === 1'b0) ? 1'b0 : 1'bZ;
 
 reg         dclo, aclo;
 reg  [3:1]  irq;
@@ -172,7 +185,7 @@ wire [6:0] va_a;  wire [1:0] va_cas;
 wire       va_ras, va_we, va_ne, va_nbs, va_wti, va_wtd, va_vsync, va_grant;
 wire [13:1] va_video;
 
-va_037_sync pr037_sync (
+va_037_sync #(.GRANT_SETUP(GRANT_SETUP)) pr037_sync (
    .clk(sys_clk), .en_pos(en_pos), .en_neg(en_neg), .mem_ready(1'b1), .ext_ram(1'b0),
    .PIN_R(~dclo), .PIN_C(1'b0),
    .PIN_nAD(ad), .PIN_nSYNC(sync), .PIN_nDIN(din), .PIN_nDOUT(dout),
@@ -255,5 +268,12 @@ initial begin
    #2_000_000;
    $finish;
 end
+
+
+// D8:B, the board's RPLY re-timing flop (src/bk_rply.sv) - the REAL module,
+// never a replica (the cpu_clkgen drift lesson).  Placed at the end of the
+// module so it cannot depend on where the reset regs are declared.
+bk_rply u_rply (.cpu_clk(clk), .rst_n(dclo),
+                .rply_037_n(rply037_n), .rply_n(rply037_rt_n));
 
 endmodule

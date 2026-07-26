@@ -48,6 +48,15 @@ module ref014_irq_soc_tb;
     tri1 [15:0] ad;
     tri1        sync, din, dout, wtbt, rply;
     wire        rply037_n;
+    // STOCK 037 CONFIGURATION, DELIBERATELY (Phase 9): no bk_rply (D8:B) here
+    // and GRANT_SETUP = 0 at the instantiation below, i.e. the pre-Phase-9
+    // behaviour.  This oracle is DIFFERENTIAL - golden_kbd.txt comes from the
+    // reference stack (the vp_014 AND va_037 netlists, ref014_irq_ref_tb.v),
+    // and what it pins is the bk_kbd014 contract plus N_KBD/N_IAK, with the 037
+    // as scenery (nBS decode + RAM RPLY).  Running BOTH sides stock keeps the
+    // golden byte-identical and keeps the comparison meaningful; giving only
+    // this side the shipped grant timing would just make the two stacks differ
+    // for a reason that has nothing to do with the keyboard.
     assign rply = (rply037_n === 1'b0) ? 1'b0 : 1'bZ;
 
     reg         dclo, aclo;
@@ -86,7 +95,7 @@ module ref014_irq_soc_tb;
     wire [13:1] video_va;
     wire        mem_ready;
     wire        va_vfetch, va_line_en, va_hgate, va_vgate;
-    va_037_sync pr037 (
+    va_037_sync #(.GRANT_SETUP(0)) pr037 (
         .clk(sys_clk), .en_pos(en_pos), .en_neg(en_neg), .mem_ready(mem_ready), .ext_ram(1'b0),
         .PIN_R(~dclo), .PIN_C(1'b0),
         .PIN_nAD(ad), .PIN_nSYNC(sync), .PIN_nDIN(din), .PIN_nDOUT(dout),

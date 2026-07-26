@@ -40,12 +40,19 @@
 # the only difference in the whole machine is R0:
 #   * 662 : the 192 writes go to 0177662.  Not 037-fronted, no cycle stealing.
 #   * RAM : the same writes go to a scratch word in the memory the loop is
-#           already resident in (MK_RAM037, N_RAM=4 + the 037 steal).  CONTROL
-#           leg: that path is hardware-calibrated to +0.04 %, so it validates
-#           the clock rate, the access-count model and the assembler, and
-#           isolates any remaining error to N_VREG.  The 037 steal shows up as
-#           min != max in the LOOP table (the authentic beat) - the 662 leg is
-#           flat, because nothing steals from an I/O register.
+#           already resident in (MK_RAM037, N_RAM=4 + the 037 steal).  It was
+#           put here as a mere CONTROL leg, on the assumption that the RAM path
+#           was already right - and it is the leg that found the biggest
+#           divergence in the whole design.  Against the real BK-0011M it read
+#           6993 cycles where we ran 6736: our RAM writes were ~1.35 cycles too
+#           cheap each.  That became grantfit leg B, the DISCRIMINATOR that
+#           made the 037 grant-rule fit unique (three candidates matched every
+#           READ leg and differed only here), and after the fix this leg reads
+#           7008 against the real 6993.  See sim/grantfit/README.md.
+#           Moral, worth keeping: the control leg is not scenery.
+#           The 037 steal shows up as min != max in the LOOP table (the
+#           authentic beat) - the 662 leg is flat, because nothing steals from
+#           an I/O register.
 #
 # The LOOP table is the sharp output: eight identical instructions, so
 # `min`/`max` there IS the cost of one write.  The tone is the number a real
@@ -98,7 +105,7 @@ build () {   # $1 = qbus_pkg path
     iverilog -g2012 -o "$SP/vregtime.vvp" -s vreg_time_tb \
        "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
        "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" \
-       "$1" "$SRC/va_037_sync.sv" "$SRC/cpu_sdram_dp.sv" \
+       "$1" "$SRC/va_037_sync.sv" "$SRC/bk_rply.sv" "$SRC/cpu_sdram_dp.sv" \
        "$SRC/sdram_arbiter.sv" "$SRC/sdram_ctrl.sv" "$SRC/mem_mapper.sv" \
        "$SRC/qbus_mem.sv" "$SRC/bk_evnt.sv" ../sdram_model.sv \
        vreg_time_tb.v 2>&1 | grep -v 'sorry:' || true

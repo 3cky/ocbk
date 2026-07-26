@@ -1,12 +1,12 @@
-HALF 1 cycles=3328
+HALF 1 cycles=3329
 HALF 2 cycles=3328
-HALF 3 cycles=3330
-HALF 4 cycles=3328
+HALF 3 cycles=3329
+HALF 4 cycles=3330
 LOOP 140014 n=4 min=25 max=25
 LOOP 140016 n=4 min=7 max=7
 LOOP 140020 n=4 min=10 max=10
 LOOP 140022 n=4 min=8 max=8
 LOOP 140024 n=768 min=17 max=18
 LOOP 140026 n=4 min=12 max=12
-EXTRD fast=782 slow=6 early=992
-RESULT halves=4 cycles=13314 avg=3328.5 freq=453.7 Hz
+EXTRD fast=780 slow=8 early=992
+RESULT halves=4 cycles=13316 avg=3329.0 freq=453.6 Hz

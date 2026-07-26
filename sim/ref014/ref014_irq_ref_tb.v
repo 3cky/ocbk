@@ -89,6 +89,10 @@ reg         rply_ext_n;
 assign rply = rply_ext_n ? 1'bZ : 1'b0;
 
 wire        rply037_n;
+// NO bk_rply here, deliberately: this is the REFERENCE stack (the vp_014 and
+// va_037 NETLISTS), and golden_kbd.txt is generated from it.  Its SoC
+// counterpart therefore runs the 037 in the same stock configuration - see the
+// note in ref014_irq_soc_tb.v.
 assign rply = (rply037_n === 1'b0) ? 1'b0 : 1'bZ;
 
 reg         dclo, aclo;

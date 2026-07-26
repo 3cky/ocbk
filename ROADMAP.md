@@ -1047,16 +1047,37 @@ is not a single peripheral:
   by leg B (+11 %), NOT by wrecking `SOB` (+0.13 %) as recorded above — the
   earlier scratch RTL is not in the tree, so that line is unconfirmed.
 
-  **Before adopting it** (deliberately NOT done in the same pass): the twelve
-  ref037 goldens move and — the decision is taken and recorded in
-  `sim/grantfit/README.md` — the hardware tones become the authority for that
-  path, since those goldens are generated *from* the netlist and the netlist has
-  already been shown to reproduce our numbers rather than silicon's. The sharp
-  risk is the **/32 BK-0010 path: +0.20 % on `SOB` but +15.0 % on `MOV #imm`,
-  and nothing measures it** (no BK-0010 tone exists; `sim/bk10/golden.txt` is
-  the core alone with no 037). That is a falsifiable prediction — a real
-  BK-0010 running `doc/sndtestimm.bin` should be ~15 % slower than the current
-  firmware — and getting that recording is the cheapest way to de-risk it.
+  **ADOPTED — DONE AND CONFIRMED ON HARDWARE 2026-07-26: after `make flash`
+  the Babylona colour smearing is GONE and PALTST's colour ribbons are FLAT.**
+  Both are beam-raced effects whose vertical scale is exactly the per-scanline
+  block cost, so they are the acceptance test for the whole calibration.
+  `va_037_sync` gained the `GRANT_SETUP` parameter (default 2; **0 is
+  bit-identical to the vendored netlist**, the expression folds back and the
+  shift register optimises away) and the D8:B flop is `src/bk_rply.sv`,
+  instantiated in `ocbk_top` and in all twelve SoC testbenches — the real
+  module, never a replica. It re-times **only the 037's reply**: `qbus_mem`'s
+  FSM already runs on `cpu_clk_n`, so every fixed-`N` slave is D8:B-correct by
+  construction and re-timing them too would double-count the hardware-calibrated
+  `N_EXT`/`N_VREG`/`N_KBD` — which is why the long-feared `N_ROM` recalibration
+  did not materialise.
+  **`sim/ref037` now runs FOURTEEN legs against TWO golden sets** rather than
+  abandoning the netlist one: `golden_037{,_rom}.txt` stay the netlist's,
+  byte-identical, with `va_037_sync @GRANT_SETUP=0` diffed against them (the
+  retime guard did not weaken — it moved to the stock setting, and passing it
+  proves the parameter folds away); `golden_037_hw{,_rom}.txt` are the shipped
+  machine's, generated from the same simplest stack via `--regen-hw`, with all
+  ten integration legs reproducing them. `sim/ref014` runs its SoC leg at
+  `GRANT_SETUP=0` with no D8:B — that oracle is differential (its reference
+  stack is the vp_014 AND va_037 **netlists**), so both sides stay stock and
+  `golden_kbd.txt` is untouched. `sim/smktime` + `sim/vregtime` goldens
+  regenerated; the moves are exactly the predicted ones (SMK-RAM legs static,
+  037-fronted legs onto the real machine's numbers — `vregtime`'s RAM-write
+  control leg went 6736 → 7008 against the real 6993).
+  Remaining risk, unchanged: the **/32 BK-0010 path moves +0.20 % on `SOB` but
+  +15.0 % on `MOV #imm`, and nothing measures it** (no BK-0010 tone exists;
+  `sim/bk10/golden.txt` is the core alone with no 037). Falsifiable prediction:
+  a real BK-0010 running `doc/sndtestimm.bin` should now match us and be ~15 %
+  slower than the pre-fix firmware.
   The PALTST15 harness (`sim/paltst/`, `doc/PALTST15.MAC`/`.EXE`) is not in the
   tree; the recipe for rebuilding it survives in the project memory note.
 - Cycle-accuracy regression vs reference traces; turbo (6 MHz) mode.

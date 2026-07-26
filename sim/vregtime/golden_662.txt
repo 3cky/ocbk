@@ -1,8 +1,8 @@
-HALF 1 cycles=6736
-HALF 2 cycles=6736
-HALF 3 cycles=6736
-HALF 4 cycles=6736
-LOOP 002050 n=96 min=30 max=31
+HALF 1 cycles=6747
+HALF 2 cycles=6741
+HALF 3 cycles=6747
+HALF 4 cycles=6741
+LOOP 002050 n=96 min=30 max=35
 LOOP 002052 n=96 min=31 max=32
 LOOP 002054 n=96 min=32 max=32
 LOOP 002056 n=96 min=32 max=32
@@ -11,4 +11,4 @@ LOOP 002062 n=96 min=32 max=32
 LOOP 002064 n=96 min=32 max=32
 LOOP 002066 n=96 min=32 max=32
 VREGWR fast=768 slow=0
-RESULT halves=4 cycles=26944 avg=6736.0 freq=298.9 Hz
+RESULT halves=4 cycles=26976 avg=6744.0 freq=298.6 Hz

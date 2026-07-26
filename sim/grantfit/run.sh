@@ -48,22 +48,29 @@
 # THE LEGS  (real = measured on a real BK-0011M; see doc/sndtest*.mac, whose
 # headers carry the readings and the reasoning)
 #
-#                                                    real   BASELINE (shipped)
-#   A  sndtest662  @2000  192 x write to 0177662     6734   6736   +0.03 %
-#   B  sndtest662  @2006  192 x write to RAM         6993   6736   -3.68 %
-#   C  sndtestimm  @2000  192 x MOV #imm,R1 in RAM   6622   5648  -14.71 %
-#   D  sndtestbaby @2000  24 x the Babylona block    6211   5824   -6.23 %
-#   E  sndtestsmk  @2046  192 x SOB in RAM           4184   4176   -0.19 %
-#   F  sndtestsmk  @2000  192 x SOB in SMK RAM       3328   3327   -0.03 %
-#   G  sndtestimm2 @2000  192 x MOV #imm in SMK RAM  3929   3927   -0.05 %
-#   H  sndtestimm2 @2046  = leg C's loop, in place    ---   5648   (== C)
+#                                                    real  SHIPPED   was (pre-fix)
+#   A  sndtest662  @2000  192 x write to 0177662     6734  6744  +0.15   6736
+#   B  sndtest662  @2006  192 x write to RAM         6993  7008  +0.21   6736  -3.68 %
+#   C  sndtestimm  @2000  192 x MOV #imm,R1 in RAM   6622  6624  +0.03   5648 -14.71 %
+#   D  sndtestbaby @2000  24 x the Babylona block    6211  6208  -0.05   5824  -6.23 %
+#   E  sndtestsmk  @2046  192 x SOB in RAM           4184  4184  +0.00   4176
+#   F  sndtestsmk  @2000  192 x SOB in SMK RAM       3328  3327  -0.03   3327
+#   G  sndtestimm2 @2000  192 x MOV #imm in SMK RAM  3929  3927  -0.05   3927
+#   H  sndtestimm2 @2046  = leg C's loop, in place    ---  6624  (== C)  5648
 #
-# The baseline column is not a golden but it IS a regression: every one of
-# those eight numbers was derived independently before this bench existed
-# (ROADMAP's beam-race table for A-D, sim/smktime/golden_std for E, qbus_pkg's
-# ideal 3326 for F, doc/sndtestimm2.mac's ideal 3927 for G, and H must equal C
-# exactly), and the bench reproduces all eight.  If a future run does not,
-# suspect the bench before believing the result.
+# SINCE 2026-07-26 THE FIT IS SHIPPED RTL (va_037_sync's GRANT_SETUP = 2 +
+# src/bk_rply.sv), so the `SHIPPED` column is what a plain `./run.sh` must
+# print, and this file is now the REGRESSION that keeps the calibration pinned.
+# Total |delta| = 33 cycles across seven legs; every residual is inside what
+# +/-1 Hz of tone-reading error is worth on its leg (+/-23, 25, 22, 19, 9, 6, 8).
+#
+# The `was` column is the pre-fix behaviour, reproducible with
+# `./run.sh --setup 0 --nod8b`.  Each of those eight numbers had been derived
+# independently before this bench existed (ROADMAP's beam-race table for A-D,
+# sim/smktime/golden_std for E, qbus_pkg's ideal 3326 for F,
+# doc/sndtestimm2.mac's ideal 3927 for G, and H must equal C exactly), which is
+# what validated the bench in the first place.  If a run does not reproduce
+# either column, suspect the bench before believing the result.
 #
 # A, F and G are the "must not move" legs.  A is the sharpest of them: same
 # instruction rate and same fetch stream as B, so any rule that also slows the
@@ -82,15 +89,19 @@
 # sim/smktime's measured 3362.
 #
 # USAGE
-#   ./run.sh              the baseline table (shipped RTL, no candidate)
-#   ./run.sh --sweep      every candidate, one table each
+#   ./run.sh              the shipped machine - must reproduce the fit
+#   ./run.sh --sweep      back each ingredient out again, one table each
 #   ./run.sh --legs A,B,C limit to some legs (works with --sweep too)
-#   ./run.sh --cand "--setup 2"   one ad-hoc candidate
+#   ./run.sh --setup 0 --nod8b     the pre-Phase-9 behaviour
+#   ./run.sh --cand "--gap 3"      an ad-hoc patch037 candidate
 #
-# Candidates are built by patch037.py from a COPY of src/va_037_sync.sv (the
-# sim/evnt idiom - anchored rewrites, never an inline replica), except the
-# D8:B one, which is a BOARD chip outside the 037 and therefore a tb plusarg.
-# See patch037.py for what each candidate models.
+# The two WINNING ingredients are shipped RTL now, so exploring them is not a
+# source rewrite any more: the setup window is va_037_sync's GRANT_SETUP
+# parameter (`-Ptone_tb.GRANT_SETUP=k`, i.e. `--setup k`) and D8:B is
+# src/bk_rply.sv, instantiated for real with `+nod8b` as the bypass.  The
+# candidates that did NOT win are still built by patch037.py from a COPY of
+# src/va_037_sync.sv (the sim/evnt idiom - anchored rewrites, never an inline
+# replica), so the sweep keeps re-rejecting them.
 #
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -106,6 +117,7 @@ SWEEP=0
 LEGS="A,B,C,D,E,F,G,H"
 CAND=""
 D8B=""
+SETUP=""
 ADHOC=0
 VERBOSE=0
 while [ $# -gt 0 ]; do
@@ -113,7 +125,8 @@ while [ $# -gt 0 ]; do
         --sweep) SWEEP=1; shift ;;
         --legs)  LEGS="$2"; shift 2 ;;
         --cand)  CAND="$2"; ADHOC=1; shift 2 ;;
-        --d8b)   D8B="+d8b"; ADHOC=1; shift ;;
+        --nod8b) D8B="+nod8b"; ADHOC=1; shift ;;
+        --setup) SETUP="$2"; ADHOC=1; shift 2 ;;
         --verbose) VERBOSE=1; shift ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
@@ -133,11 +146,13 @@ H:sndtestimm2:2046:stock:2062:2134:2072:16:0:cross-check of leg C
 
 HALVES=4
 
-build () {   # $1 = va_037_sync path
-    iverilog -g2012 -o "$SP/tone.vvp" -s tone_tb \
+build () {   # $1 = va_037_sync path; $2 = optional GRANT_SETUP override
+    local pset=""
+    [ -n "${2:-}" ] && pset="-Ptone_tb.GRANT_SETUP=$2"
+    iverilog -g2012 $pset -o "$SP/tone.vvp" -s tone_tb \
        "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
        "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" \
-       "$SRC/qbus_pkg.sv" "$1" "$SRC/cpu_sdram_dp.sv" \
+       "$SRC/qbus_pkg.sv" "$1" "$SRC/bk_rply.sv" "$SRC/cpu_sdram_dp.sv" \
        "$SRC/sdram_arbiter.sv" "$SRC/sdram_ctrl.sv" "$SRC/mem_mapper.sv" \
        "$SRC/qbus_mem.sv" "$SRC/bk_evnt.sv" ../sdram_model.sv \
        tone_tb.v 2>&1 | grep -v 'sorry:' || true
@@ -206,45 +221,46 @@ table () {   # table <label> <extra vvp plusargs>
 
 if [ "$SWEEP" = 0 ] && [ "$ADHOC" = 0 ]; then
     build "$SRC/va_037_sync.sv"
-    table "BASELINE - shipped RTL"
+    table "SHIPPED RTL (GRANT_SETUP=2 + bk_rply)"
     exit 0
 fi
 
 if [ "$ADHOC" = 1 ]; then
     if [ -n "$CAND" ]; then
         python3 patch037.py --out "$SP/cand.sv" $CAND
-        build "$SP/cand.sv"
+        build "$SP/cand.sv" "$SETUP"
     else
-        build "$SRC/va_037_sync.sv"
+        build "$SRC/va_037_sync.sv" "$SETUP"
     fi
-    table "CANDIDATE ${CAND:-(shipped 037)} ${D8B}" "$D8B"
+    table "CANDIDATE ${CAND:-(shipped 037)}${SETUP:+ setup=$SETUP} ${D8B}" "$D8B"
     exit 0
 fi
 
 # ---- the sweep ------------------------------------------------------------
-# Candidate 1 (D8:B) is a tb plusarg, not an RTL patch: it is a BOARD chip the
-# 037 netlist does not contain, which is also why it is the only candidate
-# whose adoption would leave the ref037 goldens regenerable from a netlist run.
+# Since 2026-07-26 the winning combination IS the shipped RTL, so the sweep now
+# runs BACKWARDS: it starts from the shipped machine and backs each ingredient
+# out again.  The first table is therefore the regression that keeps the fit
+# pinned, and "GRANT_SETUP=0 +nod8b" reproduces the pre-Phase-9 numbers.
 build "$SRC/va_037_sync.sv"
-table "BASELINE - shipped RTL"
-table "C1: D8:B RPLY re-timing flop on the 037 reply" "+d8b"
+table "SHIPPED RTL (GRANT_SETUP=2 + bk_rply)  <- must stay at the fit"
+table "shipped setup, D8:B backed out"                    "+nod8b"
 
-for k in 1 2 3; do
-    python3 patch037.py --out "$SP/s$k.sv" --setup "$k"
-    build "$SP/s$k.sv"
-    table "C2: request setup window = $k half-CLKIN phase(s)"
-    table "C2+C1: setup $k + D8:B" "+d8b"
+for k in 0 1 3; do
+    build "$SRC/va_037_sync.sv" "$k"
+    table "GRANT_SETUP=$k + bk_rply"
+    table "GRANT_SETUP=$k, D8:B backed out" "+nod8b"
 done
 
+# The candidates that did NOT win, kept so the sweep keeps re-rejecting them.
+# Each is applied ON TOP of the shipped configuration.
 for t in neg both; do
     python3 patch037.py --out "$SP/t_$t.sv" --trply "$t"
     build "$SP/t_$t.sv"
-    table "C3: TRPLY clear quantised to $t"
-    table "C3+C1: TRPLY $t + D8:B" "+d8b"
+    table "shipped + TRPLY clear quantised to $t (was inert)"
 done
 
 for g in 2 3; do
     python3 patch037.py --out "$SP/g$g.sv" --gap "$g"
     build "$SP/g$g.sv"
-    table "C4 (known-rejected baseline): minimum inter-grant gap = $g slots"
+    table "shipped + minimum inter-grant gap = $g slots (rejected)"
 done

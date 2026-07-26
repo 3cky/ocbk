@@ -66,6 +66,11 @@ module tone_tb;
     localparam int AB = 24;
     localparam int DW = 16;
 
+    // The shipped 037 grant setup window; override to explore it, e.g.
+    // `iverilog -Ptone_tb.GRANT_SETUP=0` for the pre-Phase-9 behaviour.
+    // It is a PARAMETER and not a patch because it won the fit and is now RTL.
+    parameter integer GRANT_SETUP = 2;
+
     // The REAL hardware CPU clock (21.47727 MHz x9/2 = 96.6477 MHz sys_clk,
     // /24 in BK-0011M mode, /32 in BK-0010 mode), used ONLY to convert measured
     // cycles into Hz.  The tb's own sys_clk is a round 100 MHz - deliberately
@@ -124,7 +129,10 @@ module tone_tb;
     tri1        sync, din, dout, wtbt, rply;
     wire        rply037_n;                        // 037 reply (RAM) -> open-collector
 
-    // ---- CANDIDATE 1: the board's D8:B RPLY re-timing flop (+d8b) -----------
+    // ---- the board's D8:B RPLY re-timing flop ------------------------------
+    // SHIPPED SINCE 2026-07-26: this is now src/bk_rply.sv, instantiated for
+    // real (never a replica), and `+nod8b` bypasses it so the sweep can still
+    // ask what it is worth.  What follows is the reasoning that put it there.
     // On a real BK-0011M the wired-OR bus RPLY (net S1-21) never reaches the
     // CPU directly: D8:B (K531TV9 negedge JK wired as a D-FF, clocked by CLC =
     // the CPU clock) re-times it onto the CPU's RPLY pin - which is also what
@@ -138,11 +146,9 @@ module tone_tb;
     // the hardware-calibrated constants (N_EXT, N_VREG, N_KBD).
     // Assert AND release are quantised, as the flop does.
     reg d8b_en;
-    initial d8b_en = $test$plusargs("d8b");
-    reg d8b_q;
-    initial d8b_q = 1'b0;                          // deasserted out of reset
-    always @(negedge clk) d8b_q <= ~rply037_n;     // true-polarity "037 replies"
-    wire rply037_eff = d8b_en ? ~d8b_q : rply037_n;
+    initial d8b_en = !$test$plusargs("nod8b");
+    wire rply037_rt_n;
+    wire rply037_eff = d8b_en ? rply037_rt_n : rply037_n;
     assign rply = (rply037_eff === 1'b0) ? 1'b0 : 1'bZ;
 
     reg         dclo, aclo;
@@ -178,7 +184,7 @@ module tone_tb;
     wire        mem_ready;
     wire        mem_ext_ram;
     wire        va_vfetch, va_line_en, va_hgate, va_vgate;
-    va_037_sync pr037 (
+    va_037_sync #(.GRANT_SETUP(GRANT_SETUP)) pr037 (
         .clk(sys_clk), .en_pos(en_pos), .en_neg(en_neg), .mem_ready(mem_ready),
         .ext_ram(mem_ext_ram),
         .PIN_R(~dclo_cold), .PIN_C(1'b0),
@@ -441,5 +447,12 @@ module tone_tb;
         $display("TONE FAIL");
         $finish;
     end
+
+
+// D8:B, the board's RPLY re-timing flop (src/bk_rply.sv) - the REAL module,
+// never a replica (the cpu_clkgen drift lesson).  Placed at the end of the
+// module so it cannot depend on where the reset regs are declared.
+bk_rply u_rply (.cpu_clk(clk), .rst_n(dclo_cold),
+                .rply_037_n(rply037_n), .rply_n(rply037_rt_n));
 
 endmodule

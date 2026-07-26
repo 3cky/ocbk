@@ -29,7 +29,35 @@
 //
 // The bus PIN_nAD / PIN_nRPLY keep the reference's drive discipline; PIN_nRPLY is
 // converted to open-collector at the parent (as the reference tb / qbus_sdram do).
-module va_037_sync (
+module va_037_sync #(
+    // ---- GRANT_SETUP: the request setup window at the PC==4 grant decision --
+    // The reference model samples {SYNC, the strobes, A15} LIVE at the instant
+    // it decides the grant. Real silicon has a setup requirement at that latch,
+    // and a gate-level functional model cannot express one - so a request that
+    // arrives inside the setup shadow is granted here and loses a whole 8-CLKIN
+    // slot on the real chip. GRANT_SETUP is that window, in half-CLKIN phases.
+    //
+    // = 2 (one full CLKIN) is CALIBRATED, not guessed: with bk_rply it puts all
+    // SEVEN real-BK-0011M tone legs inside +/-1 Hz of their measured readings
+    // (sim/grantfit/README.md), where the uncalibrated model was -3.7 % on RAM
+    // writes, -14.7 % on `MOV #imm,Rn` and -6.2 % on Babylona's per-scanline
+    // block - the beam-raced palette skew. Per instruction it adds EXACTLY one
+    // grant slot to the second read of a back-to-back pair and nothing to a
+    // fetch 2.5 slots later, which is the pattern-dependence the tones showed.
+    //
+    // = 0 is BIT-IDENTICAL to the reference netlist (the expression below folds
+    // back to the original `~(nSYNC | a15 | RPLY | (nDIN & nDOUT))` and the
+    // shift register optimises away). sim/ref037 runs this core BOTH ways: at 0
+    // against the unchanged netlist goldens - which is what still guards the
+    // sys_clk retime - and at the shipped value against its own goldens.
+    //
+    // ⚠️ This is a DELIBERATE, DOCUMENTED DEVIATION from the vendored netlist,
+    // taken because the netlist has been shown to reproduce OUR numbers rather
+    // than silicon's (26.46/20.51 cyc against the real 31.7/21.4, with no SDRAM
+    // in the loop). For this path the hardware tones are the authority. Do not
+    // "fix" it back by regenerating a golden from a netlist run.
+    parameter int GRANT_SETUP = 2
+) (
     input  logic        clk,        // 96.65 MHz sys_clk
     input  logic        en_pos,     // ÷16 strobe, "posedge CLKIN" phase
     input  logic        en_neg,     // ÷16 strobe, "negedge CLKIN" phase (+8 sys_clk)
@@ -113,6 +141,21 @@ module va_037_sync (
    // BK-0010 mode (and for any A15=0 access), so a15_037 == A[15] there and the
    // core stays bit-identical to the reference (all ref037 goldens invariant).
    wire a15_037 = A[15] & ~ext_ram;
+
+   // ---- the grant request, as the 037 latches it (see GRANT_SETUP) ---------
+   // RPLY is deliberately NOT delayed with the rest: it is the handshake
+   // interlock ("the previous access has not been taken yet"), not part of the
+   // request, and delaying it would model something else entirely.
+   wire        grant_raw = ~(PIN_nSYNC | a15_037 | (PIN_nDIN & PIN_nDOUT));
+   logic [2:0] grant_sr;
+   always_ff @(posedge clk)
+      if (RESET)                grant_sr <= 3'b000;
+      else if (en_pos | en_neg) grant_sr <= {grant_sr[1:0], grant_raw};
+   // spelled out rather than indexed by the parameter - Quartus 11.0 is
+   // happier with it and GRANT_SETUP == 0 must fold away completely
+   wire grant_req = (GRANT_SETUP == 0) ? grant_raw   :
+                    (GRANT_SETUP == 1) ? grant_sr[0] :
+                    (GRANT_SETUP == 2) ? grant_sr[1] : grant_sr[2];
 
    // RPLY to the CPU is the reference term AND the done-gate (mem_ready).
    assign PIN_nRPLY      = ~(ROE | RWR | (RPLY & mem_ready));
@@ -272,7 +315,7 @@ module va_037_sync (
          if (PC90 & PC[1])
             RASEL <= 1'b0;
          else if (PC90 & ~PC[1] & PC[2])
-            RASEL <= ~(PIN_nSYNC | a15_037 | RPLY | (PIN_nDIN & PIN_nDOUT));
+            RASEL <= grant_req & ~RPLY;
       end
 
 endmodule

@@ -91,7 +91,11 @@ module smk_soc_tb;
     tri1 [15:0] ad;
     tri1        sync, din, dout, wtbt, rply;
     wire        rply037_n;                        // 037 reply (RAM) -> open-collector
-    assign rply = (rply037_n === 1'b0) ? 1'b0 : 1'bZ;
+    // D8:B - the board flop that re-times the 037's RPLY onto the CPU
+    // clock's falling edge before it reaches the CPU pin.  The REAL
+    // module, never a replica (the cpu_clkgen drift lesson).
+    wire        rply037_rt_n;
+    assign rply = (rply037_rt_n === 1'b0) ? 1'b0 : 1'bZ;
 
     reg         dclo, aclo;
     reg         dclo_cold;   // power-on-only video-side reset (037)
@@ -411,5 +415,12 @@ module smk_soc_tb;
         $display("COSIM FAIL");
         $finish;
     end
+
+
+// D8:B, the board's RPLY re-timing flop (src/bk_rply.sv) - the REAL module,
+// never a replica (the cpu_clkgen drift lesson).  Placed at the end of the
+// module so it cannot depend on where the reset regs are declared.
+bk_rply u_rply (.cpu_clk(clk), .rst_n(dclo_cold),
+                .rply_037_n(rply037_n), .rply_n(rply037_rt_n));
 
 endmodule

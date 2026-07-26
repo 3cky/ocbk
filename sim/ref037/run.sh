@@ -11,6 +11,12 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# --regen-hw regenerates ONLY the golden_037_hw* pair (the shipped-machine
+# goldens).  golden_037{,_rom}.txt are the NETLIST goldens and are NEVER
+# regenerated from anything but a reference run - see the header.
+REGEN_HW=0
+[ "${1:-}" = "--regen-hw" ] && REGEN_HW=1
+
 SP="$(mktemp -d)"
 trap 'rm -rf "$SP"' EXIT
 
@@ -54,27 +60,87 @@ else
    exit 1
 fi
 
-# --- Equivalence: the retimed src/va_037_sync.sv must reproduce the same golden ---
+# =============================================================================
+# TWO GOLDEN SETS, AND WHY (Phase 9)
+# =============================================================================
+# Up to Phase 9 there was one pair, generated from the reference netlist, and
+# every leg reproduced it.  The shipped 037 now carries a DELIBERATE,
+# hardware-calibrated deviation from the netlist (va_037_sync's GRANT_SETUP
+# window + the board's D8:B flop - see sim/grantfit/README.md), so one pair can
+# no longer serve both, and the split is made explicit rather than papered over:
+#
+#   golden_037{,_rom}.txt      the NETLIST's timing.  Generated ONLY from a
+#                              reference run (the legs above).  va_037_sync is
+#                              still diffed against them at GRANT_SETUP=0, and
+#                              THAT is what still guards the sys_clk retime -
+#                              the guard did not weaken, it just moved to the
+#                              stock setting.
+#   golden_037_hw{,_rom}.txt   the SHIPPED machine.  Generated from the SAME
+#                              simplest stack (ref037_sync_tb, behavioural DRAM,
+#                              done-gate a no-op) at the shipped setting, and
+#                              every integration leg below must reproduce it -
+#                              exactly the structure the single pair had.
+#                              Its authority is the seven real-BK-0011M tone
+#                              legs of sim/grantfit, NOT the netlist.
+#
+# Never "fix" a _hw diff by regenerating from a netlist run: at GRANT_SETUP=2
+# the netlist is not the reference any more, silicon is.
+
+# --- Retime guard: at GRANT_SETUP=0 the retimed core must STILL be
+#     bit-identical to the reference netlist (the window folds away and D8:B is
+#     bypassed - one switch, see ref037_sync_tb.v). ---
+iverilog -g2012 -Pref037_sync_tb.GRANT_SETUP=0 -o "$SP/ref037s0.vvp" -s ref037_sync_tb \
+   "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
+   "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" ../../src/va_037_sync.sv ../../src/bk_rply.sv \
+   ref037_sync_tb.v 2>&1 | grep -v 'sorry:' || true
+
+vvp -n "$SP/ref037s0.vvp" 2>/dev/null | reduce > "$SP/out_sync0.txt"
+
+if diff -u golden_037.txt "$SP/out_sync0.txt"; then
+   echo "ref037 (retimed va_037_sync @GRANT_SETUP=0) netlist equivalence: PASS"
+else
+   echo "ref037 (retimed @0) netlist equivalence: FAIL (see diff above)" >&2
+   exit 1
+fi
+
+vvp -n "$SP/ref037s0.vvp" +romprog 2>/dev/null | reduce 101136 > "$SP/out_sync0_rom.txt"
+
+if diff -u golden_037_rom.txt "$SP/out_sync0_rom.txt"; then
+   echo "ref037 (retimed @0, ROM-region program) netlist equivalence: PASS"
+else
+   echo "ref037 (retimed @0, ROM-region) netlist equivalence: FAIL (see diff above)" >&2
+   exit 1
+fi
+
+# --- The SHIPPED machine's own reference: same stack, shipped GRANT_SETUP +
+#     bk_rply.  This run GENERATES golden_037_hw* (with --regen-hw); every
+#     integration leg below must then reproduce it. ---
 iverilog -g2012 -o "$SP/ref037s.vvp" -s ref037_sync_tb \
    "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
-   "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" ../../src/va_037_sync.sv \
+   "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" ../../src/va_037_sync.sv ../../src/bk_rply.sv \
    ref037_sync_tb.v 2>&1 | grep -v 'sorry:' || true
 
 vvp -n "$SP/ref037s.vvp" 2>/dev/null | reduce > "$SP/out_sync.txt"
 
-if diff -u golden_037.txt "$SP/out_sync.txt"; then
-   echo "ref037 (retimed va_037_sync) equivalence: PASS"
+if [ "$REGEN_HW" = 1 ]; then
+   cp "$SP/out_sync.txt" golden_037_hw.txt
+   echo "regenerated golden_037_hw.txt"
+elif diff -u golden_037_hw.txt "$SP/out_sync.txt"; then
+   echo "ref037 (retimed va_037_sync, SHIPPED) reference: PASS"
 else
-   echo "ref037 (retimed va_037_sync) equivalence: FAIL (see diff above)" >&2
+   echo "ref037 (retimed, SHIPPED) reference: FAIL (see diff above)" >&2
    exit 1
 fi
 
 vvp -n "$SP/ref037s.vvp" +romprog 2>/dev/null | reduce 101136 > "$SP/out_sync_rom.txt"
 
-if diff -u golden_037_rom.txt "$SP/out_sync_rom.txt"; then
-   echo "ref037 (retimed va_037_sync, ROM-region program) equivalence: PASS"
+if [ "$REGEN_HW" = 1 ]; then
+   cp "$SP/out_sync_rom.txt" golden_037_hw_rom.txt
+   echo "regenerated golden_037_hw_rom.txt"
+elif diff -u golden_037_hw_rom.txt "$SP/out_sync_rom.txt"; then
+   echo "ref037 (retimed, SHIPPED, ROM-region program) reference: PASS"
 else
-   echo "ref037 (retimed, ROM-region) equivalence: FAIL (see diff above)" >&2
+   echo "ref037 (retimed, SHIPPED, ROM-region) reference: FAIL (see diff above)" >&2
    exit 1
 fi
 
@@ -86,14 +152,14 @@ fi
 iverilog -g2012 -o "$SP/ref037soc.vvp" -s ref037_soc_tb \
    "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
    "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" \
-   ../../src/qbus_pkg.sv ../../src/va_037_sync.sv ../../src/cpu_sdram_dp.sv \
+   ../../src/qbus_pkg.sv ../../src/va_037_sync.sv ../../src/bk_rply.sv ../../src/cpu_sdram_dp.sv \
    ../../src/sdram_arbiter.sv ../../src/sdram_ctrl.sv ../../src/mem_mapper.sv ../../src/qbus_mem.sv \
    ../../src/epcs_boot.sv ../sdram_model.sv ../epcs_model.sv \
    ref037_soc_tb.v 2>&1 | grep -v 'sorry:' || true
 
 vvp -n "$SP/ref037soc.vvp" 2>/dev/null | reduce > "$SP/out_soc.txt"
 
-if diff -u golden_037.txt "$SP/out_soc.txt"; then
+if diff -u golden_037_hw.txt "$SP/out_soc.txt"; then
    echo "ref037 (SoC integration: 037+arbiter+SDRAM+done-gate) equivalence: PASS"
 else
    echo "ref037 (SoC integration) equivalence: FAIL (see diff above)" >&2
@@ -102,7 +168,7 @@ fi
 
 vvp -n "$SP/ref037soc.vvp" +romprog 2>/dev/null | reduce 101136 > "$SP/out_soc_rom.txt"
 
-if diff -u golden_037_rom.txt "$SP/out_soc_rom.txt"; then
+if diff -u golden_037_hw_rom.txt "$SP/out_soc_rom.txt"; then
    echo "ref037 (SoC integration, ROM-in-SDRAM program) equivalence: PASS"
 else
    echo "ref037 (SoC integration, ROM-in-SDRAM) equivalence: FAIL (see diff above)" >&2
@@ -115,7 +181,7 @@ fi
 #     boot. Run in RAM mode and ROM-in-SDRAM mode. ---
 vvp -n "$SP/ref037soc.vvp" +warmreset 2>/dev/null | reduce > "$SP/out_soc_warm.txt"
 
-if cat golden_037.txt golden_037.txt | diff -u - "$SP/out_soc_warm.txt"; then
+if cat golden_037_hw.txt golden_037_hw.txt | diff -u - "$SP/out_soc_warm.txt"; then
    echo "ref037 (SoC integration, warm-reset replay) equivalence: PASS"
 else
    echo "ref037 (SoC, warm-reset replay) equivalence: FAIL (see diff above)" >&2
@@ -125,7 +191,7 @@ fi
 vvp -n "$SP/ref037soc.vvp" +romprog +warmreset 2>/dev/null | reduce 101136 \
    > "$SP/out_soc_rom_warm.txt"
 
-if cat golden_037_rom.txt golden_037_rom.txt | diff -u - "$SP/out_soc_rom_warm.txt"; then
+if cat golden_037_hw_rom.txt golden_037_hw_rom.txt | diff -u - "$SP/out_soc_rom_warm.txt"; then
    echo "ref037 (SoC integration, ROM warm-reset replay) equivalence: PASS"
 else
    echo "ref037 (SoC, ROM warm-reset replay) equivalence: FAIL (see diff above)" >&2
@@ -138,7 +204,7 @@ fi
 vvp -n "$SP/ref037soc.vvp" +romprog +bootload 2>/dev/null | reduce 101136 \
    > "$SP/out_soc_boot.txt"
 
-if diff -u golden_037_rom.txt "$SP/out_soc_boot.txt"; then
+if diff -u golden_037_hw_rom.txt "$SP/out_soc_boot.txt"; then
    echo "ref037 (SoC integration, EPCS-loader boot path) equivalence: PASS"
 else
    echo "ref037 (SoC, EPCS-loader boot) equivalence: FAIL (see diff above)" >&2
@@ -153,7 +219,7 @@ fi
 iverilog -g2012 -o "$SP/ref037socv.vvp" -s ref037_soc_video_tb \
    "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
    "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" \
-   ../../src/qbus_pkg.sv ../../src/va_037_sync.sv ../../src/cpu_sdram_dp.sv \
+   ../../src/qbus_pkg.sv ../../src/va_037_sync.sv ../../src/bk_rply.sv ../../src/cpu_sdram_dp.sv \
    ../../src/sdram_arbiter.sv ../../src/sdram_ctrl.sv ../../src/mem_mapper.sv ../../src/qbus_mem.sv \
    ../../src/fb_video.sv ../../src/palette_apply.sv \
    ../../src/fb_readout.sv ../../src/fb_linebuf.sv ../../src/vga_out.sv \
@@ -162,7 +228,7 @@ iverilog -g2012 -o "$SP/ref037socv.vvp" -s ref037_soc_video_tb \
 
 vvp -n "$SP/ref037socv.vvp" 2>/dev/null | reduce > "$SP/out_socv.txt"
 
-if diff -u golden_037.txt "$SP/out_socv.txt"; then
+if diff -u golden_037_hw.txt "$SP/out_socv.txt"; then
    echo "ref037 (SoC + real video pipeline, 4-port contention) equivalence: PASS"
 else
    echo "ref037 (SoC + real video pipeline) equivalence: FAIL (see diff above)" >&2
@@ -174,7 +240,7 @@ fi
 #     for 64 display lines (any done-gate RPLY extension on a ROM fetch breaks it).
 vvp -n "$SP/ref037socv.vvp" +romprog 2>/dev/null | reduce 101136 > "$SP/out_socv_rom.txt"
 
-if diff -u golden_037_rom.txt "$SP/out_socv_rom.txt"; then
+if diff -u golden_037_hw_rom.txt "$SP/out_socv_rom.txt"; then
    echo "ref037 (SoC + video, ROM-in-SDRAM under 4-port contention) equivalence: PASS"
 else
    echo "ref037 (SoC + video, ROM-in-SDRAM) equivalence: FAIL (see diff above)" >&2
@@ -188,7 +254,7 @@ fi
 vvp -n "$SP/ref037socv.vvp" +romprog +warmreset 2>/dev/null | reduce 101136 \
    > "$SP/out_socv_rom_warm.txt"
 
-if cat golden_037_rom.txt golden_037_rom.txt | diff -u - "$SP/out_socv_rom_warm.txt"; then
+if cat golden_037_hw_rom.txt golden_037_hw_rom.txt | diff -u - "$SP/out_socv_rom_warm.txt"; then
    echo "ref037 (SoC + video, ROM warm-reset replay mid-display) equivalence: PASS"
 else
    echo "ref037 (SoC + video, ROM warm-reset replay) equivalence: FAIL (see diff above)" >&2

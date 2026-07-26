@@ -102,11 +102,27 @@ stages directly when iterating, e.g. `quartus_map ocbk.qpf`, `quartus_sta ocbk.q
 Cycle accuracy is the whole point. All `make sim` oracles must stay green:
 - `sim/bk10/run.sh` — the upstream timing testbench vs `sim/bk10/golden.txt`
   (the CPU core's per-instruction cycle counts). Independent of the SDRAM work.
-- `sim/ref037/run.sh` — **twelve diffs**, vs `golden_037.txt` (with-display timing,
-  program in RAM) and `golden_037_rom.txt` (Phase-5: same program words executed
+- `sim/ref037/run.sh` — **fourteen diffs against TWO golden sets** (Phase 9;
+  it was twelve against one). The shipped 037 now carries a deliberate,
+  hardware-calibrated deviation from the vendored netlist (the `GRANT_SETUP`
+  window + `bk_rply`, see the beam-race bullet), so one pair can no longer
+  serve both — and the split is explicit rather than papered over:
+  **`golden_037{,_rom}.txt` are the NETLIST's**, generated ONLY from a
+  reference run, and `va_037_sync` is still diffed against them **at
+  `GRANT_SETUP=0`** — that is what still guards the sys_clk retime, and it
+  proves the parameter folds away exactly. **`golden_037_hw{,_rom}.txt` are
+  the SHIPPED machine's**, generated from the same simplest stack
+  (`ref037_sync_tb`, behavioural DRAM) at the shipped setting via
+  `run.sh --regen-hw`, and every integration leg reproduces them — the same
+  structure the single pair had, with silicon rather than the netlist as the
+  authority. **Never "fix" a `_hw` diff by regenerating from a netlist run.**
+  The `_hw` delta is +4 cycles (one /32 slot) on 037-arbitrated fetches only;
+  the ROM self-loop stays flat, which is the invariant that matters.
+  What the legs cover, vs `golden_037*.txt` (with-display timing,
+  program in RAM) and `golden_037*_rom.txt` (Phase-5: same program words executed
   *from the ROM region* — ROM is never 037-cycle-stolen, so its self-loop is
-  **flat at 13 cycles**; the RAM loop beats 17,15,16,16): the reference netlist,
-  the retimed `va_037_sync`, the SoC integration (now instantiating the *real*
+  **flat**; the RAM loop beats): the reference netlist,
+  the retimed `va_037_sync` (both settings), the SoC integration (instantiating the *real*
   `qbus_mem`) with a synthetic port-2 saturator, the `+bootload` run (the
   EPCS loader populates SDRAM through the boot-writer mux, then golden must
   still match), **`ref037_soc_video_tb`** — real video pipeline on all 4
@@ -1283,13 +1299,21 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   *faster*, not slower (no `mem_ready` done-gate; combinational ROM/extension
   ack — so it is **not** a ROM timing reference). Untested prediction:
   Babylona should slant on MiSTer too.
-  **THE PARAMETRIC STUDY IS DONE (2026-07-26): a candidate fits ALL SEVEN
-  hardware legs — see `sim/grantfit/` (bench + README, no RTL changed).** The
-  fit is a **request setup window of 2 half-CLKIN phases at the PC==4 grant
-  decision + the board's D8:B RPLY re-timing flop on the 037's reply**; every
-  residual lands inside ±1 Hz of tone-reading error, and per instruction it
-  adds **exactly one grant slot to the second read of a back-to-back pair**
-  and nothing to a fetch 2.5 slots later. Neither ingredient works alone.
+  **FIXED — CONFIRMED ON HARDWARE 2026-07-26: the Babylona colour smearing is
+  GONE and PALTST's colour ribbons are FLAT on the board.** That is the
+  acceptance test for this whole line of work: both artefacts are beam-raced
+  effects whose vertical scale IS the per-scanline block cost, and both were
+  the visible face of the −6.25 % block. The parametric
+  study found a candidate fitting ALL SEVEN hardware tone legs and **it is now
+  shipped RTL**: a **request setup window of 2 half-CLKIN phases at the PC==4
+  grant decision** (`va_037_sync`'s `GRANT_SETUP` parameter) **+ the board's
+  D8:B RPLY re-timing flop on the 037's reply** (`src/bk_rply.sv`). Every
+  residual lands inside ±1 Hz of tone-reading error (Σ|Δ| = 33 cycles over
+  seven legs); per instruction it adds **exactly one grant slot to the second
+  read of a back-to-back pair** and nothing to a fetch 2.5 slots later.
+  Neither ingredient works alone. `sim/grantfit/run.sh` is the regression
+  (bench + README); `--setup 0 --nod8b` reproduces every pre-fix number
+  exactly, so the change is cleanly reversible.
   **The write leg (192 × write to RAM) is what makes it unique** — three
   candidates are identical on every read leg and differ only there, which is
   how the earlier rounds picked wrong; it also proves one direction-blind rule
@@ -1299,14 +1323,14 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   minimum-gap 2 (inert, as recorded); minimum-gap 3 IS rejected but by the
   write leg (+11 %), **not** by wrecking `SOB` (+0.13 %) as the old note said —
   that scratch RTL is gone, so treat the "wrecks SOB" claim as unconfirmed.
-  ⚠️ Adopting it moves the /32 bk10 path too — **+0.20 % on `SOB` but +15.0 %
-  on `MOV #imm`, and NOTHING measures that** (no BK-0010 tone; `sim/bk10`'s
-  golden is the core alone, no 037) — and all twelve ref037 goldens shift.
-  They are generated FROM the netlist, so regenerating them re-pins the
-  netlist, not silicon: **the hardware tones must be the authority** (decision
-  taken, recorded in `sim/grantfit/README.md`). Falsifiable prediction worth
-  collecting first: a real BK-0010 running `doc/sndtestimm.bin` should be
-  ~15 % slower than the current firmware.
+  ⚠️ It moves the /32 bk10 path too — **+0.20 % on `SOB` but +15.0 % on
+  `MOV #imm`, and NOTHING measures that** (no BK-0010 tone; `sim/bk10`'s golden
+  is the core alone, no 037). **Falsifiable prediction: a real BK-0010 running
+  `doc/sndtestimm.bin` should now match us and be ~15 % slower than the
+  pre-2026-07-26 firmware.** Collect that recording if a BK-0010 is ever
+  available — it is the one leg of this calibration with no measurement behind
+  it. **Oracle consequence: `sim/ref037` now keeps TWO golden sets** — see its
+  bullet above and `sim/ref037/run.sh`'s header.
   (Experiment note: an `inh`/`gnt_inh` register added to a scratch copy of
   `va_037_sync` MUST be reset — without it RASEL goes X and the sim hangs.)
 - **EVNT/IRQ2 frame interrupt (Phase 9 rework, BK-0011M):** the 50 Hz system
@@ -1464,11 +1488,19 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   (К531ТВ9 negedge JK, J=K̄ via D33:E = a pure D-FF) reclocks the wired-OR bus
   nRPLY onto the CPU's RPLY pin (Q̄→R28→pin 39; the CPU never sees raw bus
   RPLY, only its own internal self-reply bypasses it), and D11 (К555ТМ9 hex
-  posedge D) re-times IRQ1–3/VIRQ *plus ACLO and DMR*. Modelling D8:B in our
-  RPLY path is a deferred fidelity item: it quantizes assert AND release to
-  falling edges, shifting cycle counts (ROM/IO by a full cycle — N_ROM would
-  need recalibration), so it must go reference-tb-first with golden
-  regeneration from the reference run, per the verification discipline.
+  posedge D) re-times IRQ1–3/VIRQ *plus ACLO and DMR*.
+  **D8:B IS NOW MODELLED — `src/bk_rply.sv`, Phase 9 (2026-07-26)**, and it is
+  half of the 037 grant-rule fit (see the beam-race bullet). The long-deferred
+  worry that it "shifts ROM/IO by a full cycle and N_ROM would need
+  recalibration" is resolved by scoping: it re-times **only the 037's reply**,
+  because `qbus_mem`'s FSM already runs on `cpu_clk_n` and is therefore
+  D8:B-correct by construction — every fixed-`N` slave already launches on the
+  falling edge, and re-timing them again would double-count precisely the
+  constants calibrated against hardware WITH this flop's contribution inside
+  them (`N_EXT`, `N_VREG`, `N_KBD` = 1). So `N_ROM` did not move and no
+  fixed-`N` constant needed recalibration. The 037 was the one path where the
+  rule held only by accident of the divider phase — and at the /24 rate, not
+  at all.
 - **177700–177713 is CPU-internal** (with `pin_pa=00`): `vm1_qbus` decodes the
   block itself (`sel177x`), self-replies for all of 177700–177717 AND drives read
   data for 177700–177712 (CSR/error/`vm1_tve` timer). Nothing external may reply

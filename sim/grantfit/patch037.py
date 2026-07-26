@@ -7,20 +7,14 @@ every rewrite is ANCHORED - if the anchor text is gone the RTL moved and this
 script fails loudly rather than silently producing the unpatched file.
 
     patch037.py --src ../../src/va_037_sync.sv --out mut.sv \
-                [--setup K] [--gap G] [--trply neg|both]
+                [--gap G] [--trply neg|both]
 
---setup K   REQUEST SETUP WINDOW.  The grant request must have been present K
-            half-CLKIN phases before the PC==4 decision, instead of being
-            sampled live there.  Real silicon has a setup requirement at that
-            latch; if the real chip effectively latches the request earlier
-            than we do, a request arriving inside that shadow loses a whole
-            8-CLKIN slot.  Unlike a minimum-GAP rule this is PHASE-sensitive,
-            not DISTANCE-sensitive, which is the shape the hardware tones want:
-            a second, closely-following access lands at a nearly fixed
-            sub-phase (and would always miss), while the 3.85-slot SOB fetch
-            lands elsewhere (and would not).  K=0 is the shipped behaviour.
-            The RPLY interlock stays LIVE - only SYNC/the strobes/a15 are
-            delayed, so this models setup on the request, not on the handshake.
+NOTE: --setup is GONE.  The request setup window WON the fit and is now shipped
+RTL - `va_037_sync`'s GRANT_SETUP parameter - so sweeping it is a `-P` override
+(`iverilog -Ptone_tb.GRANT_SETUP=0`), not a source rewrite.  run.sh does that.
+Likewise D8:B is now src/bk_rply.sv, instantiated for real, with `+nod8b` as
+the bypass.  What is left here are the candidates that did NOT win, kept so the
+sweep can keep re-rejecting them.
 
 --gap G     MINIMUM INTER-GRANT GAP of G slots (G=1 = shipped).  Already tried
             and REJECTED on hardware grounds (ROADMAP: it fits `MOV #imm` at
@@ -44,8 +38,7 @@ import sys
 
 # --- anchors: verbatim lines of src/va_037_sync.sv --------------------------
 A_DECL = "   wire a15_037 = A[15] & ~ext_ram;"
-A_RASEL = ("            RASEL <= ~(PIN_nSYNC | a15_037 | RPLY | "
-           "(PIN_nDIN & PIN_nDOUT));")
+A_RASEL = "            RASEL <= grant_req & ~RPLY;"
 A_TRPLY = "      else if (PIN_nDIN & PIN_nDOUT)    TRPLY <= 1'b0;"
 
 
@@ -71,11 +64,13 @@ def main():
     out = opt("--out")
     if out is None:
         sys.exit("--out is required")
-    setup = int(opt("--setup", "0"))
+    if "--setup" in sys.argv:
+        sys.exit("--setup is gone: the setup window is shipped RTL now "
+                 "(va_037_sync's GRANT_SETUP parameter). Use "
+                 "`iverilog -Ptone_tb.GRANT_SETUP=K`, which is what "
+                 "run.sh --setup does.")
     gap = int(opt("--gap", "1"))
     trply = opt("--trply", "off")
-    if not 0 <= setup <= 3:
-        sys.exit("--setup must be 0..3")
     if not 1 <= gap <= 7:
         sys.exit("--gap must be 1..7")
     if trply not in ("off", "neg", "both"):
@@ -85,22 +80,7 @@ def main():
         text = f.read()
 
     decls = []
-    terms = []          # ANDed into the RASEL set expression
-
-    if setup:
-        decls.append(f"""
-   // GRANTFIT --setup {setup}: the request must have been present {setup}
-   // half-CLKIN phase(s) before the PC==4 decision (RPLY stays live below).
-   wire gf_req_raw = ~(PIN_nSYNC | a15_037 | (PIN_nDIN & PIN_nDOUT));
-   logic [2:0] gf_req_sr;
-   always_ff @(posedge clk)
-      if (RESET)                 gf_req_sr <= 3'b000;
-      else if (en_pos | en_neg)  gf_req_sr <= {{gf_req_sr[1:0], gf_req_raw}};
-   wire gf_setup_ok = gf_req_sr[{setup - 1}] & ~RPLY;
-""")
-        terms.append("gf_setup_ok")
-    else:
-        terms.append("~(PIN_nSYNC | a15_037 | RPLY | (PIN_nDIN & PIN_nDOUT))")
+    terms = ["grant_req & ~RPLY"]   # the shipped expression, extended below
 
     if gap > 1:
         decls.append(f"""
@@ -134,7 +114,7 @@ def main():
         text = replace_once(text, A_DECL, A_DECL + "\n" + "".join(decls),
                             "the declaration insertion point")
 
-    if len(terms) > 1 or setup:
+    if len(terms) > 1:
         new_rasel = "            RASEL <= " + " & ".join(terms) + ";"
         text = replace_once(text, A_RASEL, new_rasel, "the RASEL set expression")
 

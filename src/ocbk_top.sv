@@ -459,12 +459,23 @@ module ocbk_top (
     wire        nbs_n;              // 037 keyboard-block select (177660-177663)
 
     // RAM RPLY + its cycle-stealing timing come from the retimed 037; ROM/IO reply
-    // from qbus_mem. The 037's RPLY (hard-driven) is converted to open-collector
-    // here so it wire-ANDs onto the shared rply_n. mem_ready is the RAM SDRAM done-gate.
-    wire        rply037_n;
+    // from qbus_mem. The 037's RPLY (hard-driven) is re-timed onto the CPU clock's
+    // falling edge by bk_rply - the board's D8:B flop, which on a real BK stands
+    // between the bus RPLY net and the CPU's RPLY pin (see bk_rply.sv for why ONLY
+    // the 037's reply goes through it) - and then converted to open-collector here
+    // so it wire-ANDs onto the shared rply_n. mem_ready is the RAM SDRAM done-gate.
+    wire        rply037_n;      // raw, from the 037
+    wire        rply037_rt_n;   // re-timed by D8:B
     wire        mem_ready;
     wire        mem_ext_ram;   // qbus_mem: BK-0011M window-1 banked RAM -> 037 a15 force
-    assign rply_n = (rply037_n === 1'b0) ? 1'b0 : 1'bZ;
+
+    bk_rply u_rply (
+        .cpu_clk   (cpu_clk),
+        .rst_n     (vid_rst_n),      // power-on only, like the 037 itself
+        .rply_037_n(rply037_n),
+        .rply_n    (rply037_rt_n)
+    );
+    assign rply_n = (rply037_rt_n === 1'b0) ? 1'b0 : 1'bZ;
 
     // 037 video-side taps consumed by the Phase-4 pipeline below
     wire        vid_fetch, vid_pal_stb, vid_line_en, hgate, vgate;

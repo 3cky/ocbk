@@ -138,12 +138,14 @@ SRC=../../src
 # qbus_pkg.sv (the sim/evnt mutation idiom - never an inline replica).
 SWEEP=0
 [ "${1:-}" = "--sweep" ] && SWEEP=1
+REGEN=0
+[ "${1:-}" = "--regen" ] && REGEN=1
 
 build () {   # $1 = qbus_pkg path
     iverilog -g2012 -o "$SP/smktime.vvp" -s smk_time_tb \
        "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
        "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" \
-       "$1" "$SRC/va_037_sync.sv" "$SRC/cpu_sdram_dp.sv" \
+       "$1" "$SRC/va_037_sync.sv" "$SRC/bk_rply.sv" "$SRC/cpu_sdram_dp.sv" \
        "$SRC/sdram_arbiter.sv" "$SRC/sdram_ctrl.sv" "$SRC/mem_mapper.sv" \
        "$SRC/qbus_mem.sv" "$SRC/bk_evnt.sv" ../sdram_model.sv \
        smk_time_tb.v 2>&1 | grep -v 'sorry:' || true
@@ -157,8 +159,12 @@ run_leg () {   # $1 = label, $2 = gen flags, $3 = vvp plusargs, $4 = golden|""
         || { echo "SMK512 access-time oracle ($1): FAIL" >&2; exit 1; }
     if [ -n "${4:-}" ]; then
         grep -E '^(LOOP|HALF|EXTRD|RESULT) ' "$SP/out.txt" > "$SP/got.txt"
-        diff -u "$4" "$SP/got.txt" \
-            || { echo "SMK512 access-time oracle ($1): GOLDEN DIFF" >&2; exit 1; }
+        if [ "$REGEN" = 1 ]; then
+            cp "$SP/got.txt" "$4"; echo "regenerated $4"
+        else
+            diff -u "$4" "$SP/got.txt" \
+                || { echo "SMK512 access-time oracle ($1): GOLDEN DIFF" >&2; exit 1; }
+        fi
     fi
     echo "SMK512 access-time oracle ($1): PASS"
 }
