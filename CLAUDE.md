@@ -406,6 +406,23 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   golden pins is therefore the fetch path + 037 steal (the control leg's
   min ≠ max is that beat) plus the `VREGWR fast/slow` line, which is the one
   thing that moves when the reply FSM changes. `--regen` regenerates.
+- `sim/grantfit/run.sh` — **slow (~30 min for `--sweep`), not in `make sim`, and
+  NOT an oracle — a measurement bench.** The Phase-9 037 **grant-rule** study:
+  it runs every tracked tone image (`doc/sndtest*.bin`, consumed verbatim via
+  `mem/gen_tone_test.py`) on the real SoC stack and tabulates it against the
+  real-BK-0011M readings — **four legs that must MOVE and three that must
+  NOT**, because both earlier arbiter experiments were judged on one leg and
+  wrecked another. `tone_tb.v` is the sim/vregtime stack with sim/smktime's
+  SMK option folded in (`+smk`, `+bk10`, `+image/+entry/+loop_lo/+fetch_*`);
+  `patch037.py` builds candidates by ANCHORED rewrites of a **copy** of
+  `src/va_037_sync.sv` (the sim/evnt idiom — it fails loudly if the RTL moved,
+  and every register it adds is reset or RASEL goes X and the sim hangs). The
+  D8:B candidate is a tb plusarg, not a patch: it is a BOARD chip the 037
+  netlist does not contain. **`real` is normalised at 4.000 MHz** — see the
+  warning in its header about the second normalisation in this file. The
+  baseline reproduces eight independently-derived numbers; if it ever stops,
+  suspect the bench before believing the result. See the beam-race bullet for
+  what it found.
 - `sim/raminit/run.sh` — the Phase-7 `ram_init` unit oracle (the authentic
   DRAM power-on pattern filler): drives ram_init through a served-mask-honoring
   grant model and checks, per fill pass, the exact per-model word pattern
@@ -1266,14 +1283,30 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   *faster*, not slower (no `mem_ready` done-gate; combinational ROM/extension
   ack — so it is **not** a ROM timing reference). Untested prediction:
   Babylona should slant on MiSTer too.
-  **Two grant rules tried and REJECTED:** "no grant in the slot immediately
-  after a grant" changes *nothing* (the CPU never asks that soon — its two
-  fetches sit 2.37 and 2.59 slots apart, never adjacent); "≥3 slots between
-  grants" fits `MOV #imm` (31.44 vs the real 31.7) but wrecks `SOB` (26.0 vs
-  21.4). Next = a parametric study against BOTH legs at once. ⚠️ Any change
-  here also moves the /32 bk10 path, so all twelve ref037 goldens shift — and
-  they are generated FROM the same netlist, so regenerating them re-pins the
-  netlist, not silicon. The hardware tones must be the authority.
+  **THE PARAMETRIC STUDY IS DONE (2026-07-26): a candidate fits ALL SEVEN
+  hardware legs — see `sim/grantfit/` (bench + README, no RTL changed).** The
+  fit is a **request setup window of 2 half-CLKIN phases at the PC==4 grant
+  decision + the board's D8:B RPLY re-timing flop on the 037's reply**; every
+  residual lands inside ±1 Hz of tone-reading error, and per instruction it
+  adds **exactly one grant slot to the second read of a back-to-back pair**
+  and nothing to a fetch 2.5 slots later. Neither ingredient works alone.
+  **The write leg (192 × write to RAM) is what makes it unique** — three
+  candidates are identical on every read leg and differ only there, which is
+  how the earlier rounds picked wrong; it also proves one direction-blind rule
+  produces BOTH the +5.08 read-pair and +1.35 read-write costs (the write's
+  slot is absorbed by the vm1's DATO window, per `sim/vregtime`'s N_VREG
+  ladder). **Inert / rejected:** TRPLY-clear quantisation (completely inert);
+  minimum-gap 2 (inert, as recorded); minimum-gap 3 IS rejected but by the
+  write leg (+11 %), **not** by wrecking `SOB` (+0.13 %) as the old note said —
+  that scratch RTL is gone, so treat the "wrecks SOB" claim as unconfirmed.
+  ⚠️ Adopting it moves the /32 bk10 path too — **+0.20 % on `SOB` but +15.0 %
+  on `MOV #imm`, and NOTHING measures that** (no BK-0010 tone; `sim/bk10`'s
+  golden is the core alone, no 037) — and all twelve ref037 goldens shift.
+  They are generated FROM the netlist, so regenerating them re-pins the
+  netlist, not silicon: **the hardware tones must be the authority** (decision
+  taken, recorded in `sim/grantfit/README.md`). Falsifiable prediction worth
+  collecting first: a real BK-0010 running `doc/sndtestimm.bin` should be
+  ~15 % slower than the current firmware.
   (Experiment note: an `inh`/`gnt_inh` register added to a scratch copy of
   `va_037_sync` MUST be reset — without it RASEL goes X and the sim hangs.)
 - **EVNT/IRQ2 frame interrupt (Phase 9 rework, BK-0011M):** the 50 Hz system

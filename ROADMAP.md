@@ -1012,12 +1012,51 @@ is not a single peripheral:
     (26.0 vs 21.4). Any uniform minimum-gap rule strong enough to push the
     2.5-slot pair also ruins the 3.85-slot loop.
 
-  **Next:** a parametric study of the grant rule against BOTH tone legs at once
-  (they constrain it in opposite directions). **Caveat before adopting
-  anything:** it changes the /32 bk10 path too, so all twelve ref037 goldens
-  would move — and since those goldens are generated *from* the same netlist,
-  regenerating them would only re-pin the netlist's behaviour, not silicon's.
-  The real-hardware tones would have to become the authority for that path.
+  **THE PARAMETRIC STUDY IS DONE (2026-07-26) AND A CANDIDATE FITS ALL SEVEN
+  HARDWARE LEGS — `sim/grantfit/`, no RTL changed yet.** The bench
+  (`sim/grantfit/run.sh`, `tone_tb.v`, `patch037.py`, `mem/gen_tone_test.py`)
+  runs every tracked tone image on the real SoC stack and compares against the
+  real-BK-0011M readings, four legs that must move and three that must not; it
+  reproduces all eight baseline numbers (A–D from the table above,
+  `sim/smktime/golden_std` for E, `qbus_pkg`'s ideal 3326 for F,
+  `doc/sndtestimm2.mac`'s 3927 for G, and a same-loop-different-address
+  cross-check ≡ C). **Normalisation note: `real` here is 4.000 MHz** (the real
+  machine's own clock), so cycle counts compare directly and our +0.67 % clock
+  offset is excluded — CLAUDE.md's `N_EXT` table converts the same tones at
+  4.0270 MHz, which is a different question; do not mix them.
+
+  **The fit: a request SETUP WINDOW of 2 half-CLKIN phases at the PC==4 grant
+  decision, PLUS the board's D8:B RPLY re-timing flop on the 037's reply.**
+  Residuals A +10, B +15, C +2, D −3, E 0, F −1, G −2 cycles — **every one
+  inside what ±1 Hz of tone-reading error is worth on that leg** (±23, ±25,
+  ±22, ±19, ±9, ±6, ±8), against baseline errors of −257/−974/−387 on B/C/D.
+  Per-instruction, it adds **exactly one grant slot to the second read of a
+  back-to-back pair** (`MOV #imm`'s opcode→operand gap 12 → 18) and nothing to
+  the next instruction's fetch 2.5 slots later, nor to `SOB`'s minimum.
+  Neither ingredient works alone (Σ|Δ| 1426–1623 vs 33 combined).
+  **Leg B (192 × write to RAM) is what makes the fit unique:** setup 3 alone,
+  setup 1 + D8:B and setup 2 + D8:B are *identical* on every read leg and
+  differ only there (−2.53 % / −2.53 % / +0.21 %) — without it, three
+  candidates look equally right, which is how the previous two rounds went
+  wrong. It also settles the read/write asymmetry: **one direction-blind rule
+  does produce both** (+5.08 cyc on read+read, +1.35 on read+write), the write's
+  extra slot being partly absorbed by the vm1's fixed DATO window exactly as
+  `sim/vregtime`'s `N_VREG` ladder predicted.
+  Negative results: **TRPLY-clear quantisation is completely inert**;
+  minimum-gap 2 is inert (matching the record). ⚠️ `--gap 3` **is** rejected but
+  by leg B (+11 %), NOT by wrecking `SOB` (+0.13 %) as recorded above — the
+  earlier scratch RTL is not in the tree, so that line is unconfirmed.
+
+  **Before adopting it** (deliberately NOT done in the same pass): the twelve
+  ref037 goldens move and — the decision is taken and recorded in
+  `sim/grantfit/README.md` — the hardware tones become the authority for that
+  path, since those goldens are generated *from* the netlist and the netlist has
+  already been shown to reproduce our numbers rather than silicon's. The sharp
+  risk is the **/32 BK-0010 path: +0.20 % on `SOB` but +15.0 % on `MOV #imm`,
+  and nothing measures it** (no BK-0010 tone exists; `sim/bk10/golden.txt` is
+  the core alone with no 037). That is a falsifiable prediction — a real
+  BK-0010 running `doc/sndtestimm.bin` should be ~15 % slower than the current
+  firmware — and getting that recording is the cheapest way to de-risk it.
   The PALTST15 harness (`sim/paltst/`, `doc/PALTST15.MAC`/`.EXE`) is not in the
   tree; the recipe for rebuilding it survives in the project memory note.
 - Cycle-accuracy regression vs reference traces; turbo (6 MHz) mode.
