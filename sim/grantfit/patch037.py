@@ -17,10 +17,11 @@ the bypass.  What is left here are the candidates that did NOT win, kept so the
 sweep can keep re-rejecting them.
 
 --gap G     MINIMUM INTER-GRANT GAP of G slots (G=1 = shipped).  Already tried
-            and REJECTED on hardware grounds (ROADMAP: it fits `MOV #imm` at
-            G=3 and wrecks `SOB`); kept here as the baseline the sweep must
-            re-reject, because a sweep that cannot reproduce a known-wrong
-            answer is not measuring anything.
+            and REJECTED on hardware grounds (the pre-bench record has it
+            fitting `MOV #imm` at G=3 and wrecking `SOB`; this bench rejects it
+            on the write leg instead - see README's discrepancy note); kept
+            here as the baseline the sweep must re-reject, because a sweep that
+            cannot reproduce a known-wrong answer is not measuring anything.
 
 --trply     TRPLY CLEAR QUANTISATION.  Shipped, TRPLY clears the instant both
             strobes go idle, on any sys_clk.  RPLY (= TRPLY & ~RASEL) blocks

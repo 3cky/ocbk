@@ -9,80 +9,140 @@ alternative firmware on the 1chipMSX / OneChipBook board (Altera Cyclone I
 **EP1C12Q240C8**, Quartus II 11.0). The headline goal is **cycle-accurate** CPU
 behaviour.
 
-**Read [ROADMAP.md](ROADMAP.md) first** — it is the authoritative implementation
-plan: the source building blocks, the validated platform constraints, the settled
-clock tree, and the phase-by-phase milestones. Every change should map to a phase
-there; update ROADMAP.md when scope or status changes. **Phases 1 (CPU bring-up),
-2 (BK RAM in SDRAM), 3 (037 arbiter), 4 (video pipeline), 5 (SoC boot: full
-BK-0010.01 ROM in SDRAM + EPCS loader), 6 (keyboard/audio/tape: PS/2 →
-1801ВП1-014 equivalent, VIRQ/IAK + СТОП) and 7 (BK-0011M mode: /24 CPU clock,
-177716 banking mapper, 177662 video register, 50 Hz EVNT/IRQ2, СТОП-block,
-two-pass EPCS loader with the 0011M ROM set, authentic DRAM power-on pattern)
-are done — both models boot and run on hardware**; see README.md for the
-current result. **Phase 8 (SMK512) is DONE — CONCLUDED 2026-07-23, all
-increments confirmed on hardware in BOTH models: DIP 8 boots the SMK BIOS and
-loads an OS from a raw AltPro image on an SD card.** Increment 1 (the 512 KB
-segmented RAM extension on **DIP 8**) and increment 2 (the
-SMK BIOS ROM + the SYS register-space boot overlay — **DIP-8-ON boots the
-SMK BIOS, confirmed on hardware 2026-07-17: it shows its banner**) are done;
-**IDE increment (a) — the drive engine (`src/smk_ide.sv`: task file, ATA
-engine, AltPro geometry parse, tb-backed sector port) plus the 177130/132
-КНГМД register stub — is done, CONFIRMED ON HARDWARE 2026-07-18**: with no
-drive the BIOS boots, times out its HDD and FDD probes cleanly and exits
-to its command line exactly like a real driveless SMK (the stub fixed a
-crash-restart at the FDD boot attempt). **Increment (b) — the SD/SPI
-backend (`src/sd_backend.sv`) — is done, CONFIRMED ON HARDWARE
-2026-07-18: the BIOS detects the SD-backed drive and BOOTS AN OS from
-the HDD image** (a raw AltPro image dd'd at card LBA 0, megasd slot
-PIN_61–66); pLed[7] is the drive-access LED (see the SMK512 bullet).
-**Tier-1 READ prefetch is done, CONFIRMED ON HARDWARE 2026-07-19**
-(fetch sector N+1 while the CPU drains N — the 2-bank buffer split with
-an E_FLUSH mid-command interlock; `src/smk_ide.sv` + the `sim/ide`
-oracles; the board boots and multi-sector loads run faster).
-**Tier-2 SD multi-block (CMD18/CMD25) was implemented, confirmed on
-hardware, then REVERTED 2026-07-23** — it bought ~2% of the SD-side time
-on a path the tier-1 prefetch already hides behind the CPU drain, and
-cost a real fault (streams were closed lazily, so one stayed open across
-idle time, a warm reset left the card streaming, and the machine needed
-a SECOND reset press to find its disk). The backend is single-block
-CMD17/CMD24 again; the warm-reset recovery preamble and the whole-ladder
-init retry stay as hardening. See the `sd_backend` bullet.
-**The long-standing pseudo-static `model_bk11 → mapper` timing cone is
-FIXED, CONFIRMED ON HARDWARE 2026-07-22** by re-registering
-`model_bk11` inside `mem_mapper`
-for the `bank_wr` term (see the mapper bullet): sys_clk went
-−0.230 → **+0.420 ns, TNS 0, zero negative paths**, and the worst path
-is now an ordinary `sd_backend` register-to-register path.
-**bk10+SMK (BkEmu `BK_0010_SMK512`) is DONE, CONFIRMED ON HARDWARE
-2026-07-23: DIP 1 OFF + DIP 8 ON boots the SMK BIOS and loads an OS from
-the SD-backed image on a BK-0010 too**. DIP 8
-works in BOTH models now (the SMK is an МПИ expansion board — only the
-per-mode monitor-ROM deselect, `mon_en`, is model-dependent; see the
-SMK512 bullet); fit 6,938 LE, sys_clk +0.430 ns / TNS 0.
-Remaining open items, all deferred to Phase 9 and none blocking: the
-SMK-RAM `ram_init` pattern, `N_*` recalibration, SD data CRC16 / MMC
-cards, and BK-0011M cycle-accuracy vs a reference (reference-tb-first).
-**Phase 9 (fidelity & polish) STARTED — increment 1 (the authentic
-EVNT/IRQ2 assertion instant, `src/bk_evnt.sv`) is DONE IN SIM
-2026-07-23, hardware acceptance pending**: the 037 has no
-vertical-blanking pin, so the real 0011M's D28+D3:B missing-pulse
-detector off WTI/SYNCO replaces the Phase-7 "nIRQ2 = vgate" model, which
-was MiSTer's and fired **452 CLKIN (~1.18 scanlines, ~301 cpu_clk) early
-every frame** — displacing every beam-raced multicolor/gigascreen
-effect. See the EVNT/IRQ2 bullet and `sim/evnt/README.md`.
-**Phase-9 increment 2 — the SMK512 memory access time (`N_EXT`) is
-CALIBRATED against real hardware, DONE & CONFIRMED ON HARDWARE
-2026-07-26**: a tone-frequency measurement (`doc/sndtestsmk.mac`, run on a
-real BK-0011M + SMK512 and on the board) put the Phase-8 placeholder
-`N_EXT = 4` **14.5 % slow**, with a standard-RAM control leg right to
-+0.8 % — so the whole error was in that one constant. `N_EXT` is now **1**
-(an async external SRAM board replies inside the strobe cycle, the
-`N_KBD = 1` case), which needed an N=1 reply path in `qbus_mem` and an
-early SYNC-time read issue in `cpu_sdram_dp`. **The board went 514 Hz →
-602 Hz against the real machine's 601 — +0.17 %**; fit 6,953 LE, sys_clk
-+0.190 ns / TNS 0 (after two structural STA fixes in modules the change
-never touched — see the `N_EXT` bullet).
-See the `N_EXT` bullet and `sim/smktime/run.sh`.
+**Every phase is done and confirmed on hardware** — see README.md for the
+current result. This file is now the authoritative document: the per-topic
+bullets below carry each finding in its most current form, and they, not this
+table, are the detail. (ROADMAP.md held the forward-looking plan and was folded
+in here once the last phase landed; `git show e85efbf:ROADMAP.md` has the full
+phase-by-phase narrative if the history is ever wanted.)
+
+| Phase | Delivered | Confirmed |
+|---|---|---|
+| **0** Platform | one-PLL clock tree, SDRAM BIST, 1024×768@60 VGA (built in `ocb-test`) | ✅ |
+| **1** CPU bring-up | `vm1` (1801ВМ1) on EP1C12 + Q-bus wrap; the `sim/bk10` per-instruction cycle oracle | ✅ |
+| **2** BK RAM in SDRAM | Q-bus⇄SDRAM bridge, byte-granular writes, deterministic wait-state FSM | ✅ |
+| **3** 037 arbiter | `va_037_sync` (retimed 037) owns RAM RPLY + the cycle-stealing grant; `sdram_arbiter` (4 ports), `cpu_sdram_dp` done-gate; `sim/ref037` goldens | ✅ |
+| **4** Video pipeline | 037 fetch → `palette_apply` → 4-bit-index double-buffered FB in SDRAM → `fb_readout` → 1024×768@60 (×2H/×3V) | ✅ |
+| **5** SoC boot | full BK-0010.01 ROM in SDRAM + the EPCS loader; ROM writes → trap 4 | ✅ HW 2026-07-03 (BASIC Vilnius banner) |
+| **5.5** Soft reset | reset button re-enters the DCLO/ACLO sequencer; memory + display survive | ✅ HW 2026-07-05 |
+| **6** Peripherals | PS/2 → 1801ВП1-014 equivalent (VIRQ/IAK, СТОП), 1-bit speaker, CMT tape on the right sound jack | ✅ HW 2026-07-07 (kbd + sound), 2026-07-10 (tape) |
+| **7** BK-0011M mode | DIP 1 model select, /24 CPU clock, 177716 banking mapper, 177662 video register, 50 Hz EVNT/IRQ2, СТОП-block, two-pass EPCS loader, authentic DRAM power-on pattern | ✅ HW 2026-07-16 (BOS boots; reset switches models) |
+| **8** SMK512 (DIP 8) | 512 KB segmented RAM, BIOS ROM + the SYS register-space boot overlay, IDE drive engine + tier-1 prefetch, SD/SPI backend — in **both** models | ✅ HW 2026-07-23 (BIOS boots an OS off SD) |
+| **9** Fidelity & polish | authentic EVNT/IRQ2 instant (`bk_evnt`); `N_EXT` calibrated against a real machine; `N_VREG` closed; palette sample instant; the **037 grant-rule fit** + `bk_rply` (the beam-race skew); **turbo mode** | ✅ HW 2026-07-26 (grant rule: Babylona/PALTST flat), 2026-07-29 (turbo) |
+
+## Platform & system map
+
+The hardware envelope and the whole-system picture. The per-module rules live
+under "Architecture & conventions" further down.
+
+### Source building blocks (vendored — re-sync from these, don't reinvent)
+
+| Block | Upstream | Notes |
+|-------|----------|-------|
+| **1801ВМ1 CPU** | `~/projects/other/fpga/cpu11/vm1/hdl/syn` | Gate-accurate reverse-engineered model → `src/cpu/`. Ships its own `sim/bk10` timing testbench (our first oracle). No EIS — fine, Cyclone I has no multipliers. Keep the marked `pin_sel_n` hook (see the conventions section). |
+| **1801ВП1-037** | `~/projects/other/fpga/k1801/037/rtl` | `va_037.v` (refactored) + `vp_037.v` (netlist). **`va_037.v` is the reference `sim/ref037` and `sim/evnt` generate their goldens from** — it is ground truth, and `src/va_037_sync.sv` is its retime. |
+| **1801ВП1-014** | vendored into `sim/ref014/` | The keyboard gate netlist + `lib_1801.v`. Wins every dispute with `src/bk_kbd014.sv`. |
+| **Platform harness** | `~/projects/other/fpga/ocb-test` | Where the clocking, SDRAM and VGA were validated. `src/sdram_ctrl.sv` and `src/vga_timing.sv` come from here. |
+| **Toolchain reference** | `~/projects/other/fpga/ocm-pld-dev/esemsx3` | Pin map, build flow, the CMT-jack scheme, the megasd SPI pin roles. |
+
+Behaviour references (not code): **BkEmu** (`~/projects/studio/BkEmu`) is the
+canonical BK register/software reference; **MiSTer `BK0011M_MiSTer`** wins on
+the 177662 register specifically; `doc/bk0011m.sch` is the real board.
+
+### Platform constraints (validated on hardware — design within them)
+
+- **One usable PLL.** The 21.47727 MHz crystal (PIN_28) can feed only ONE PLL
+  ("input pin cannot feed inclk ports of more than 1 PLL"), so *every* clock is
+  a ÷N of the single VCO or a fabric clock-enable. Never add a second PLL.
+- **PLL VCO ceiling ≈ 400 MHz** on the −8 part: coprime ratios needing a higher
+  VCO simply fail to fit. That ceiling plus the one-PLL rule plus the board's
+  21.47727 MHz crystal is why the BK-0011M CPU rate is **4.0270 MHz** and not
+  the real machine's 4.000 (+0.67 %) — the design's only known sub-1 % timing
+  error against real hardware, and unfixable short of a different crystal (see
+  the `N_EXT` bullet).
+- **On-chip RAM ≈ 239,616 bits (~26 KB).** BK-0010's 32 KB RAM alone exceeds
+  it, and the ROM set is 262 Kbit — so **BK RAM *and* ROM live in the board
+  SDRAM**, not block RAM. This is the root reason the arbiter/done-gate
+  machinery exists at all.
+- **The panel is standard-VESA-only (≥~60 Hz).** It matches its input by
+  (line-rate, total-lines) against a VESA table, and the native BK 48.83 Hz
+  full-screen rate is mis-detected as "not supported" — so the output is
+  **1024×768@60** and the 48.83→60 gap is bridged in the framebuffer. This is
+  the entire reason for the decoded double-buffered FB rather than a genlocked
+  line buffer. A judder-free native path would need a different display
+  (multisync CRT on analog RGB, or an OSSC-class scaler).
+
+### Settled clock tree — single ×9 VCO (193.3 MHz)
+
+| Output | Divide | Freq | Use |
+|--------|--------|------|-----|
+| clk0 | ÷2 | **96.65 MHz** | `sys_clk`: SDRAM controller + the chip clock (`extclk0` → `pMemClk`, phase-matched) |
+| clk1 | ÷3 | **64.43 MHz** | `pix_clk`: 1024×768@60 readout |
+| (enable) | 96.65 ÷8 | **12.08 MHz** | BK dot clock; 037 CLKIN = ÷2 = 6.04 MHz |
+
+CPU clock = a fabric divider of `sys_clk` in `src/cpu_clkgen.sv`: **/32 =
+3.02 MHz (BK-0010), /24 = 4.03 MHz (BK-0011M), /16 = 6.04 MHz (turbo)**. All
+integer ratios, so the design is internally cycle-exact; the absolute rate is
++0.674 % with the CLKIN:CPU ratio preserved exactly (see the clocking bullet).
+
+### Whole-system shape
+
+```
+                       ┌────────────────────────────────────────┐
+   21.477 MHz xtal ──► │ single PLL (×9 VCO): 96.65 / 64.43 MHz │
+                       └────────────────────────────────────────┘
+                          │ 96.65 (sys/SDRAM)        │ 64.43 (pixel)
+                          ▼                          ▼
+   ┌─────────┐  Q-bus  ┌───────────────┐  SDRAM   ┌──────────────────┐   ┌────────┐
+   │ vm1 CPU │◄───────►│ va_037_sync + │◄────────►│ sdram_arbiter +  │◄─►│ SDRAM  │
+   │ 1801ВМ1 │ sync/   │ qbus_mem +    │ reqs     │ sdram_ctrl       │   │ 32 MB  │
+   │ 3-6 MHz │ din/dout│ mem_mapper    │          │ (RAM+ROM+FB)     │   └────────┘
+   └─────────┘ /rply   │ (RPLY owner,  │          └──────────────────┘
+        ▲              │  wait states) │                    │ pixel rows
+        │ IRQ/VIRQ     └───────┬───────┘                    ▼
+   ┌────┴──────────┐           │ video fetch (port 2)
+   │ bk_kbd014,    │           ▼                      ┌──────────────────┐  RGB DAC
+   │ bk_audio,     │   ┌───────────────┐              │ fb_readout →     │─►+ HS/VS
+   │ bk_evnt,      │   │ palette_apply │ FB via SDRAM │ fb_linebuf →     │
+   │ smk_ide/sd    │   │ → fb_video    │─────────────►│ vga_out (1024x   │
+   └───────────────┘   └───────────────┘              │  768@60, x2/x3)  │
+                                                      └──────────────────┘
+```
+
+The signal that carries cycle accuracy is the 037's **grant / RPLY timing**:
+the SDRAM is far faster than BK's bus, so the contention ("the screen slows the
+CPU") is *modelled deliberately*, never left to emerge. From Phase 3 on the
+SDRAM is contended by four clients, so a CPU access is not guaranteed to hide
+inside its RPLY window by margin alone — the **done-gate** makes a late word
+extend RPLY rather than latch stale data.
+
+### SDRAM word map
+
+`src/qbus_pkg.sv` is the source of truth (the `*_BASE` localparams); this is
+the orientation copy. All bases are power-of-two aligned so the mapper's
+physical translation is pure concatenation — no adders.
+
+| Words | Contents |
+|---|---|
+| `0x00000–0x03FFF` | BK-0010 RAM `000000–077777` |
+| `0x04000–0x07F7F` | BK-0010 ROM `100000–177577` (linear `addr[15:1]`) |
+| `0x10000` / `0x18000` | framebuffer FB0 / FB1 (128 words/line × 256 lines) |
+| `0x20000` | `BK11_RAM_BASE` — 8 × 0x2000 RAM pages (page 1 = screen 0, page 7 = screen 1) |
+| `0x30000` | `BK11_WROM_BASE` — 4 window-1 ROM banks (2 and 3 unpopulated) |
+| `0x38000` | `BK11_TOPROM_BASE` — fixed `140000–177577` ROM |
+| `0x3A000` | `SMK_BIOS_BASE` — the one 2048-word SMK BIOS image (both windows) |
+| `0x40000–0x7FFFF` | `SMK_RAM_BASE` — SMK512 RAM, 128 segments × 2 Kwords |
+
+### BK-0011M memory model (what the mapper implements)
+
+128 KB RAM as **8 × 16 KB pages**, plus 4 × 16 KB ROM pages. Of the four 16 KB
+CPU windows, **two are banked** — `040000–077777` (window 0) and
+`100000–137777` (window 1) — while `000000–037777` is a fixed RAM page and
+`140000–177777` is fixed top ROM + I/O. Both banked windows draw from the same
+8 RAM pages; window 1 can map either a RAM page or one of the ROM pages. The
+map lives in **177716** (word writes, bit 11); the displayed video page and
+palette live on a *separate* register, **177662**. See the mapper bullet for the
+exact bit fields and the reset rule.
 
 ## Build & test
 
@@ -659,8 +719,9 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   power-on and `warm_rst_req`. In the warm-reset oracle tbs the release is aligned to
   the next vblank start (the free-running 037 makes post-reset timing raster-
   phase-dependent — authentic; the vblank alignment is what keeps the replayed
-  golden window steal-free and diffable). The Phase-6 keyboard reset chord ORs
-  into `warm_rst_req`. "DIP n" = physical switch n = `pDip[n-1]`; **DIP 1 =
+  golden window steal-free and diffable). A keyboard reset chord would OR into
+  `warm_rst_req` — the seam is there (`src/ocbk_top.sv`) but no chord is wired
+  yet (see Open / deferred). "DIP n" = physical switch n = `pDip[n-1]`; **DIP 1 =
   model select** (OFF = BK-0010, ON = BK-0011M; Phase 7 — latched during any
   DCLO hold, see the clocking bullet; it used to be screen_mode, which moved
   onto the PS/2 **Print Screen** key: each press toggles colour-256 ↔
@@ -1408,15 +1469,27 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   golden), `sim/run_boot_check.sh +turbo` (the real MONITOR/BOS/BIOS firmware
   at /16). Everything else must be **byte-identical at turbo = 0** and is —
   `make sim` green, and `sim/grantfit`'s baseline still reproduces Σ|Δ| = 33.0.
-- **Beam-raced palette skew: QUANTIFIED AND LOCALISED, NOT FIXED
-  (2026-07-26).** Demos like Babylona (`~/projects/other/bk/Babylona/`) paint
+- **Beam-raced palette skew: QUANTIFIED, LOCALISED AND FIXED (2026-07-26).**
+  Demos like Babylona (`~/projects/other/bk/Babylona/`) paint
   one unrolled block per scanline with no resync, so the block cost IS the
   vertical scale of the effect. **The real block is 256.1 CPU cycles = exactly
-  one scanline; ocbk runs it in 240 — 6.25 % fast, ~32 dots/line. That is the
+  one scanline; ocbk ran it in 240 — 6.25 % fast, ~32 dots/line. That was the
   slant.** The tone-program family in `doc/` (`sndtest662`, `sndtestbaby`,
   `sndtestimm`, `sndtestimm2` — `.mac` is the source of truth, `.bin` tracked,
   `.wav` regenerable by pdpy11; same technique as `sndtestsmk`) measured it
-  against a real BK-0011M. **Every leg that MATCHES contains only ONE-read
+  against a real BK-0011M. **This is the A–D baseline table `sim/grantfit`
+  cites** — four numbers derived independently before that bench existed, which
+  is what validates it (its legs E/F/G are `sim/smktime/golden_std`, `qbus_pkg`'s
+  ideal 3326 and `doc/sndtestimm2.mac`'s 3927):
+
+  | | program | real | ocbk (pre-fix) | per unit |
+  |---|---|---|---|---|
+  | A | 192 × write 0177662 | 297 Hz = 6734 cyc | 6734 | **match** |
+  | B | 192 × write to RAM | 286 Hz = 6993 | 6734 | −1.35 cyc/write |
+  | C | 24 × Babylona block | 322 Hz = 6211 | 5824 | **−16.1 cyc/block** |
+  | D | 192 × `MOV #imm,Rn` | 302 Hz = 6622 | 5648 | **−5.08 cyc/instr** |
+
+  **Every leg that MATCHES contains only ONE-read
   instructions; every leg that DIVERGES does TWO reads back to back**
   (`MOV #imm,Rn` = −5.08 cyc/instr). That is why every earlier calibration
   missed it — `N_EXT` included, they all used 192 × `SOB`.
@@ -1466,8 +1539,10 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   slot is absorbed by the vm1's DATO window, per `sim/vregtime`'s N_VREG
   ladder). **Inert / rejected:** TRPLY-clear quantisation (completely inert);
   minimum-gap 2 (inert, as recorded); minimum-gap 3 IS rejected but by the
-  write leg (+11 %), **not** by wrecking `SOB` (+0.13 %) as the old note said —
-  that scratch RTL is gone, so treat the "wrecks SOB" claim as unconfirmed.
+  write leg (+11 %), **not** by wrecking `SOB` (+0.13 %) as the pre-bench
+  record claimed — that scratch RTL is gone, so treat the "wrecks SOB" claim as
+  unconfirmed. The conclusion it supported (the rule is wrong) survives either
+  way.
   ⚠️ It moves the /32 bk10 path too — **+0.20 % on `SOB` but +15.0 % on
   `MOV #imm`, and NOTHING measures that** (no BK-0010 tone; `sim/bk10`'s golden
   is the core alone, no 037). **Falsifiable prediction: a real BK-0010 running
@@ -1730,6 +1805,53 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   bytes verbatim. Do NOT pre-reverse (that was tried; on the board the loader
   read rev(blob) and fell back). `make blob-check` verifies the RPD pages =
   rev(blob) at BOTH 0x40000 and 0x48000.
+
+## Open / deferred
+
+Nothing here blocks anything; each item has its detail in the bullet named.
+Roughly in order of how much they'd be missed.
+
+**Fidelity, measurable**
+- **The BK-0010 `/32` prediction is unmeasured.** The 037 grant-rule fit moves
+  the bk10 path +0.20 % on `SOB` but **+15.0 % on `MOV #imm`**, and nothing in
+  the tree measures it — there is no BK-0010 tone recording, and
+  `sim/bk10/golden.txt` is the core alone with no 037. Falsifiable: a real
+  BK-0010 running `doc/sndtestimm.bin` should now match us and be ~15 % slower
+  than the pre-2026-07-26 firmware. **Collect that recording if a BK-0010 is
+  ever available** — it is the one leg of the calibration with no measurement
+  behind it. See the beam-race bullet.
+- **`N_SMKREG` and `N_IDE` are still `N_ROM`-family placeholders.**
+  `sim/smktime`'s recipe (a tone whose frequency reads out one memory's access
+  time, with an already-calibrated control leg) is the method that settled
+  `N_EXT`; these two want the same treatment against a real SMK512.
+- **The SMK-RAM power-on `ram_init` pattern.** `src/ram_init.sv` fills the
+  machine's own RAM with the authentic К565РУ6/РУ5 pattern; the SMK512's
+  512 KB segment is left zero-filled.
+
+**Peripherals / features not built**
+- **Covox** (the parallel-port DAC) — nothing in the design.
+- **Tape-out is single-bit.** A real BK mixes write bits 6+5 resistively into a
+  3-level record waveform; bit 6 alone (the dominant component) is shipped. See
+  the tape bullet.
+- **Keyboard reset chord** — `warm_rst_req` has the OR seam, no chord decodes
+  into it.
+- **Cartridge slot** (`src/qbus_slot.sv`, `SLOT_ENABLE=0`) drives nothing; the
+  pin map is commented in `ocbk_common.qsf`. Real 5V BK Q-bus hardware needs an
+  external level shifter — Cyclone I is not 5V-tolerant. If a second nVIRQ
+  source ever lands here, OR the active-high asserts and invert at the top —
+  never go back to tri-state Z (see the `tri1` gotcha).
+- **CRT effects** (scanline dim / gamma) in the upscaler — the `vga_out` colour
+  decode is the hook.
+- **SD data CRC16 and MMC cards** — `sd_backend` uses the SPI-default CRC
+  policy (real CRCs only on CMD0/CMD8) and types SD cards only.
+
+**Bigger, probably not worth it**
+- **A native-48.8 Hz analog-RGB output** as a judder-free secondary path. The
+  panel cannot take it (see the platform constraints); it would need a
+  multisync CRT or an OSSC-class scaler. The current framebuffer reclock makes
+  judder mild for BK content.
+- **An optional slow MONITOR tape-load cosim oracle** — tape is
+  hardware-confirmed and unit-oracled, but nothing simulates a whole load.
 
 ## Temp files
 

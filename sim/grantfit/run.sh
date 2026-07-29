@@ -66,7 +66,7 @@
 #
 # The `was` column is the pre-fix behaviour, reproducible with
 # `./run.sh --setup 0 --nod8b`.  Each of those eight numbers had been derived
-# independently before this bench existed (ROADMAP's beam-race table for A-D,
+# independently before this bench existed (CLAUDE.md's beam-race A-D table,
 # sim/smktime/golden_std for E, qbus_pkg's ideal 3326 for F,
 # doc/sndtestimm2.mac's ideal 3927 for G, and H must equal C exactly), which is
 # what validated the bench in the first place.  If a run does not reproduce

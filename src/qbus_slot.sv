@@ -20,7 +20,8 @@
 //   wtbt_n      -> pSltIorq_n                  write/byte status
 //   rply_n     <-  pSltWait_n  (open-collector, has board pull-up)
 //   (DMA / IRQ / iako / init / sp / sel / bsy map onto pSltDat[7:0] + spares;
-//    wired when SLOT_ENABLE=1 hardware bring-up happens - see ROADMAP Phase 6+)
+//    wired when SLOT_ENABLE=1 hardware bring-up happens - see CLAUDE.md's
+//    "Open / deferred" section)
 //
 // ELECTRICAL: Cyclone I is 3.3V LVTTL and NOT 5V-tolerant (PCI clamp only), and
 // the board has no FPGA-controlled transceiver. Real 5V BK Q-bus REQUIRES an

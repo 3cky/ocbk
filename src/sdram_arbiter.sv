@@ -6,7 +6,8 @@
 // requestor, runs that one access to completion (accept, and for reads until the
 // data returns), then re-arbitrates. This bounds every requestor's worst-case wait
 // to ONE in-flight word + refresh regardless of priority - the property the CPU's
-// RPLY-window margin relies on once the SDRAM is contended (see ROADMAP Phase 3).
+// RPLY-window margin relies on once the SDRAM is contended (see CLAUDE.md's
+// "SDRAM arbiter ports" bullet - there is NO fairness, so port 1 must stay paced).
 //
 // Priority = port index: port 0 is highest. Integration mapping (Phase 3/4):
 //   [0] CPU RAM/ROM   (highest - protects cycle-accuracy; the 037 grant, not the

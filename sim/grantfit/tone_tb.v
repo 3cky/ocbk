@@ -9,7 +9,7 @@
 // WHY THIS EXISTS
 // ---------------
 // The 037-fronted DRAM path diverges from a real BK-0011M in a way that is
-// PATTERN-DEPENDENT (ROADMAP.md, "the skew is QUANTIFIED AND LOCALISED"):
+// PATTERN-DEPENDENT (CLAUDE.md, the beam-raced-palette-skew bullet):
 // per DRAM access the real machine costs ~4.37 cycles more than un-arbitrated
 // SMK RAM when accesses are ~3.85 slots apart, but ~6.60 when they come in
 // back-to-back pairs; ours is flat at ~4.2 either way.  Two arbiter rules have

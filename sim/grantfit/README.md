@@ -59,7 +59,7 @@ address in a different program, so `C ≠ H` means the bench is measuring the
 address rather than the access pattern.
 
 The baseline column reproduces eight numbers that were all derived
-independently before this bench existed (ROADMAP's beam-race table for A–D,
+independently before this bench existed (CLAUDE.md's beam-race A–D table,
 `sim/smktime/golden_std` for E, `qbus_pkg`'s ideal 3326 for F,
 `doc/sndtestimm2.mac`'s ideal 3927 for G, and H ≡ C). If a future run does not,
 suspect the bench before believing the result.
@@ -235,15 +235,16 @@ request, and only one combination puts both edges where silicon puts them.
 * **C3, TRPLY clear quantisation: completely inert.** Quantising the clear to
   `en_neg`, or to either strobe, reproduces the baseline to the cycle on all
   seven legs. The "a cycle's tail delays the next fetch" mechanism is not it.
-* **C4, minimum inter-grant gap = 2 slots: completely inert**, reproducing
-  ROADMAP's "no grant in the slot immediately after a grant changes *nothing*"
-  exactly. The CPU never asks that soon.
+* **C4, minimum inter-grant gap = 2 slots: completely inert**, reproducing the
+  earlier finding that "no grant in the slot immediately after a grant changes
+  *nothing*" exactly. The CPU never asks that soon.
 
 ### ⚠️ One discrepancy with the record, unresolved
 
-ROADMAP states that "≥3 slots between grants" **fits `MOV #imm` (31.44 vs the
-real 31.7) but wrecks `SOB` (26.0 vs 21.4)**. This bench's `--gap 3` **rejects
-that rule too, but for a different reason**:
+The pre-bench record (an earlier experiment on scratch RTL) states that "≥3
+slots between grants" **fits `MOV #imm` (31.44 vs the real 31.7) but wrecks
+`SOB` (26.0 vs 21.4)**. This bench's `--gap 3` **rejects that rule too, but for
+a different reason**:
 
 | leg | A | B | C | D | E | F | G |
 |---|---|---|---|---|---|---|---|
@@ -258,8 +259,9 @@ boundary where it is always 0) — which is exactly why a control has to be
 required to reproduce a known-wrong answer, and is worth remembering before
 trusting any un-cross-checked arbiter experiment, including the earlier one.
 
-Treat the "≥3 slots wrecks `SOB`" line in ROADMAP as **unconfirmed**; the
-conclusion it supports (the rule is wrong) survives either way.
+Treat the "≥3 slots wrecks `SOB`" line as **unconfirmed** (CLAUDE.md's
+beam-race bullet records it the same way); the conclusion it supports (the rule
+is wrong) survives either way.
 
 ### The BK-0010 (/32) side, where there is no hardware tone at all
 

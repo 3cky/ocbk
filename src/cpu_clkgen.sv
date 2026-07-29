@@ -22,8 +22,10 @@
 //    with en_pos/en_neg fires, CPU = CLKIN/2) - pinned by sim/clkgen_tb.v
 //    against a replica of that tap, so BK-0010 hardware timing cannot move.
 //    In /24 mode the CPU:CLKIN phase walks a 48-sys_clk pattern instead
-//    (offsets 0/4/8 sys_clk) - deterministic, and 0011M cycle-accuracy
-//    against a reference is a later Phase-7 item (see ROADMAP).
+//    (offsets 0/4/8 sys_clk) - deterministic. That phase was long suspected of
+//    costing 0011M cycle-accuracy; it was measured flat and exonerated by the
+//    Phase-9 grant-rule study (12 phase/duty combinations, see CLAUDE.md's
+//    beam-race bullet), which found the real divergence in the 037 grant rule.
 //
 // model_bk11 must only change while the CPU is held in reset (ocbk_top latches
 // DIP 1 during the DCLO hold); turbo may change at any bus-idle instant. A
