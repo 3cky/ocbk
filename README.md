@@ -86,7 +86,7 @@ Write a raw **AltPro HDD image** to the card starting at the very beginning -
 no partition table, no filesystem, just the image at sector 0:
 
 ```
-sudo dd if=your_image.img of=/dev/sdX bs=1M conv=fsync bs=1M status=progress
+sudo dd if=your_image.img of=/dev/sdX bs=1M conv=fsync status=progress
 ```
 
 Put the card in the board's SD slot, switch **DIP 8** on, and press reset: the
