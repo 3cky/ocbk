@@ -133,6 +133,52 @@ physical translation is pure concatenation — no adders.
 | `0x3A000` | `SMK_BIOS_BASE` — the one 2048-word SMK BIOS image (both windows) |
 | `0x40000–0x7FFFF` | `SMK_RAM_BASE` — SMK512 RAM, 128 segments × 2 Kwords |
 
+### Source tree
+
+```
+src/cpu/            vendored vm1 core (1801ВМ1) + config + the synth vcram stub
+src/qbus_pkg.sv     shared Q-bus decode + the RPLY-latency constants (N_*)
+src/ocbk_top.sv     top: PLL, resets, DIP latches, LEDs, the sibling peripherals
+src/cpu_clkgen.sv   fabric divider: dot/CLKIN enables + the CPU clock (/32,/24,/16)
+src/turbo_ctl.sv    bus-idle-qualified turbo level (the reply-owner swap guard)
+--- memory / bus ---
+src/va_037_sync.sv  retimed 1801ВП1-037: RAM RPLY, grants, video counters, GRANT_SETUP
+src/bk_rply.sv      the board's D8:B flop re-timing the 037's reply onto CPU RPLY
+src/qbus_mem.sv     bus front-end: region reply FSM, 177662/spk/stop captures,
+                    the SMK/IDE decodes, the boot-writer mux
+src/mem_mapper.sv   the one translate seam: (addr, map regs) -> (kind, phys word)
+src/cpu_sdram_dp.sv CPU RAM/ROM datapath on arbiter port 0 + the RPLY done-gate
+src/sdram_arbiter.sv 4-port fixed-priority arbiter (CPU/readout/fetch/FB write)
+src/sdram_ctrl.sv   vendored single-word SDR controller (+ the byte-enable hook)
+src/ram_init.sv     authentic К565РУ6/РУ5 power-on DRAM pattern filler
+src/epcs_boot.sv    two-pass EPCS flash -> SDRAM loader (cyclone_asmiblock)
+src/qbus_sdram.sv   retired Phase-2 RAM slave (kept for its cosim only)
+src/qbus_slot.sv    cartridge-slot bridge (forward seam, SLOT_ENABLE=0)
+--- video ---
+src/fb_video.sv     037 fetch -> palette -> FB writer (ports 2+3, buffer swap)
+src/palette_apply.sv 16-palette stage (MiSTer palette ROM; bk10 = palette 0)
+src/fb_readout.sv   paced FB line prefetcher (port 1) + the pixel-side CDC
+src/fb_linebuf.sv   dual-clock ping-pong line buffer (1 M4K)
+src/vga_out.sv      1024x768@60 scan-out: scheduling, colour decode, x2/x3 scale
+src/vga_timing.sv   vendored VESA timing generator (ocb-test, board-proven)
+--- peripherals ---
+src/ps2_rx.sv       PS/2 frame receiver          src/kbd_ps2bk.sv  scan -> BK codes
+src/bk_kbd014.sv    1801ВП1-014 equivalent (177660-663, VIRQ/IAK)
+src/bk_audio.sv     speaker DAC + the CMT tape comparator network
+src/bk_evnt.sv      the real 0011M D28+D3:B EVNT/IRQ2 missing-pulse detector
+src/smk_ide.sv      SMK512 IDE task file + ATA engine + tier-1 prefetch
+src/sd_backend.sv   SPI-mode SD host serving the smk_ide sector port
+--- generators / images ---
+mem/gen_mem.py      ROM test-program assembler + the test picture
+mem/gen_boot_blob.py boot-blob builder (header/checksum + the COF hex pages)
+mem/gen_ide_image.py synthetic AltPro HDD image (also the dd-able ide_image.bin)
+mem/gen_*_test.py   the per-oracle SoC test programs
+mem/roms/           BK-0010.01 + BK-0011M ROM sets + the SMK BIOS (from BkEmu)
+doc/                bk0011m.sch, smk64.mac, the sndtest* tone programs
+```
+
+Oracles live in `sim/` — see "Verification discipline" for what each one pins.
+
 ### BK-0011M memory model (what the mapper implements)
 
 128 KB RAM as **8 × 16 KB pages**, plus 4 × 16 KB ROM pages. Of the four 16 KB
