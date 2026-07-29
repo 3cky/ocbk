@@ -174,7 +174,9 @@ mem/gen_boot_blob.py boot-blob builder (header/checksum + the COF hex pages)
 mem/gen_ide_image.py synthetic AltPro HDD image (also the dd-able ide_image.bin)
 mem/gen_*_test.py   the per-oracle SoC test programs
 mem/roms/           BK-0010.01 + BK-0011M ROM sets + the SMK BIOS (from BkEmu)
-doc/                bk0011m.sch, smk64.mac, the sndtest* tone programs
+test/               the sndtest* tone programs (.mac source / .bin image /
+                    .wav recording) — the real-hardware timing measurements
+doc/                bk0011m.sch, bk0011m-sch.pdf, smk64.mac
 ```
 
 Oracles live in `sim/` — see "Verification discipline" for what each one pins.
@@ -521,7 +523,7 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   `sim/evnt/README.md`. **Never regenerate the golden from a va_037_sync run.**
 - `sim/smktime/run.sh` — **slow (~1 min), not in `make sim`**: the Phase-9
   **SMK512 memory-access-time oracle**, i.e. the calibration of `N_EXT` and the
-  regression that keeps it calibrated. Runs `doc/sndtestsmk.bin` **verbatim**
+  regression that keeps it calibrated. Runs `test/sndtestsmk.bin` **verbatim**
   (the exact bytes measured on a real BK-0011M + SMK512) on the sim/smk SoC
   stack and reports the emitted tone: one half-period = 197 instruction
   fetches, all from the memory the loop is resident in, nothing else touching
@@ -554,7 +556,7 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
 - `sim/vregtime/run.sh` — **slow (~1 min), not in `make sim`**: the Phase-9
   **177662 write-time oracle**, same shape as `sim/smktime` on a stock
   BK-0011M stack (smk_en=0, /24, port-2 contention, boot via the top-ROM
-  stage-0 stub). `doc/sndtest662.bin` (`mem/gen_vreg_test.py`, the same bytes
+  stage-0 stub). `test/sndtest662.bin` (`mem/gen_vreg_test.py`, the same bytes
   a real machine would run) puts **192 writes in each tone half-period** — 8
   unrolled `MOV R1,(R0)` × 24 SOB iterations — with two entry points and a
   byte-identical loop whose only difference is R0: the writes go to **177662**
@@ -569,7 +571,7 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   thing that moves when the reply FSM changes. `--regen` regenerates.
 - `sim/grantfit/run.sh` — **slow (~30 min for `--sweep`), not in `make sim`, and
   NOT an oracle — a measurement bench.** The Phase-9 037 **grant-rule** study:
-  it runs every tracked tone image (`doc/sndtest*.bin`, consumed verbatim via
+  it runs every tracked tone image (`test/sndtest*.bin`, consumed verbatim via
   `mem/gen_tone_test.py`) on the real SoC stack and tabulates it against the
   real-BK-0011M readings — **four legs that must MOVE and three that must
   NOT**, because both earlier arbiter experiments were judged on one leg and
@@ -1265,7 +1267,7 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
 - **SMK512 access time `N_EXT` = 1 (Phase 9, CALIBRATED against real hardware
   and CONFIRMED ON HARDWARE 2026-07-26; was the Phase-8 placeholder
   `N_RAM` = 4):** measured with a
-  tone-frequency program (`doc/sndtestsmk.mac` — 192 `SOB` iterations around a
+  tone-frequency program (`test/sndtestsmk.mac` — 192 `SOB` iterations around a
   177716 speaker toggle, so one half-period is 197 fetches from the resident
   memory and nothing else), run on a **real BK-0011M + SMK512** and on the
   board, with the SAME loop run from ordinary RAM as a control:
@@ -1520,13 +1522,13 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   one unrolled block per scanline with no resync, so the block cost IS the
   vertical scale of the effect. **The real block is 256.1 CPU cycles = exactly
   one scanline; ocbk ran it in 240 — 6.25 % fast, ~32 dots/line. That was the
-  slant.** The tone-program family in `doc/` (`sndtest662`, `sndtestbaby`,
+  slant.** The tone-program family in `test/` (`sndtest662`, `sndtestbaby`,
   `sndtestimm`, `sndtestimm2` — `.mac` is the source of truth, `.bin` tracked,
   `.wav` regenerable by pdpy11; same technique as `sndtestsmk`) measured it
   against a real BK-0011M. **This is the A–D baseline table `sim/grantfit`
   cites** — four numbers derived independently before that bench existed, which
   is what validates it (its legs E/F/G are `sim/smktime/golden_std`, `qbus_pkg`'s
-  ideal 3326 and `doc/sndtestimm2.mac`'s 3927):
+  ideal 3326 and `test/sndtestimm2.mac`'s 3927):
 
   | | program | real | ocbk (pre-fix) | per unit |
   |---|---|---|---|---|
@@ -1539,7 +1541,7 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   instructions; every leg that DIVERGES does TWO reads back to back**
   (`MOV #imm,Rn` = −5.08 cyc/instr). That is why every earlier calibration
   missed it — `N_EXT` included, they all used 192 × `SOB`.
-  **The CPU core and `N_EXT` are RIGHT:** `doc/sndtestimm2.mac` runs the same
+  **The CPU core and `N_EXT` are RIGHT:** `test/sndtestimm2.mac` runs the same
   loop from SMK RAM (`MK_EXT` — not 037-fronted, no arbitration, no slot
   quantisation) — real 509 Hz = 3929 cyc vs our ideal 3927 (the sim's 4055
   carries the `EXTRD slow` tb-saturation inflation), **0.05 %**.
@@ -1592,7 +1594,7 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   ⚠️ It moves the /32 bk10 path too — **+0.20 % on `SOB` but +15.0 % on
   `MOV #imm`, and NOTHING measures that** (no BK-0010 tone; `sim/bk10`'s golden
   is the core alone, no 037). **Falsifiable prediction: a real BK-0010 running
-  `doc/sndtestimm.bin` should now match us and be ~15 % slower than the
+  `test/sndtestimm.bin` should now match us and be ~15 % slower than the
   pre-2026-07-26 firmware.** Collect that recording if a BK-0010 is ever
   available — it is the one leg of this calibration with no measurement behind
   it. **Oracle consequence: `sim/ref037` now keeps TWO golden sets** — see its
@@ -1862,7 +1864,7 @@ Roughly in order of how much they'd be missed.
   the bk10 path +0.20 % on `SOB` but **+15.0 % on `MOV #imm`**, and nothing in
   the tree measures it — there is no BK-0010 tone recording, and
   `sim/bk10/golden.txt` is the core alone with no 037. Falsifiable: a real
-  BK-0010 running `doc/sndtestimm.bin` should now match us and be ~15 % slower
+  BK-0010 running `test/sndtestimm.bin` should now match us and be ~15 % slower
   than the pre-2026-07-26 firmware. **Collect that recording if a BK-0010 is
   ever available** — it is the one leg of the calibration with no measurement
   behind it. See the beam-race bullet.

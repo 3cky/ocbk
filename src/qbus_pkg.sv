@@ -91,7 +91,7 @@ package qbus_pkg;
    // CONFIRMED ON HARDWARE 2026-07-26: the board plays 602 Hz against the real
    // machine's 601.
    //
-   // Method (sim/smktime, the oracle that keeps it honest): doc/sndtestsmk.mac
+   // Method (sim/smktime, the oracle that keeps it honest): test/sndtestsmk.mac
    // toggles the 177716 speaker bit around a 192-iteration SOB delay loop, so
    // one tone half-period = 197 instruction fetches and NOTHING else that
    // touches memory (the vm1 self-replies for 177700-177717). Run the loop
@@ -217,7 +217,7 @@ package qbus_pkg;
    //
    // Like N_EXT, the mechanism that expresses N=1 (qbus_mem's `vreg_fast`) is
    // gated on N_VREG == 1 and folds away, so raising this back to >= 2 is safe.
-   // Oracle: sim/vregtime (doc/sndtest662.bin, 192 writes per tone
+   // Oracle: sim/vregtime (test/sndtest662.bin, 192 writes per tone
    // half-period - deliberate high gain, and it still reads flat).
    localparam int unsigned N_VREG = 1;
 

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Images for the sim/smktime SMK512 memory-access-time oracle.
 
-The program is NOT assembled here: it is `doc/sndtestsmk.bin` consumed
+The program is NOT assembled here: it is `test/sndtestsmk.bin` consumed
 VERBATIM - the exact bytes that were run on the real BK-0011M + SMK512 and
 on the board, so the sim and the hardware measurement cannot diverge.
 
-doc/sndtestsmk.mac (BK .BIN = 2-byte load address + 2-byte length + data,
+test/sndtestsmk.mac (BK .BIN = 2-byte load address + 2-byte length + data,
 load address 0o2000, 64 bytes = 32 words):
 
     002000  MOV #6,@#177130         } SMK two-phase strobe: arm, then commit
@@ -75,7 +75,7 @@ LOW10_WORDS = 16384          # --bk10: the whole BK-0010 RAM (000000-077777)
 BIOS_WORDS = 2048            # one 4 KB SMK BIOS image = one segment
 
 BIN_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        "..", "doc", "sndtestsmk.bin")
+                        "..", "test", "sndtestsmk.bin")
 
 ENTRY_SMK = 0o002000         # full program: mode switch + copy + run @140000
 ENTRY_STD = 0o002046         # START: run the same loop in place, in RAM

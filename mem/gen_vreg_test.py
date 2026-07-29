@@ -14,14 +14,14 @@ worth its own program.
 
 THE PROGRAM (BK .BIN, load address 0o2000)
 ------------------------------------------
-**doc/sndtest662.mac is the source of truth** - it is what pdpy11 assembles
-into doc/sndtest662.bin AND doc/sndtest662.wav, and the .wav is what gets
+**test/sndtest662.mac is the source of truth** - it is what pdpy11 assembles
+into test/sndtest662.bin AND test/sndtest662.wav, and the .wav is what gets
 played into a real BK-0011M. This script re-assembles the same program
-independently (below) and ASSERTS the result matches doc/sndtest662.bin
+independently (below) and ASSERTS the result matches test/sndtest662.bin
 byte-for-byte, then builds the sim images from the .bin verbatim - so the
 bytes the oracle runs and the bytes the real machine runs cannot drift apart.
 (Rebuild the .bin/.wav with:  cd doc && pdpy11 sndtest662.mac)
-Same idea as doc/sndtestsmk.mac: a square wave on the 177716 speaker bit whose
+Same idea as test/sndtestsmk.mac: a square wave on the 177716 speaker bit whose
 half-period is one pass of a loop, so the emitted TONE is a direct readout of
 what that loop costs - the only thing measurable on a real machine.
 
@@ -68,7 +68,7 @@ both and the only difference in the whole machine state is R0:
 tone by 192 cycles out of ~4300, i.e. ~4.5 % (~20 Hz), where the sndtestsmk
 measurements resolved ~1 Hz.
 
-TO MEASURE ON REAL HARDWARE: load doc/sndtest662.bin on a BK-0011M, run it
+TO MEASURE ON REAL HARDWARE: load test/sndtest662.bin on a BK-0011M, run it
 (entry 0o2000) and record the tone; then start it again at 0o2006 and record
 that tone.  Compare both against the board.  The per-write difference is
 (cycles_662 - cycles_ram) / 192 in CPU cycles.
@@ -80,7 +80,7 @@ Emits (word-per-line hex, like the other mem/gen_*.py):
                  (SDRAM BK11_TOPROM_BASE = 0x38000): the 177716 start vector
                  on a BK-0011M is 0140000, so the reset fetch lands here and
                  this JMPs to the leg's entry point (the sim/bk11 idiom)
-and, with --bin, doc/sndtest662.bin itself.
+and, with --bin, test/sndtest662.bin itself.
 """
 import os
 import sys
@@ -98,7 +98,7 @@ FAIL_PARK = 0o001012         # trap-4 target: a self-loop the tb fails on
 UNROLL = 8                   # writes per inner pass
 OUTER = 24                   # inner passes per half-period -> 192 writes
 
-DOC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "doc")
+TEST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "test")
 
 
 def build_program():
@@ -169,9 +169,9 @@ def main():
 
     words, labels = build_program()
 
-    # The .bin/.wav pdpy11 built from doc/sndtest662.mac is what a real machine
+    # The .bin/.wav pdpy11 built from test/sndtest662.mac is what a real machine
     # runs; refuse to build sim images from anything else.
-    binpath = os.path.normpath(os.path.join(DOC, "sndtest662.bin"))
+    binpath = os.path.normpath(os.path.join(TEST, "sndtest662.bin"))
     if os.path.exists(binpath) and "--bin" not in sys.argv:
         base, ref = load_bin(binpath)
         if base != BASE or ref != words:
@@ -181,7 +181,7 @@ def main():
         words = ref
 
     if "--bin" in sys.argv:
-        p = os.path.normpath(os.path.join(DOC, "sndtest662.bin"))
+        p = os.path.normpath(os.path.join(TEST, "sndtest662.bin"))
         write_bin(p, words)
         print(f"wrote {p} ({len(words)} words at {oct(BASE)})")
 

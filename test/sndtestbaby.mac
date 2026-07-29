@@ -1,7 +1,7 @@
 ; ---------------------------------------------------------------------------
 ; sndtestbaby - how many CPU cycles is ONE Babylona palette-switch block?
 ;
-; Companion to doc/sndtest662.mac. Same tone technique, same purpose: get a
+; Companion to test/sndtest662.mac. Same tone technique, same purpose: get a
 ; number off a real BK-0011M that can be compared with the board.
 ;
 ; WHAT IT MEASURES

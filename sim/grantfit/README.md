@@ -45,7 +45,7 @@ can fix it.
 | G | `sndtestimm2` @2000 | 192 × `MOV #imm` in SMK RAM | 3929 | 3927 | −0.05 % — **must not move** |
 | H | `sndtestimm2` @2046 | leg C's loop, in place | — | 5648 | cross-check, must equal C |
 
-Every `.mac` in `doc/` carries its own reading and reasoning; the images are
+Every `.mac` in `test/` carries its own reading and reasoning; the images are
 consumed **verbatim** by `mem/gen_tone_test.py`, so the bytes the bench runs
 and the bytes the real machine ran cannot drift apart.
 
@@ -61,7 +61,7 @@ address rather than the access pattern.
 The baseline column reproduces eight numbers that were all derived
 independently before this bench existed (CLAUDE.md's beam-race A–D table,
 `sim/smktime/golden_std` for E, `qbus_pkg`'s ideal 3326 for F,
-`doc/sndtestimm2.mac`'s ideal 3927 for G, and H ≡ C). If a future run does not,
+`test/sndtestimm2.mac`'s ideal 3927 for G, and H ≡ C). If a future run does not,
 suspect the bench before believing the result.
 
 ### The one tb artefact
@@ -281,7 +281,7 @@ arbitrate this either. Adopting the fit would change the /32 path by 15 % on a
 very common instruction shape on the strength of the BK-0011M fit alone.
 
 It is at least a **falsifiable prediction**: a real BK-0010 running
-`doc/sndtestimm.bin` should come out ~15 % slower than the current firmware
+`test/sndtestimm.bin` should come out ~15 % slower than the current firmware
 does. Getting that recording is the cheapest way to de-risk the follow-up.
 
 ### Status: SHIPPED AND CONFIRMED ON HARDWARE (2026-07-26)
@@ -311,7 +311,7 @@ What is **still not** established:
 
 * **the tones have not been re-measured on the board.** The visual acceptance
   (Babylona, PALTST) is qualitative; the quantitative check — replaying the
-  seven `doc/sndtest*.wav` on the flashed board and comparing against the
+  seven `test/sndtest*.wav` on the flashed board and comparing against the
   `real` column — is still available and still able to fail. Worth doing if a
   residual ever needs chasing; it is the same recipe as the `N_EXT`
   calibration.

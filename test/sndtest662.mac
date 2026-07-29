@@ -2,7 +2,7 @@
 ; sndtest662 - how long does a 0177662 (palette) WRITE take?
 ;
 ; A differential tone measurement for a real BK-0011M vs the ocbk board, in the
-; style of doc/sndtestsmk.mac (which calibrated the SMK512 access time N_EXT).
+; style of test/sndtestsmk.mac (which calibrated the SMK512 access time N_EXT).
 ;
 ; WHY
 ;   Beam-raced palette demos (e.g. Babylona/tweak.mac) run a fully unrolled

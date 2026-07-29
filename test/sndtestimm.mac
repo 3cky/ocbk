@@ -1,17 +1,17 @@
 ; ---------------------------------------------------------------------------
 ; sndtestimm - how long does MOV #imm,Rn take?
 ;
-; Third in the series (doc/sndtest662.mac, doc/sndtestbaby.mac). Same tone
+; Third in the series (test/sndtest662.mac, test/sndtestbaby.mac). Same tone
 ; technique; this one isolates a single instruction.
 ;
 ; WHY
-;   doc/sndtestbaby measured Babylona's per-scanline block on a real BK-0011M
+;   test/sndtestbaby measured Babylona's per-scanline block on a real BK-0011M
 ;   at 6211 cycles per 24 blocks = 256.1 cycles per block - exactly one
 ;   scanline, which is why the demo is authored that way. ocbk runs the same
 ;   block in 240, i.e. 6.25 % fast, and that is the slant.
 ;
 ;   The block is six `MOV Rn,(R0)` writes to 0177662 plus two `MOV #imm,Rn`
-;   reloads. doc/sndtest662 measured the 0177662 write path on real hardware
+;   reloads. test/sndtest662 measured the 0177662 write path on real hardware
 ;   and it MATCHES ocbk (real 6734 cycles vs ocbk 6734, 0.03 %). So the whole
 ;   16.1-cycle-per-block deficit has to sit in the two immediate reloads:
 ;   8.07 cycles each. Independent support: sim/smktime's control leg contains

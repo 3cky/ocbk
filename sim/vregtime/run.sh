@@ -29,7 +29,7 @@
 #
 # WHAT IT MEASURES
 # ----------------
-# doc/sndtest662.bin (mem/gen_vreg_test.py, and the SAME bytes are what runs on
+# test/sndtest662.bin (mem/gen_vreg_test.py, and the SAME bytes are what runs on
 # a real BK-0011M) toggles the 177716 speaker bit around a loop of **192
 # writes** - 8 unrolled `MOV R1,(R0)` x 24 SOB iterations.  One tone
 # half-period is therefore dominated by those writes, and one unit of N moves
@@ -72,7 +72,7 @@
 # (sim/ref014/README.md) and the 037 decodes only 177664.
 #
 # HARDWARE CONFIRMATION: not needed for the constant (the sweep shows the CPU
-# cannot see it), but doc/sndtest662.bin is a ready-made differential probe if
+# cannot see it), but test/sndtest662.bin is a ready-made differential probe if
 # a write-path timing question ever comes up: run it on a real BK-0011M (entry
 # 0o2000, then again at 0o2006) and on the board and compare the four tones,
 # the way sim/smktime does for N_EXT.

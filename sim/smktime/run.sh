@@ -10,7 +10,7 @@
 #
 # WHAT IT MEASURES
 # ----------------
-# doc/sndtestsmk.bin (consumed VERBATIM - the exact bytes run on the real
+# test/sndtestsmk.bin (consumed VERBATIM - the exact bytes run on the real
 # machine; see mem/gen_snd_test.py) toggles the 177716 speaker bit around a
 # 192-iteration SOB delay loop.  One tone half-period = one SND..BR pass = 197
 # instruction fetches, ALL from the memory the loop is resident in, and nothing

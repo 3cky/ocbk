@@ -17,7 +17,7 @@
 // calibrated (N_RAM + the 037 steal on hardware; 177716 = the vm1 internal
 // reply; EVNT/IRQ2 = sim/evnt vs the reference netlist).
 //
-// The program is doc/sndtest662.bin (mem/gen_vreg_test.py): 192 writes per
+// The program is test/sndtest662.bin (mem/gen_vreg_test.py): 192 writes per
 // tone half-period, so one unit of N moves the tone ~4.5 %.
 //
 //   default   the 192 writes go to 177662  -> N_VREG, the constant under test

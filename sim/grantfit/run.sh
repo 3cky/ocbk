@@ -45,7 +45,7 @@
 # clock offset inside it (that is where its "+0.8 %" control-leg residual comes
 # from).  Do not mix them.  Same tones, different question.
 #
-# THE LEGS  (real = measured on a real BK-0011M; see doc/sndtest*.mac, whose
+# THE LEGS  (real = measured on a real BK-0011M; see test/sndtest*.mac, whose
 # headers carry the readings and the reasoning)
 #
 #                                                    real  SHIPPED   was (pre-fix)
@@ -68,7 +68,7 @@
 # `./run.sh --setup 0 --nod8b`.  Each of those eight numbers had been derived
 # independently before this bench existed (CLAUDE.md's beam-race A-D table,
 # sim/smktime/golden_std for E, qbus_pkg's ideal 3326 for F,
-# doc/sndtestimm2.mac's ideal 3927 for G, and H must equal C exactly), which is
+# test/sndtestimm2.mac's ideal 3927 for G, and H must equal C exactly), which is
 # what validated the bench in the first place.  If a run does not reproduce
 # either column, suspect the bench before believing the result.
 #

@@ -8,7 +8,7 @@
 //   0x40000-0x7FFFF) + the port-2 video-fetch saturator for contention.
 //   The same stack sim/smk/smk_soc_tb.v uses; this tb only measures.
 //
-// The program is doc/sndtestsmk.bin VERBATIM (see mem/gen_snd_test.py): a
+// The program is test/sndtestsmk.bin VERBATIM (see mem/gen_snd_test.py): a
 // 192-iteration SOB delay loop toggling the 177716 speaker bit, so the emitted
 // tone frequency is a direct readout of the access time of whatever memory the
 // loop is resident in.  One half-period = one SND..BR pass = 197 instruction

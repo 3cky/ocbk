@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Images for the sim/grantfit 037 grant-rule bench - any doc/sndtest*.bin.
+"""Images for the sim/grantfit 037 grant-rule bench - any test/sndtest*.bin.
 
 This is mem/gen_snd_test.py generalised: the program is never assembled here,
-it is one of the tracked `doc/sndtest*.bin` images consumed VERBATIM - the
+it is one of the tracked `test/sndtest*.bin` images consumed VERBATIM - the
 exact bytes that were run on the real BK-0011M and on the board, so the sim and
 the hardware measurement cannot diverge.  Which image and which entry point are
 command-line arguments, because the bench's whole point is to evaluate ONE
@@ -11,7 +11,7 @@ candidate 037 change against SEVEN different memory-access patterns at once.
     gen_tone_test.py --image sndtest662 --entry 2006 [--smk] [--bk10] OUTDIR
 
 `--entry` is octal (with or without a leading 0o).  The tone programs and their
-entry points are catalogued in sim/grantfit/run.sh; each `.mac` in doc/ is the
+entry points are catalogued in sim/grantfit/run.sh; each `.mac` in test/ is the
 source of truth for its own `.bin`.
 
 BOOT.  Two mechanisms, selected by --smk, both already used by the existing
@@ -51,7 +51,7 @@ LOW10_WORDS = 16384          # --bk10: the whole BK-0010 RAM (000000-077777)
 TOP_WORDS = 64               # only the stage-0 stub is preloaded
 BIOS_WORDS = 2048            # one 4 KB SMK BIOS image = one segment
 
-DOC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "doc")
+TEST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "test")
 
 START_W = 0o166421           # BIOS image offset 0o7716: the boot word.  The
                              # vm1 masks it with 0o177400 -> PC = 0o166400;
@@ -109,7 +109,7 @@ def main():
     outdir = args[0] if args else "."
 
     entry = int(entry_s, 8)
-    binpath = os.path.normpath(os.path.join(DOC, f"{image}.bin"))
+    binpath = os.path.normpath(os.path.join(TEST, f"{image}.bin"))
     if not os.path.exists(binpath):
         sys.exit(f"{binpath}: no such tone image")
 

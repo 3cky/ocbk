@@ -1,7 +1,7 @@
 ; ---------------------------------------------------------------------------
 ; sndtestimm2 - is the two-read gap in the CPU, or in the 037-fronted DRAM?
 ;
-; Fourth in the series (doc/sndtest662.mac, sndtestbaby.mac, sndtestimm.mac),
+; Fourth in the series (test/sndtest662.mac, sndtestbaby.mac, sndtestimm.mac),
 ; and the one that decides where the Babylona slant comes from.
 ;
 ; WHAT IS KNOWN SO FAR (all measured on a real BK-0011M vs the board)
@@ -53,7 +53,7 @@
 ;
 ;     entry 0002046 (ordinary RAM, control)   board = 5648 cycles = 356.5 Hz
 ;
-;       This leg is bit-identical to doc/sndtestimm.mac (same 5648 cycles in
+;       This leg is bit-identical to test/sndtestimm.mac (same 5648 cycles in
 ;       sim), so it must reproduce that program's real-machine reading of
 ;       302 Hz. If it does not, something about the session differs and the
 ;       SMK reading cannot be trusted either.
