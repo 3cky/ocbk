@@ -37,6 +37,27 @@ package qbus_pkg;
    localparam int unsigned N_KBD = 1;
    localparam int unsigned N_IAK = 1;
 
+   // ---- TURBO mode (Phase 9): the RAM reply when the 037 is not stealing ----
+   // Turbo is an explicitly NON-AUTHENTIC performance mode (PS/2 F12, 6.04 MHz
+   // CPU). In it the 037 is told to stop decoding CPU accesses as its own
+   // (va_037_sync's no_steal), so nobody would reply for RAM - qbus_mem's wait
+   // FSM takes ownership at this fixed count instead of the 037's slot-
+   // quantised grant. Disabling the steal is what makes turbo fast at all: the
+   // 037 grants one slot per 8 CLKIN and CLKIN is a FIXED sys_clk/16, so a slot
+   // that costs 4 CPU cycles at /32 costs 8 at /16 - doubling the clock alone
+   // would roughly double the stall in CPU cycles.
+   //
+   // N = 2 (the N_ROM convention: reply one FSM edge after the detection edge)
+   // is deliberately shorter than an SDRAM access, which is 12..22 sys_clk end
+   // to end incl. the arbiter grant (cpu_sdram_dp) against 16 sys_clk per CPU
+   // cycle at 6.04 MHz. The existing mem_ready done-gate is what makes that
+   // legal AND what makes it right: a late word EXTENDS RPLY instead of being
+   // latched stale, so the effective reply is "as soon as the word is there".
+   // That routine stretch is BY DESIGN here, which is why the turbo-RAM leg
+   // deliberately does NOT raise dbg_romgate (that flag means "a fixed-N reply
+   // was extended UNEXPECTEDLY" and sim/smktime fails a run on it).
+   localparam int unsigned N_TURBO = 2;
+
    // ---- Phase-7 mem_mapper region kinds (BK-0011M banking) -----------------
    // Plain localparams (no enum) - Quartus II 11.0 chokes on package enums used
    // across module boundaries. Writability is encoded by the kind itself:

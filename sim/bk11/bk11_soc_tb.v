@@ -69,14 +69,46 @@ module bk11_soc_tb;
     wire en_pos = (divc == 4'd15);
     wire en_neg = (divc == 4'd7);
 
+    // +turbo: re-run the WHOLE contract in turbo mode - /16 = 6.04 MHz and the
+    // 037 out of the RAM path (qbus_mem replies at N_TURBO instead). Nothing
+    // about the contract may change; only the timing does. +turboflip adds the
+    // live-toggle stress: key_turbo is flipped repeatedly WHILE the program
+    // runs, which is the only way to kill a mutation of turbo_ctl's bus-idle
+    // qualification (an unqualified swap drops a reply -> qbto -> trap 4 ->
+    // this tb's vector-4 fail park).
+    reg turbo_en, turbo_flip;
+    initial begin
+        turbo_en   = $test$plusargs("turbo") || $test$plusargs("turboflip");
+        turbo_flip = $test$plusargs("turboflip");
+    end
+    wire turbo_run;                 // turbo_ctl output (instantiated below)
+
     reg [3:0] cdiv;
     reg       cpu_clk_r;
+    wire [3:0] cdiv_max = turbo_run ? 4'd7 : 4'd11;
     initial begin cdiv = 4'd0; cpu_clk_r = 1'b0; end
     always @(posedge sys_clk) begin
-        if (cdiv >= 4'd11) begin cdiv <= 4'd0; cpu_clk_r <= ~cpu_clk_r; end
-        else               cdiv <= cdiv + 1'b1;
+        if (cdiv >= cdiv_max) begin cdiv <= 4'd0; cpu_clk_r <= ~cpu_clk_r; end
+        else                  cdiv <= cdiv + 1'b1;
     end
     wire clk = cpu_clk_r;
+
+    // The REAL turbo_ctl (never a replica - the cpu_clkgen drift lesson): the
+    // 2-FF resync + the bus-idle qualification that ocbk_top uses. key_turbo is
+    // the kbd_ps2bk toggle level; here the tb drives it directly.
+    reg  key_turbo_lv;
+    initial key_turbo_lv = 1'b0;
+    always @(posedge sys_clk) if (turbo_en && !turbo_flip) key_turbo_lv <= 1'b1;
+    // +turboflip: bang on F12 at a rate that is deliberately NOT commensurate
+    // with the bus cycle, so the swap is attempted at every phase of it.
+    integer flip_cnt = 0;
+    always @(posedge sys_clk) if (turbo_flip) begin
+        flip_cnt <= flip_cnt + 1;
+        if (flip_cnt >= 997) begin
+            flip_cnt     <= 0;
+            key_turbo_lv <= ~key_turbo_lv;
+        end
+    end
 
     // ---- Q-bus --------------------------------------------------------------
     tri1 [15:0] ad;
@@ -98,6 +130,13 @@ module bk11_soc_tb;
     wire        n_irq2;    // EVNT/IRQ2 replica (assigned below qbus_mem)
     wire        n_irq1;    // СТОП replica (assigned below qbus_mem)
     wire        dmgo;  tri1 init, dmr, sack, iako;   wire [2:1] sel;   wire bsy;
+
+    // The REAL turbo_ctl (never a replica): the 2-FF resync + the bus-idle
+    // qualification ocbk_top uses. Power-on reset, like the board.
+    turbo_ctl u_turbo (
+        .sclk(sys_clk), .rst_n(srst_n), .key_turbo(key_turbo_lv),
+        .sync_n(sync), .din_n(din), .dout_n(dout), .turbo(turbo_run)
+    );
 
     // ---- tb-side address latch (for the park monitor) -----------------------
     reg [15:0] addr;
@@ -123,6 +162,7 @@ module bk11_soc_tb;
     wire        mem_ext_ram;   // window-1 banked RAM -> 037 a15 force (from u_ms)
     wire        va_vfetch, va_line_en, va_hgate, va_vgate;
     va_037_sync pr037 (
+        .no_steal(turbo_run),   // turbo: the 037 stops owning RAM
         .clk(sys_clk), .en_pos(en_pos), .en_neg(en_neg), .mem_ready(mem_ready),
         .ext_ram(mem_ext_ram),
         .PIN_R(~dclo_cold), .PIN_C(1'b0),
@@ -159,6 +199,7 @@ module bk11_soc_tb;
     wire        stop_block;
 
     qbus_mem u_ms (
+        .turbo(turbo_run),      // turbo: this FSM owns the RAM reply
         .cpu_clk  (~clk),            // as ocbk_top: FSM on the inverted CPU clock
         .reset    (~dclo),
         .ide_rdata(16'h0000),  // no SMK IDE device in this tb
@@ -273,12 +314,28 @@ module bk11_soc_tb;
     //    the gate broken the vm1's arm/fire edge detector - the pin never
     //    deasserts, so it never arms - would quietly defer the first fire
     //    to the SECOND frame and still pass the program checks).
-    integer unmask_age = 0;             // sys_clk since 662 bit 14 was cleared
+    //    Counted in SYNCO RISING EDGES, not sys_clk: "the next SYNCO edge" is
+    //    the actual contract, and how far away that edge is depends on the
+    //    raster phase at which the program happens to reach the unmask - so a
+    //    sys_clk threshold is only ever a proxy for one CPU rate. (It was 512,
+    //    and the turbo legs walk the program to a different beam phase where a
+    //    perfectly legal edge lands at ~502.) An edge count is exact at any
+    //    rate and still kills the mutation it was built for: a combinational
+    //    gate re-fires within a couple of sys_clk, i.e. at zero edges.
+    integer unmask_age  = 0;            // sys_clk since 662 bit 14 was cleared
+    integer unmask_edges = 99;          // SYNCO rising edges since then
     reg     m_d = 1'b1;
+    reg     sy_d = 1'b1;
     always @(posedge sys_clk) begin
-        if (m_d && !vid_irq2m) unmask_age = 0;
-        else                   unmask_age = unmask_age + 1;
-        m_d = vid_irq2m;
+        if (m_d && !vid_irq2m) begin
+            unmask_age   = 0;
+            unmask_edges = 0;
+        end else begin
+            unmask_age = unmask_age + 1;
+            if (!sy_d && va_vsync) unmask_edges = unmask_edges + 1;
+        end
+        m_d  = vid_irq2m;
+        sy_d = va_vsync;
     end
 
     always @(negedge n_irq2) begin
@@ -287,8 +344,8 @@ module bk11_soc_tb;
             $display("COSIM FAIL");
             $finish;
         end
-        if (unmask_age < 512) begin
-            $display("BK11-ERROR: IRQ2 re-asserted %0d sys_clk after unmask -",
+        if (unmask_edges < 1) begin
+            $display("BK11-ERROR: IRQ2 re-asserted %0d sys_clk / 0 SYNCO edges after unmask -",
                      unmask_age);
             $display("BK11-ERROR: the async-cleared request must wait for the");
             $display("BK11-ERROR: next SYNCO edge, not retro-fire combinationally");

@@ -8,29 +8,30 @@ derive_pll_clocks
 derive_clock_uncertainty
 
 # CPU clock: a fabric toggle divider of the 96.65 MHz VCO (cpu_clkgen's
-# cpu_clk_r register): /32 = 3.02 MHz (BK-0010) or /24 = 4.03 MHz (BK-0011M),
-# DIP-1-selected at run time. Constrained at the FASTER /24 rate - an SDC is
-# static, /24 covers /32, and every cpu_clk<->sys_clk path is false-pathed
-# below anyway. Defined so TimeQuest analyses the (slow, non-critical) core
-# domain. Guarded so a node-name miss does not error the SDC - if empty,
-# check the register name in the fitter report.
+# cpu_clk_r register): /32 = 3.02 MHz (BK-0010), /24 = 4.03 MHz (BK-0011M) or
+# /16 = 6.04 MHz (turbo, PS/2 F12), selected at run time. Constrained at the
+# FASTEST rate - an SDC is static, so /16 must be the one declared or the
+# constraint is optimistic in turbo; /16 covers /24 and /32. Every
+# cpu_clk<->sys_clk path is false-pathed below anyway, so this bounds the
+# (slow, non-critical) core domain only. Guarded so a node-name miss does not
+# error the SDC - if empty, check the register name in the fitter report.
 # ----------------------------------------------------------------------------
 set cpu_div [get_registers {*u_clkgen|cpu_clk_r}]
 set vco     [get_pins {*altpll_inst|pll|clk[0]}]
 if {[get_collection_size $cpu_div] > 0 && [get_collection_size $vco] > 0} {
-    create_generated_clock -name cpu_clk -source $vco -divide_by 24 $cpu_div
+    create_generated_clock -name cpu_clk -source $vco -divide_by 16 $cpu_div
 }
 
 # Q-bus address latch: qbus_sdram captures the bus address transparently on the
 # SYNC strobe (as real multiplexed-bus peripherals do), so SYNC is a slow, logic-
-# derived clock (period = one CPU cycle, 248 ns at the faster 4.03 MHz mode).
-# Declare it and cut it from analysis - the captured address is
+# derived clock (period = one CPU cycle, 165.6 ns at the fastest 6.04 MHz turbo
+# mode). Declare it and cut it from analysis - the captured address is
 # stable by bus protocol when SYNC asserts (validated cycle-exact by the cosim),
 # so there is no real setup/hold relationship to time.
 # ----------------------------------------------------------------------------
 set qsync [get_registers {*vm1_qbus:core|sync_out}]
 if {[get_collection_size $qsync] > 0} {
-    create_clock -name qbus_sync -period 248.0 $qsync
+    create_clock -name qbus_sync -period 165.6 $qsync
     set_false_path -from [get_clocks {qbus_sync}]
     set_false_path -to   [get_clocks {qbus_sync}]
 }

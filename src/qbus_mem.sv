@@ -64,6 +64,11 @@ module qbus_mem #(
     input  logic        smk_en,     // DIP-8 SMK512 enable, latched during DCLO
                                     // hold (quasi-static); BOTH models (the SMK
                                     // is an МПИ expansion board - see mem_mapper)
+    input  logic        turbo,      // PS/2 F12 turbo mode (quasi-static, applied
+                                    // by ocbk_top only on a bus-idle edge): the
+                                    // 037 has stopped owning RAM (its no_steal),
+                                    // so this FSM replies for MK_RAM037 too, at
+                                    // the fixed N_TURBO count. See qbus_pkg.
 
     // ---- SMK512 IDE read data (Phase-8 IDE increment) ---------------------
     // smk_ide's registered TRUE-bus-value word: ~packed register data inside
@@ -178,6 +183,20 @@ module qbus_mem #(
     always_ff @(posedge sclk or posedge reset)
         if (reset) smk_en_q <= 1'b0;
         else       smk_en_q <= smk_en;
+
+    // turbo gets the same treatment for the same reason: it is quasi-static
+    // (ocbk_top only moves it on a bus-idle sclk edge) but fans out across the
+    // clock divider, the 037 and this module, so the fitter routes it far - and
+    // here it lands in the `selected` / wcnt / done-gate cones, all of which
+    // feed the reply. Registering it locally turns that route into a plain
+    // flop-to-flop path. The reset arm is only for X-freedom at power-up: turbo
+    // itself SURVIVES a warm reset (it is a user setting, like screen_mode),
+    // and this flop re-follows it one sclk after the release - thousands of
+    // sclk before the CPU leaves DCLO, so the transient is unobservable.
+    logic turbo_q;
+    always_ff @(posedge sclk or posedge reset)
+        if (reset) turbo_q <= 1'b0;
+        else       turbo_q <= turbo;
 
     mem_mapper #(.ADDR_BITS(ADDR_BITS)) u_map (
         .sclk(sclk), .rst(reset), .model_bk11(model_bk11), .smk_en(smk_en_q),
@@ -465,9 +484,42 @@ module qbus_mem #(
     logic [15:0] rdata;
     logic        dbg_romgate;   // diagnostic: an external-ROM read RPLY was extended
                                 // past the fixed N_ROM count (sim observability only)
+    logic        dbg_turbowait; // diagnostic: a TURBO RAM reply was extended by the
+                                // done-gate. Expected and routine (N_TURBO is
+                                // deliberately shorter than an SDRAM access) -
+                                // observability only, never a failure condition.
 
     wire is_read  = !din_n;
     wire is_write = !dout_n;
+    // ---- turbo: MK_RAM037 replied here instead of by the 037 ---------------
+    // Mutually exclusive with every other select by construction (sel_ram is a
+    // mem-region kind; sel_rom/sel_ext/sel_io/sel_ide/sel_fdd are other kinds
+    // or the I/O page), so it is a plain OR term in `selected` and needs no
+    // ranking. (Declared BEFORE its uses - Icarus requires it.)
+    wire sel_turbo = turbo_q && sel_ram;
+
+    // ALL the SDRAM-backed MEM-region legs while turbo is on: RAM (claimed
+    // above), ROM, and SMK512 RAM (MK_EXT). They share the one property that
+    // matters here - the reply point is a fixed count and the word comes from
+    // the SDRAM, whose access is 12..22 sclk end to end against 16 sclk per CPU
+    // cycle at 6.04 MHz. So in turbo they all take N_TURBO and they all EXPECT
+    // the done-gate to hold them sometimes, which is why a hold here is
+    // dbg_turbowait and not dbg_romgate.
+    //
+    // Treating them alike is not tidiness, it is required. Their authentic
+    // counts were calibrated against a 3-4 MHz machine, and two of them cannot
+    // survive the halved cycle: N_EXT = 1 relies on cpu_sdram_dp's early
+    // SYNC-time fetch beating the reply point, and at /16 the head start is
+    // gone - sim/smktime's turbo SMK-RAM leg trips the gate on the very first
+    // fetch. N_ROM = 2 is the same arithmetic one cycle further out. Since
+    // turbo is ahistorical anyway, the honest thing is one uniform count
+    // instead of three fidelity constants used outside their calibration.
+    //
+    // The I/O page is excluded (ovl_zone): those reads keep the N_ROM count for
+    // the 037 start-vector-assist reason spelled out at the wcnt load below,
+    // and 177716 is boot-critical.
+    wire turbo_mem = turbo_q && !ovl_zone && (sel_ram || sel_romx || sel_ext);
+
     // ROM contributes READS only: a write to ROM is not selected, so it gets no
     // RPLY -> the CPU's qbto timer expires (56..63 clocks) -> trap 4. This is
     // authentic mask/overlay-ROM behaviour (real ROMs never assert RPLY on a
@@ -488,8 +540,11 @@ module qbus_mem #(
                   | sel_ide     // IDE task file: reads AND writes replied
                                 // (BkEmu device semantics; the ROM/extent
                                 // coexistence keeps its own terms above)
-                  | sel_fdd;    // КНГМД stub: ditto (a real SMK's floppy
+                  | sel_fdd     // КНГМД stub: ditto (a real SMK's floppy
                                 // controller always replies there)
+                  | sel_turbo;  // TURBO: the 037 has stopped owning RAM, so
+                                // this FSM replies for MK_RAM037 - both
+                                // directions, at N_TURBO, done-gated below.
 
     // ---- the N=1 (calibrated SMK512 RAM) fast reply ------------------------
     // N_EXT = 1 means "RPLY follows the strobe inside the cycle" - the N_KBD=1
@@ -514,7 +569,12 @@ module qbus_mem #(
     // (The clamp is spelled inline at the wcnt load rather than as a named
     //  localparam - Quartus 11.0 and Icarus both refuse a module-level
     //  constant expression derived from an imported package parameter.)
-    wire ext_fast = (N_EXT == 1) && sel_ext && !ovl_zone
+    // !turbo_mem: in turbo this leg takes N_TURBO instead (see turbo_mem), and
+    // the N=1 reply could not be honoured there anyway - it depends on
+    // cpu_sdram_dp's early fetch beating the reply point, and at /16 the head
+    // start is gone. Excluding it here is what keeps the two mechanisms from
+    // disagreeing about which cycle the reply lands on.
+    wire ext_fast = (N_EXT == 1) && sel_ext && !ovl_zone && !turbo_mem
                   && ((is_read  && !m_smk_wo && mem_ready)
                    || (is_write && !m_smk_ro));
 
@@ -536,7 +596,7 @@ module qbus_mem #(
         fetch_stb <= 1'b0;
         if (reset) begin
             state <= S_IDLE; drive_data <= 1'b0; reply <= 1'b0; wcnt <= '0;
-            dbg_romgate <= 1'b0;
+            dbg_romgate <= 1'b0; dbg_turbowait <= 1'b0;
         end else begin
             unique case (state)
                 S_IDLE: begin
@@ -571,7 +631,16 @@ module qbus_mem #(
                         // in the HLT/ALL modes an extent-covered 177130-133
                         // access keeps its N_EXT count (the FDD stub only
                         // claims what nothing else replies to)
-                        wcnt  <= sel_vreg   ? 3'((N_VREG < 2 ? 2 : N_VREG) - 2)
+                        // TURBO ranks FIRST among the mem-region legs: it
+                        // replaces the authentic counts of all three
+                        // SDRAM-backed ones (RAM037's 037 grant, ROM's N_ROM,
+                        // MK_EXT's N_EXT) with the single N_TURBO - see
+                        // turbo_mem for why that is required and not merely
+                        // tidy. It cannot shadow the I/O-page or device legs:
+                        // turbo_mem excludes ovl_zone, and sel_vreg/sel_ide/
+                        // sel_fdd are not mem-region kinds.
+                        wcnt  <= turbo_mem  ? 3'((N_TURBO < 2 ? 2 : N_TURBO) - 2)
+                               : sel_vreg   ? 3'((N_VREG < 2 ? 2 : N_VREG) - 2)
                                : sel_ide    ? 3'(N_IDE-2)
                                : (sel_ext && !ovl_zone)
                                             ? 3'((N_EXT < 2 ? 2 : N_EXT) - 2)
@@ -620,15 +689,27 @@ module qbus_mem #(
                         // page (e.g. a HLT-mode 177716 read: SEL1 replies,
                         // the write-only extent fetches nothing).
                         if (((sel_romx || (sel_ext && !m_smk_wo)) && is_read
-                             || (sel_ext && !m_smk_ro && is_write))
+                             || (sel_ext && !m_smk_ro && is_write)
+                             || sel_turbo)             // turbo RAM, both directions
                             && !mem_ready) begin
                             // done-gate: the SDRAM word is late - hold RPLY
                             // (extends the cycle) instead of replying over stale
-                            // data / an unposted write. Covers ROM reads and SMK
-                            // RAM (MK_EXT) BOTH directions. Should never happen
-                            // at BK clock rates; the ROM-region golden diff / the
-                            // smk oracle catch it if it does.
-                            dbg_romgate <= 1'b1;
+                            // data / an unposted write. Covers ROM reads, SMK
+                            // RAM (MK_EXT) BOTH directions, and - in turbo - the
+                            // RAM this FSM has taken over from the 037.
+                            //
+                            // WHICH diagnostic depends on whether the hold was
+                            // EXPECTED. At the authentic rates it never should
+                            // be: dbg_romgate is the alarm, and sim/smktime
+                            // fails a run on it. In turbo the fixed count is
+                            // deliberately shorter than an SDRAM access
+                            // (N_TURBO's window vs 12..22 sclk), so a hold is
+                            // part of the design - "reply as soon as the word
+                            // is there" - and routing it to dbg_romgate would
+                            // destroy that flag's meaning everywhere. It goes to
+                            // dbg_turbowait instead: observable, never fatal.
+                            if (turbo_mem) dbg_turbowait <= 1'b1;
+                            else           dbg_romgate   <= 1'b1;
                         end else begin
                             reply <= 1'b1;
                             if (is_read) begin
@@ -646,9 +727,15 @@ module qbus_mem #(
                                                 & ovl_zone)
                                                ? ram_rdata : 16'h0000)
                                             | (sel_ide ? ide_rdata : 16'h0000);
-                                // SDRAM ROM/SMK data: u_dp drives; I/O incl.
-                                // the merged overlay reads: this FSM
-                                drive_data <= !((sel_romx || sel_ext) && !ovl_zone);
+                                // SDRAM ROM/SMK/turbo-RAM data: u_dp drives (it
+                                // fetched the word and owns the pad through
+                                // rdata_oe); I/O incl. the merged overlay
+                                // reads: this FSM. sel_turbo is a mem-region
+                                // kind, so ovl_zone is 0 there and the term is
+                                // unconditional - a turbo RAM read is driven
+                                // exactly as it is today under the 037.
+                                drive_data <= !((sel_romx || sel_ext || sel_turbo)
+                                                && !ovl_zone);
                                 fetch_stb  <= 1'b1;
                             end
                             // 177716 write-flag: cleared after read (rdata

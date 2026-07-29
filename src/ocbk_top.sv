@@ -78,7 +78,9 @@
 //   pLed[0]        : BK speaker activity (solid while a tone plays; audio tap).
 //   pLed[6]        : CMT tape-in mode (DIP 4; lit = the right jack is the
 //                    cassette port).
-//   pLed[5:1]      : unused (0).
+//   pLed[5]        : TURBO mode (PS/2 F12; lit = 6.04 MHz CPU with the 037's
+//                    cycle-stealing disabled).
+//   pLed[4:1]      : unused (0).
 module ocbk_top (
     input  logic        pClk21m,   // 21.47727 MHz crystal (PIN_28)
     output logic [7:0]  pLed,      // green LEDs   (1 = on)
@@ -242,6 +244,7 @@ module ocbk_top (
         .sys_clk    (sys_clk),
         .rst_n      (locked),
         .model_bk11 (model_bk11),
+        .turbo      (turbo_eff),       // PS/2 F12: /16 = 6.04 MHz, overrides model
         .cpu_clk    (cpu_clk),
         .cpu_clk_n  (cpu_clk_n),
         .dot_ena    (dot_ena),
@@ -284,6 +287,25 @@ module ocbk_top (
     logic [1:0] cmt_sr;
     always_ff @(posedge sys_clk) cmt_sr <= {cmt_sr[0], ~pDip[3]};
     wire cmt_mode = cmt_sr[1];
+
+    // --- turbo (Phase 9): toggled by the PS/2 F12 key, power-on default OFF.
+    //     Same quasi-static cpu_clk toggle + 2-FF resync as screen_mode above,
+    //     and it likewise SURVIVES a warm reset (it is a user setting, not
+    //     machine state). Turbo takes the CPU to /16 = 6.04 MHz AND tells the
+    //     037 to stop owning RAM (no_steal), which is the half that actually
+    //     makes it fast - see qbus_pkg's N_TURBO.
+    //
+    //     THE EXTRA STEP screen_mode DOES NOT NEED: the effective level only
+    //     moves while the Q-bus is IDLE, because turbo swaps the RAM reply
+    //     OWNER between the 037 and qbus_mem and a mid-transaction swap can
+    //     leave a cycle neither of them answers -> qbto -> a spurious trap 4
+    //     under the running program. That (plus the 2-FF resync) is src/
+    //     turbo_ctl.sv - a real module, not inline logic, so the testbenches
+    //     instantiate it instead of replicating it (the cpu_clkgen drift
+    //     lesson). Instantiated with the Q-bus nets further down, since a net
+    //     must not be used before its declaration.
+    logic       key_turbo;
+    logic       turbo_eff;
 
     // --- EPCS boot loader (flash blob -> SDRAM ROM region, before CPU release)
     logic        boot_active, boot_done, boot_ok;
@@ -453,6 +475,20 @@ module ocbk_top (
                                      // (NOT tri1 - a lone Z-idle OC net degenerates to
                                      // stuck-asserted on Cyclone I; see bk_kbd014 footer)
     wire        dmgo_n, bsy_n;
+
+    // turbo, resynced and qualified on a BUS-IDLE edge (see turbo_ctl.sv and
+    // the key_turbo block above). Power-on reset only: turbo is a user setting
+    // and survives the reset button, like screen_mode.
+    turbo_ctl u_turbo (
+        .sclk     (sys_clk),
+        .rst_n    (locked),
+        .key_turbo(key_turbo),
+        .sync_n   (sync_n),
+        .din_n    (din_n),
+        .dout_n   (dout_n),
+        .turbo    (turbo_eff)
+    );
+
     wire [2:1]  sel_n;              // CPU nSEL1/nSEL2 (177716/177714 selects) ->
                                      // qbus_mem; push-pull from the vm1.v local
                                      // hook, same rationale as virq_n above
@@ -489,6 +525,7 @@ module ocbk_top (
         .en_neg    (en_neg),
         .mem_ready (mem_ready),
         .ext_ram   (mem_ext_ram),      // BK-0011M window-1 banked RAM -> force A15 low
+        .no_steal  (turbo_eff),        // turbo: stop owning RAM (qbus_mem replies)
         .PIN_R     (~vid_rst_n),       // power-on reset only: free-runs across warm resets
         .PIN_C     (1'b0),
         .PIN_nAD   (ad_n),
@@ -549,7 +586,8 @@ module ocbk_top (
         .key_ar2  (key_ar2),
         .key_down (key_down),
         .key_stop (key_stop),
-        .key_scrmode (key_scrmode)   // Print Screen -> screen_mode toggle
+        .key_scrmode (key_scrmode),  // Print Screen -> screen_mode toggle
+        .key_turbo   (key_turbo)     // F12 -> turbo toggle (see turbo_eff above)
     );
 
     bk_kbd014 u_kbd (
@@ -770,6 +808,8 @@ module ocbk_top (
                                     //   hold above -> quasi-static here)
         .smk_en   (smk_en),         // DIP-8 SMK512 enable (same DCLO-hold latch
                                     //   as the model select above)
+        .turbo    (turbo_eff),      // PS/2 F12 turbo: this FSM owns the RAM reply
+                                    //   (the 037 is in no_steal) at N_TURBO
         .ide_rdata(ide_rdata),      // SMK IDE read-word merge (u_ide below)
         .boot_active(mem_boot_active),
         .bw_req   (mem_bw_req),
@@ -1004,8 +1044,9 @@ module ocbk_top (
     wire ide_led = (ide_led_cnt != 0) && !ide_blink[22];
     // pLed[7]: SMK IDE drive access (stretched + blinking).  pLed[6]: CMT
     // tape-in mode (DIP 4; lit = right jack is the cassette port).
+    // pLed[5]: TURBO mode (PS/2 F12; lit = 6.04 MHz, no 037 cycle-stealing).
     // pLed[0]: BK speaker activity (solid while a tone plays; audio bring-up
-    // tap).  pLed[5:1]: unused.
-    assign pLed    = {ide_led, cmt_mode, 4'b0, 1'b0, spk_active};
+    // tap).  pLed[4:1]: unused.
+    assign pLed    = {ide_led, cmt_mode, turbo_eff, 3'b0, 1'b0, spk_active};
 
 endmodule

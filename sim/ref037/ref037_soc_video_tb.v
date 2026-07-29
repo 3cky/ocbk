@@ -116,6 +116,7 @@ module ref037_soc_video_tb;
     wire        mem_ready;
     wire        va_vfetch, va_palstb, va_line_en, va_hgate, va_vgate;
     va_037_sync pr037 (
+        .no_steal(1'b0),   // turbo off: authentic 037 arbitration
         .clk(sys_clk), .en_pos(en_pos), .en_neg(en_neg), .mem_ready(mem_ready), .ext_ram(1'b0),
         .PIN_R(~dclo_cold), .PIN_C(1'b0),
         .PIN_nAD(ad), .PIN_nSYNC(sync), .PIN_nDIN(din), .PIN_nDOUT(dout),
@@ -220,6 +221,7 @@ module ref037_soc_video_tb;
     wire        fetch_stb;
 
     qbus_mem u_ms (
+        .turbo(1'b0),      // turbo off: RAM RPLY stays the 037's
         .cpu_clk  (~clk),            // as ocbk_top: FSM on the inverted CPU clock
         .reset    (~dclo),
         .ide_rdata(16'h0000),  // no SMK IDE device in this tb

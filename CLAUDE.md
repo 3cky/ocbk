@@ -154,8 +154,11 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   hand-written expected event list: BkEmu case algebra over ЛАТ/РУС ×
   ЗАГЛ/СТР × НР, СУ masking, АР2 + the silicon auto-274 code group,
   typematic suppression, multi-key `key_down`, СТОП strobes, the Print
-  Screen radial toggle (screen_mode), Scroll Lock now emitting no event
-  (CMT tape mode moved to DIP 4), parity-error and stale-prefix recovery.
+  Screen radial toggle (screen_mode), the **F12 radial toggle (turbo, §12d:
+  one toggle per press, typematic suppressed, never a matrix event, never in
+  the held-key list, and an E0-prefixed 07 must NOT be F12)**, Scroll Lock now
+  emitting no event (CMT tape mode moved to DIP 4), parity-error and
+  stale-prefix recovery.
 - `sim/run_audio.sh` — Phase-6 audio + tape unit oracles: `bk_audio_tb`
   (push-pull DAC pattern, mid-scale reset, activity one-shot, and the CMT-mode
   right-channel comparator network incl. the `cmt_in_pad` → `tape_lvl`
@@ -166,8 +169,13 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
 - `sim/run_clkgen.sh` — the Phase-7 `cpu_clkgen` unit oracle: BK-0010 (/32)
   mode **bit-identical** to a replica of the pre-Phase-7 `divc[4]` tap
   (enables included), the /24 BK-0011M rate exact, and a retarget sweep (no
-  half-period outside 12..16 sys_clk). The SoC tbs replicate the divider
-  locally, so this is the only sim coverage of the real chain.
+  half-period outside **8..16** sys_clk). The SoC tbs replicate the divider
+  locally, so this is the only sim coverage of the real chain. **Leg D is the
+  Phase-9 turbo rate** (/16 = 6.04 MHz): the steady half-period exact, turbo
+  OVERRIDING the model select both ways, and — because turbo is a LIVE control
+  unlike the DCLO-latched model — turbo flips at every count phase plus
+  turbo×model cross-flips. `dut0` has turbo tied 0 at the port, so leg A's
+  BK-0010 bit-identity is preserved by construction.
 - `sim/run_mapper.sh` — the Phase-7 `mem_mapper` unit oracle: BK-0010 mode
   swept over **all 64K addresses** against the pre-Phase-7 inline decode
   (before AND after banking writes — bk10 decode must be map-content-
@@ -337,7 +345,19 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   timing reset to 0, so S_SETTLE's first evaluation parked the backend
   in the DEAD-END `S_DISABLED` state on every reset, card present or
   not) after run_sd.sh alone had been run and passed.
-- `sim/bk11/run.sh` — the Phase-7 BK-0011M SoC **functional** oracle
+- `sim/bk11/run.sh` — the Phase-7 BK-0011M SoC **functional** oracle, **three
+  legs since Phase 9** (authentic /24, `+turbo`, `+turboflip`): the whole
+  contract below must pass unchanged in turbo — only the timing may move, so a
+  failure there means the reply-owner switch is wrong, not slow — and
+  `+turboflip` bangs on F12 THROUGHOUT the run, which is the only leg that can
+  kill a mutation of `turbo_ctl`'s bus-idle qualification (an unqualified swap
+  drops a reply mid-cycle → qbto → trap 4 → the vector-4 fail park). Note §12's
+  no-retro-fire guard now counts **SYNCO rising edges** since the unmask rather
+  than sys_clk: "the next SYNCO edge" is the actual contract and how far away
+  it is depends on the raster phase the program reaches the unmask at, so the
+  old 512-sys_clk threshold was only ever a proxy for one CPU rate (a turbo leg
+  lands a perfectly legal edge at ~502). Teeth-tested: the combinational-gate
+  mutation still fails it at 34 sys_clk / 0 edges.
   (data-checking, NOT a timing golden — ref037 keeps the timing-reference
   meaning): the `mem/gen_bk11_test.py` program (pinned parks: success
   **001004**, fail **001012**; vector 4 → fail) boots from the EXT window on
@@ -363,7 +383,13 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   word/odd-byte writes reach the latch, even-byte/banking writes don't,
   RESET preserves it; the trap-4 frame is NOT RTI-able — the aborted HALT
   entry pushes a mid-instruction PC — so the handler continues via R0).
-- `sim/romwr/run.sh` — the ROM-write-timeout functional oracle (BK-0010 SoC
+- `sim/romwr/run.sh` — the ROM-write-timeout functional oracle, **two legs
+  since Phase 9** (authentic /32 and `+turbo`); the turbo leg is the sharpest
+  test of the turbo `selected` change, because the program's whole point is
+  that RAM and ROM must behave DIFFERENTLY in the same FSM — the conditionless
+  clear marches out of RAM (which qbus_mem must now reply to) into ROM (which
+  must still get no reply), so a wrong term either hangs the clear or ends it
+  early. (BK-0010 SoC
   stack, data-checking, `COSIM PASS` at the pinned success park like `sim/bk11`).
   Proves a write to ROM gets NO reply → qbto → trap 4: the **conditionless
   "write until trap 4" screen-clear** (a counter-free `CLR (R0)+` marching into
@@ -406,6 +432,19 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   sed-patching a *copy* of `qbus_pkg.sv` (the `sim/evnt` idiom). Run it
   whenever `N_EXT`, the `qbus_mem` reply FSM or the `cpu_sdram_dp` issue path
   changes. **Mutation-tested ×5** (see the run.sh header).
+  **Two Phase-9 TURBO legs** (`+turbo`) make this the speed MEASUREMENT for
+  turbo mode as well — there is no real machine to compare against, so they are
+  a regression on the speed-up, not a calibration. The ordinary-RAM leg is the
+  one that matters (its loop is `MK_RAM037`, so it reads out both halves of the
+  feature at once): **4184 → 3527.8 cycles, 481.2 → 856.1 Hz, 1.78x**, and the
+  per-instruction `LOOP` spread — which IS the 037 steal beat, a fetch landing
+  at different phases of the 8-CLKIN grant slot — collapses from min=20/max=26
+  to min=18/max=19, every other instruction in the loop going exactly flat. The
+  residual 1 is not arbitration but the done-gate, routine by design at
+  `N_TURBO` = 2. A turbo golden showing a spread of ~6 again would mean
+  `no_steal` is not reaching the arbiter. **The SMK-RAM turbo leg is what found
+  that `N_EXT` = 1 cannot survive /16** — it tripped `dbg_romgate` on its first
+  fetch — which is why `turbo_mem` covers MK_EXT too.
 - `sim/vregtime/run.sh` — **slow (~1 min), not in `make sim`**: the Phase-9
   **177662 write-time oracle**, same shape as `sim/smktime` on a stock
   BK-0011M stack (smk_en=0, /24, port-2 contention, boot via the top-ROM
@@ -505,7 +544,11 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   **`+smk +sdspi`** swaps the disk model for the real
   `sd_backend`+`sd_model` SPI stack (a runtime mux in the tb): attach +
   the AltPro geometry parse ride the full card-init + SPI path under
-  the real BIOS boot, same pass conditions. **`+smk10`** (bk10+SMK) boots
+  the real BIOS boot, same pass conditions. **`+turbo`** (Phase 9) composes
+  with every other leg and runs it at /16 = 6.04 MHz with the 037 out of the
+  RAM path: this is the only oracle that executes REAL MONITOR/BOS/BIOS code,
+  so it is the one that answers "does a real ROM still boot when qbus_mem owns
+  the RAM reply", which no synthetic program can. **`+smk10`** (bk10+SMK) boots
   the SAME real BIOS on a BK-0010 stack: model_bk11=0, the /32 rate, the
   bk10 ROM blob plus the bk11 blob for the BIOS image at 0x3A000 (both
   are flash-resident on hardware whatever DIP 1 says); pass conditions as
@@ -561,6 +604,13 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   so that oracle is the divider's only sim coverage). In /32 mode CPU edges
   coincide with the 037 `en_pos`/`en_neg` strobes (CPU=CLKIN/2, the reference
   phase); in /24 they walk a deterministic 48-sys_clk pattern.
+  **A third rate, `turbo` = /16 = 6.0405 MHz, is Phase 9's TURBO mode** (PS/2
+  F12; see the turbo bullet). It OVERRIDES the model select and, unlike
+  `model_bk11`, is a LIVE control — it retargets under a running CPU, which the
+  `>=` wrap makes glitch-free (a mid-count change only stretches or shrinks the
+  current half-period, now to 8..16 sys_clk). The fixed `divc` chain is NOT
+  model- or turbo-dependent and must stay that way: 037 CLKIN is always
+  sys_clk/16, which is why video and the 50 Hz EVNT do not move in turbo.
   **The /24 rate is 4.0270 MHz against a real BK-0011M's 4.000 — +0.67 %**, an
   unavoidable consequence of the one-PLL rule and the board's 21.47727 MHz
   crystal. The Phase-9 tone calibration measured this directly (two independent
@@ -633,7 +683,12 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   tap; was the PS/2 Scroll Lock key through Phase 8, see the tape bullet).
   **DIP 2 is unused** — it
   forced the on-chip test ROM, removed 2026-07-10 (ROM is always the loaded
-  SDRAM image).
+  SDRAM image). **TURBO is NOT a DIP** — it is the PS/2 **F12** key, with
+  `pLed[5]` as its indicator (see the turbo bullet). Like screen_mode it is a
+  live, power-on-only radial toggle rather than a DCLO-latched config bit, so
+  it survives the reset button and needs no reset to take effect. Current LED
+  map: `pLed[7]` = SMK drive access, `[6]` = CMT mode, `[5]` = turbo,
+  `[0]` = speaker activity, `[4:1]` unused.
 - **Authentic DRAM power-on pattern (`src/ram_init.sv`):** the board SDRAM has
   no defined power-on state, so before this the BK startup screen showed FPGA
   garbage / stale content (worst on a model-switch warm reset, where DIP 1
@@ -676,8 +731,11 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
     while РУС/ЛАТ are ordinary matrix keys emitting 016/017 — mapped here as
     CapsLock = the ЗАГЛ/СТР trigger, LCtrl = РУС, Home = ЛАТ, Insert = СУ
     (held), either Shift = НР, either Alt = АР2, **Delete = СТОП**,
-    **Print Screen = screen_mode toggle** (a radial control output like
-    СТОП, never a matrix code, power-on-only — see the screen_mode note;
+    **Print Screen = screen_mode toggle** and **F12 = turbo toggle** (both
+    radial control outputs like СТОП, never a matrix code, power-on-only —
+    see the screen_mode note and the turbo bullet; F12 is scancode 0x07,
+    single byte, and its branch is `!got_e0`-guarded because the F-key rows
+    in the code table are written E0-agnostic;
     Scroll Lock is now unused — CMT tape mode moved to **DIP 4**, see the
     tape note);
   - case algebra per BkEmu (`latin ^ (caps | shift)` on letters, СУ = `&037`
@@ -1263,6 +1321,93 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   placeholder permanently in BOTH directions — no fidelity risk, and **not** a
   candidate for beam-raced-palette timing artefacts (that was the hypothesis
   the oracle was built to test, and it falsified it).
+- **TURBO mode (Phase 9): 6.04 MHz CPU + no 037 cycle-stealing, PS/2 **F12**,
+  `pLed[5]` — DONE & CONFIRMED ON HARDWARE 2026-07-29.** The one deliberately
+  **NON-AUTHENTIC** feature in the design —
+  every timing golden is defined at turbo = 0, and nothing constrains turbo
+  behaviour beyond "the program still executes correctly". Two halves, and they
+  only work together:
+  * **the clock** — `cpu_clkgen`'s third rate, /16 = 6.0405 MHz (see the
+    clocking bullet). Overrides the model select; live, not DCLO-latched.
+  * **the arbitration** — `va_037_sync`'s new `no_steal` forces the *decoded*
+    A15 high (`a15_gnt`, a separate wire — the `a15_037` line itself is a
+    verbatim anchor in `sim/grantfit/patch037.py`, leave it byte-for-byte), so
+    the 037 treats every CPU access as "not mine": `grant_raw` folds to 0,
+    RASEL never rises, TRPLY/RPLY stay 0. `qbus_mem` takes the RAM reply over
+    (`sel_turbo`) at the fixed `N_TURBO`.
+  **The clock alone would barely help, which is the whole point of doing both:**
+  the 037 grants one slot per 8 CLKIN and CLKIN is a FIXED sys_clk/16, so a slot
+  that costs 4 CPU cycles at /32 costs **8** at /16 — doubling the clock roughly
+  doubles the stall in CPU cycles. Measured (`sim/smktime`, ordinary-RAM leg —
+  the same loop resident in 037-fronted RAM, at each authentic rate and in
+  turbo):
+
+  |            | authentic          | turbo /16            | speed-up | = clock x cycles |
+  |------------|--------------------|----------------------|----------|------------------|
+  | BK-0011M /24 | 481.2 Hz (4184 cyc) | 856.1 Hz (3527.8 cyc) | **1.78x** | 1.50 x 1.186 |
+  | BK-0010 /32  | 384.5 Hz (3928 cyc) | 856.1 Hz (3527.8 cyc) | **2.23x** | 2.00 x 1.113 |
+
+  **The two factors move in opposite directions across the models, and that is
+  the fixed-slot argument showing up in the data:** a BK-0010 gains more overall
+  (its clock ratio is 2.0) but LESS from removing the steal (1.113 vs 1.186),
+  because an 8-CLKIN grant slot is a fixed wall-clock time and therefore costs
+  4 CPU cycles at /32 against 5.33 at /24 — the faster machine was losing more
+  cycles to arbitration to begin with. The per-instruction spread that IS the
+  steal beat says the same: min=20/max=23 on bk10 and min=20/max=26 on bk11,
+  both collapsing to min=18/max=19 in turbo. The turbo cycle count is
+  *identical* (21167) in both models, which is the cross-check — in turbo
+  neither the rate nor the memory path depends on the model.
+  **Why it is cheap here and would not be on real hardware:** `cpu_grant` is
+  already unconnected (`ocbk_top`) — the SDRAM fetch rides `qbus_mem`'s
+  `sel_ram`, so the 037's ONLY functional contribution to a RAM access is the
+  RPLY timing. Every RASEL-derived DRAM pin is unconnected too, and the whole
+  video/EVNT side (PC/VA/LC/HGATE/VGATE/WTI/SYNCO) advances on
+  `en_pos`/`en_neg` and never looked at RASEL. **So the picture and the 50 Hz
+  EVNT/IRQ2 are bit-identical in turbo** — a real-time-timed effect keeps real
+  time while CPU-timed loops run 1.78x faster, which is the differential to
+  check on the board.
+  **The reply-owner swap is the dangerous part, and `src/turbo_ctl.sv` is why it
+  is not:** if the level moved mid-cycle, an access could start under one owner
+  and finish under the other — and the bad direction is SILENT (the 037 declines
+  the grant, qbus_mem is past its detection edge, nobody replies, qbto turns it
+  into a spurious trap 4 under the running program: exactly what hitting F12
+  during a game would do). So `turbo_ctl` re-registers the level only on an edge
+  where SYNC+DIN+DOUT are ALL released, for two consecutive sclk (these are
+  resolved wired-AND nets). SYNC framing covers the DATIO RMW gap. It is a real
+  module, not inline logic, so the tbs instantiate it (the `cpu_clkgen` replica
+  lesson) — `sim/bk11`'s `+turboflip` leg is the only thing that can kill a
+  mutation of it.
+  **`N_TURBO` = 2 covers ALL THREE SDRAM-backed mem-region legs in turbo — RAM,
+  ROM and SMK RAM (`turbo_mem`) — and that uniformity is required, not tidy.**
+  The authentic counts were calibrated against a 3–4 MHz machine and two of them
+  cannot survive the halved cycle: `N_EXT` = 1 relies on `cpu_sdram_dp`'s early
+  SYNC-time fetch beating the reply point, and at /16 the head start is gone
+  (found in sim — `sim/smktime`'s turbo SMK leg tripped the gate on its first
+  fetch, so `ext_fast` is now `!turbo_mem`-gated); `N_ROM` = 2 is the same
+  arithmetic one cycle out. At /16 an SDRAM access (12..22 sclk) is comparable
+  to one CPU cycle (16 sclk), so **the `mem_ready` done-gate fires routinely and
+  that is BY DESIGN** — the reply lands as soon as the word is there. Those
+  holds therefore raise **`dbg_turbowait`, never `dbg_romgate`**: `dbg_romgate`
+  means "a fixed-N reply was extended UNEXPECTEDLY" and `sim/smktime` fails a
+  run on it, so routing turbo through it would destroy the flag everywhere.
+  The I/O page (`ovl_zone`) is excluded — those reads keep `N_ROM` for the 037
+  start-vector-assist reason, and 177716 is boot-critical.
+  Turbo **survives a warm reset** (a user setting, like `screen_mode`: the
+  `kbd_ps2bk` toggle is power-on-init only and outside the ACLO reset;
+  `turbo_ctl`'s reset is the PLL lock, never `dclo_n`). It works in **both
+  models and with the SMK512**. `ps2_rx`'s mid-frame dead-man was widened 10 →
+  11 bits because it is counted in cpu_clk: at 10 bits turbo gave ~170 µs, only
+  ~1.7 PS/2 bit-times.
+  Oracles: `sim/run_clkgen.sh` leg D (the /16 rate + turbo×model retarget
+  sweep), `sim/run_ps2.sh` §12d (the F12 radial toggle), `sim/bk11/run.sh`
+  (`+turbo` = the whole contract at /16, `+turboflip` = F12 banged throughout
+  the run), `sim/romwr/run.sh +turbo` (the sharpest test of the `selected`
+  change — RAM must now be replied to HERE while a ROM write must still trap,
+  and the conditionless screen clear only ends because of that trap),
+  `sim/smktime/run.sh` (the two turbo legs = the speed measurement + its
+  golden), `sim/run_boot_check.sh +turbo` (the real MONITOR/BOS/BIOS firmware
+  at /16). Everything else must be **byte-identical at turbo = 0** and is —
+  `make sim` green, and `sim/grantfit`'s baseline still reproduces Σ|Δ| = 33.0.
 - **Beam-raced palette skew: QUANTIFIED AND LOCALISED, NOT FIXED
   (2026-07-26).** Demos like Babylona (`~/projects/other/bk/Babylona/`) paint
   one unrolled block per scanline with no resync, so the block cost IS the
@@ -1528,14 +1673,25 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   the ref037 program + `golden_037.txt` and the gen_mem RAM test now include an
   RMW block with a value self-check (a wrong result parks at a distinct fail PC,
   which breaks the golden diff). Keep RMW coverage in any future bus-path oracle.
-- **CDC for SDRAM:** the wait-state FSM (`cpu_clk`) launches an SDRAM access via a
-  request-*toggle* into the `sys_clk` adapter; read data is sampled back at the
-  fixed RPLY point. This is safe while a worst-case access (~200 ns, incl. a
-  refresh collision) finishes inside the RPLY window = (N_RAM-2) CPU clocks — ~3x
-  margin at 3.02 MHz, ~1.6x at 6 MHz turbo, breaking only above ~10 MHz CPU clock
-  (NOT "one CPU cycle" — the window is ~2 cycles). There is currently **no
-  interlock**: a margin violation would latch stale data rather than extend RPLY,
-  so re-validate at the 4/6 MHz rates (Phase 7) or add a done-gate first.
+- **CDC for SDRAM — the "no interlock" worry is CLOSED; this bullet described
+  the retired `qbus_sdram`, not the shipped path.** It used to say the wait FSM
+  launched an access through a request-*toggle* into the `sys_clk` adapter and
+  that a margin violation would latch stale data rather than extend RPLY, so
+  the 4/6 MHz rates needed re-validating or a done-gate. Both halves are now
+  wrong. **There is no such toggle** in the shipped design: `qbus_sdram` is out
+  of the build (not in `ocbk_common.qsf`), and `qbus_mem`/`cpu_sdram_dp` share
+  `sclk` with the strobes — `cpu_clk` is a *divider* of `sys_clk`, same tree,
+  deterministic phase, not an asynchronous domain. **And the done-gate exists**
+  on every leg: `mem_ready` gates the 037's RPLY for MK_RAM037
+  (`va_037_sync`'s `PIN_nRPLY`) and `qbus_mem`'s own reply point for ROM,
+  MK_EXT and turbo RAM. A late word therefore EXTENDS the cycle; it can never
+  be latched stale. What actually changes as the clock rises is only how OFTEN
+  the gate fires — which is why turbo routes its (expected) holds to
+  `dbg_turbowait` and keeps `dbg_romgate` as the alarm. Turbo mode is the
+  re-validation that bullet asked for, and the answer was that only `N_EXT` = 1
+  needed retiring at /16 (see the turbo bullet). Note the old "~1.6x at 6 MHz"
+  figure was pessimistic anyway: it used `(N-2)` CPU clocks and ignored the
+  DIN→detection half-period; the real window is `7 + 16(N-1)` sys_clk.
   `ocbk_constrains.sdc` false-paths both directions
   of the `cpu_clk`↔`sys_clk` crossing. Reset is gated on SDRAM `init_done` (CPU held
   in reset until the controller's ~200 µs init completes).

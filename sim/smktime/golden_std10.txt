@@ -1,0 +1,14 @@
+HALF 1 cycles=3928
+HALF 2 cycles=3928
+HALF 3 cycles=3928
+HALF 4 cycles=3928
+HALF 5 cycles=3928
+HALF 6 cycles=3928
+LOOP 002062 n=6 min=29 max=29
+LOOP 002064 n=6 min=10 max=10
+LOOP 002066 n=6 min=15 max=15
+LOOP 002070 n=6 min=14 max=14
+LOOP 002072 n=1152 min=20 max=23
+LOOP 002074 n=6 min=15 max=15
+EXTRD fast=0 slow=0 early=0
+RESULT halves=6 cycles=23568 avg=3928.0 freq=384.5 Hz

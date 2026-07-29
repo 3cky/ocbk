@@ -36,7 +36,13 @@ module ps2_rx (
     // frame receiver
     logic [3:0]  nbit  = '0;       // 0..10
     logic [10:0] shreg = '0;       // {stop, parity, data[7:0], start}
-    logic [9:0]  tout  = '0;       // dead-man: ~340 us at 3.02 MHz
+    // Dead-man for a half-received frame. 11 bits: ~680 us at 3.02 MHz, ~510 at
+    // 4.03, ~340 at the 6.04 MHz turbo rate - it is counted in cpu_clk, so it
+    // has to be sized for the FASTEST rate. At 10 bits turbo gave ~170 us =
+    // only ~1.7 PS/2 bit-times (the bus runs at 10-16 kHz), close enough to a
+    // stretched clock-low period to false-abort a good frame. Erring long is
+    // free: this only ever recovers from a frame that was already lost.
+    logic [10:0] tout  = '0;
 
     // shreg after the 11th shift: [10]=stop [9]=parity [8:1]=data [0]=start
     wire [10:0] frame  = {ps2d, shreg[10:1]};
@@ -56,7 +62,7 @@ module ps2_rx (
             end else
                 nbit <= nbit + 1'b1;
         end else if (nbit != 0) begin
-            // mid-frame dead-man: abandon after ~340 us without a clock edge
+            // mid-frame dead-man: abandon after the window above with no edge
             tout <= tout + 1'b1;
             if (&tout)
                 nbit <= '0;

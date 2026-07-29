@@ -22,7 +22,13 @@ framebuffer in SDRAM** storing the 4-bit physical colour {R1,B,G,R0} per
 pixel, and scanned out at **1024×768@60** (×2H/×3V integer scale, 6-bit R-2R
 VGA DAC). `screen_mode` (colour-256 / mono-512, the physical monitor cable
 switch on a real BK) is toggled by the PS/2 **Print Screen** key (power-on
-default = colour-256). The BK ROM always runs from the loaded SDRAM image; if
+default = colour-256). The PS/2 **F12** key toggles **turbo mode** (`pLed[5]`):
+a 6.04 MHz CPU with the 037's DRAM cycle-stealing disabled — measured
+**1.78x** faster than the authentic BK-0011M rate and **2.23x** than the
+BK-0010 one (both halves matter: the clock ratio alone would be 1.5x / 2.0x). It is the one deliberately non-authentic feature here —
+video and the 50 Hz frame interrupt are untouched, so a real-time-timed effect
+keeps real time while the CPU runs faster. It works in both models, applies
+live (no reset needed) and survives the reset button. The BK ROM always runs from the loaded SDRAM image; if
 the flash blob fails validation the CPU is held in reset (no on-chip
 fallback). **DIP 1 selects the model** (OFF = BK-0010, ON = BK-0011M — Phase
 7 done: the 4.03 MHz CPU clock, the 177716 banking mapper, the 177662
@@ -158,7 +164,8 @@ ROM always runs from the loaded SDRAM image).
 - **pLed[6]** — CMT tape-in mode (DIP 4; lit = the right jack is the cassette
   port).
 - **pLed[0]** — BK speaker activity (solid while a tone plays; audio bring-up tap).
-- **pLed[5:1]** — unused.
+- **pLed[5]** — turbo mode (PS/2 F12; lit = 6.04 MHz CPU, no 037 cycle-stealing).
+- **pLed[4:1]** — unused.
 
 ## Known items (for later phases)
 

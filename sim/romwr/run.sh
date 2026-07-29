@@ -24,7 +24,16 @@ iverilog -g2012 -o "$SP/romwr.vvp" -s romwr_tb \
    ../../src/qbus_mem.sv ../sdram_model.sv \
    romwr_tb.v 2>&1 | grep -v 'sorry:' || true
 
-vvp -n "$SP/romwr.vvp" 2>/dev/null | tee "$SP/out.txt" | grep -E "ROMWR-ERROR|COSIM" || true
+run_leg () {   # $1 = label, $2 = vvp plusargs
+    vvp -n "$SP/romwr.vvp" $2 2>/dev/null | tee "$SP/out.txt" \
+        | grep -E "ROMWR-ERROR|COSIM" || true
+    grep -q '^COSIM PASS$' "$SP/out.txt" \
+        || { echo "ROM-write-timeout oracle ($1): FAIL" >&2; exit 1; }
+    echo "ROM-write-timeout oracle ($1): PASS"
+}
 
-grep -q '^COSIM PASS$' "$SP/out.txt" || { echo "ROM-write-timeout oracle: FAIL" >&2; exit 1; }
-echo "ROM-write-timeout oracle: PASS"
+run_leg "authentic /32" ""
+# Phase-9 turbo leg: in turbo the SAME FSM replies for RAM and must still NOT
+# reply for a ROM write.  The conditionless screen clear is the differential -
+# it only ends because the march into ROM traps.
+run_leg "turbo /16"     "+turbo"

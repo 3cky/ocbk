@@ -22,7 +22,7 @@ module ps2_tb;
 
     logic [7:0] rx_byte;
     logic       rx_stb;
-    logic       key_stb, key_ar2, key_down, key_stop, key_scrmode;
+    logic       key_stb, key_ar2, key_down, key_stop, key_scrmode, key_turbo;
     logic [6:0] key_code;
 
     ps2_rx u_rx (
@@ -33,7 +33,8 @@ module ps2_tb;
     kbd_ps2bk u_tr (
         .clk(clk), .aclo_n(1'b1), .ps2_byte(rx_byte), .ps2_stb(rx_stb),
         .key_stb(key_stb), .key_code(key_code), .key_ar2(key_ar2),
-        .key_down(key_down), .key_stop(key_stop), .key_scrmode(key_scrmode)
+        .key_down(key_down), .key_stop(key_stop), .key_scrmode(key_scrmode),
+        .key_turbo(key_turbo)
     );
 
     // ---- device-side frame sender (~16 kHz clock, data before fall) --------
@@ -129,6 +130,15 @@ module ps2_tb;
         if (key_scrmode !== v) begin
             errors = errors + 1;
             $display("PS2-ERROR: key_scrmode=%b, want %b (%s)", key_scrmode, v, what);
+        end
+    end
+    endtask
+
+    task check_turbo (input v, input string what);
+    begin
+        if (key_turbo !== v) begin
+            errors = errors + 1;
+            $display("PS2-ERROR: key_turbo=%b, want %b (%s)", key_turbo, v, what);
         end
     end
     endtask
@@ -235,6 +245,25 @@ module ps2_tb;
         //      a make/break pair must emit no matrix event - the scoreboard
         //      flags any unexpected key_stb.
         mk(8'h7E);  brk(8'h7E);
+
+        // 12d: F12 (07, single byte, NO E0) toggles turbo mode - the same
+        //      radial shape as Print Screen: one toggle per press, typematic
+        //      suppressed by the _down level, and NO matrix event ever (the
+        //      scoreboard flags any unexpected key_stb, and F12 must not enter
+        //      the held-key list either, so key_down must stay 0 throughout).
+        check_turbo(1'b0, "turbo power-on default = off");
+        mk(8'h07);   check_turbo(1'b1, "F12 press 1 -> turbo on");
+        check_down(1'b0, "F12 is not a matrix key (key_down)");
+        brk(8'h07);  check_turbo(1'b1, "release holds turbo");
+        mk(8'h07);   check_turbo(1'b0, "F12 press 2 -> turbo off");
+        brk(8'h07);
+        // typematic: two makes without an intervening break flip only once
+        mk(8'h07);   mk(8'h07);  check_turbo(1'b1, "F12 typematic = one toggle");
+        brk(8'h07);  check_turbo(1'b1, "typematic release holds");
+        mk(8'h07);   brk(8'h07); check_turbo(1'b0, "F12 back to turbo off");
+        // an E0-prefixed 07 is NOT F12 (the branch is !got_e0-guarded, unlike
+        // the E0-agnostic F-key rows in the code table): no toggle, no event.
+        mke(8'h07);  brke(8'h07); check_turbo(1'b0, "E0 07 is not F12");
 
         // 13: parity-corrupted frame is dropped (no event)
         send_frame(8'h1C, 1'b0);          // bad 'a' make

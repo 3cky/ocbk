@@ -93,6 +93,7 @@ va_037 dut (
 assign vgate = dut.VGATE;
 `else
 va_037_sync dut (
+    .no_steal(1'b0),   // turbo off: authentic 037 arbitration
    .clk       (sys_clk),
    .en_pos    (en_pos),
    .en_neg    (en_neg),

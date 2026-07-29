@@ -64,6 +64,8 @@ module va_037_sync #(
     input  logic        mem_ready,  // RPLY done-gate (1 = no-op / bit-identical)
     input  logic        ext_ram,    // BK-0011M window-1 banked RAM (a15 force);
                                     // 0 = bit-identical to the pre-Phase-7 decode
+    input  logic        no_steal,   // TURBO: stop owning RAM entirely (see a15_037);
+                                    // 0 = bit-identical to the authentic arbiter
 
     input  logic        PIN_R,      // reset, active high
     input  logic        PIN_C,      // test clock select
@@ -142,11 +144,44 @@ module va_037_sync #(
    // core stays bit-identical to the reference (all ref037 goldens invariant).
    wire a15_037 = A[15] & ~ext_ram;
 
+   // ---- TURBO (Phase 9, non-authentic): stop owning RAM --------------------
+   // no_steal forces the DECODED A15 high, i.e. the 037 treats every CPU access
+   // as "not mine": grant_raw folds to 0, so RASEL never rises, TRPLY never
+   // sets, RPLY stays 0 and PIN_nRPLY keeps only its 177664 ROE|RWR terms.
+   // There is then no grant slot to wait for - which is the whole point, since
+   // a slot is a FIXED 8 CLKIN and would cost 8 CPU cycles at the /16 turbo
+   // rate against 4 at /32. qbus_mem takes the RAM reply over at the fixed
+   // N_TURBO count (see qbus_pkg); the two sets match exactly, because A15==0
+   // is MK_RAM037 in every configuration and ext_ram is the window-1 case.
+   //
+   // Nothing else moves. Everything the 037 still owns is decoded separately:
+   // its own 177664 register (ROE/RWR), the 177716 AD15 start-vector assist,
+   // PIN_nBS, and the entire video/EVNT side (PC, VA, LC, HGATE/VGATE, WTI,
+   // SYNCO) which advances on en_neg/en_pos and never looked at RASEL. The
+   // RASEL-derived DRAM pins (PIN_A/nCAS/nRAS/nWE) and cpu_grant are all
+   // unconnected in ocbk_top - the SDRAM fetch is driven by qbus_mem's sel_ram.
+   // So EVNT/IRQ2 stays exactly 50 Hz and the picture is untouched in turbo.
+   //
+   // Registered locally: quasi-static but high fanout from the top (the
+   // model_bk11_q idiom), and it lands in a sys_clk cone whose slack is already
+   // the design's worst. The 1-cycle lag cannot matter - ocbk_top only moves
+   // the level on a bus-idle edge, where grant_raw is 0 either way. RESET is
+   // mandatory, not stylistic: an unreset register in this module makes RASEL
+   // go X and the sim hang (the CLAUDE.md experiment note).
+   //
+   // The a15_037 line above is left byte-for-byte intact on purpose: it is a
+   // verbatim anchor in sim/grantfit/patch037.py (A_DECL).
+   logic no_steal_q;
+   always_ff @(posedge clk)
+      if (RESET) no_steal_q <= 1'b0;
+      else       no_steal_q <= no_steal;
+   wire a15_gnt = a15_037 | no_steal_q;
+
    // ---- the grant request, as the 037 latches it (see GRANT_SETUP) ---------
    // RPLY is deliberately NOT delayed with the rest: it is the handshake
    // interlock ("the previous access has not been taken yet"), not part of the
    // request, and delaying it would model something else entirely.
-   wire        grant_raw = ~(PIN_nSYNC | a15_037 | (PIN_nDIN & PIN_nDOUT));
+   wire        grant_raw = ~(PIN_nSYNC | a15_gnt | (PIN_nDIN & PIN_nDOUT));
    logic [2:0] grant_sr;
    always_ff @(posedge clk)
       if (RESET)                grant_sr <= 3'b000;
@@ -199,7 +234,7 @@ module va_037_sync #(
    // Phase-3 taps
    logic RASEL_d;
    always_ff @(posedge clk) RASEL_d <= RASEL;
-   assign cpu_grant = RASEL & ~RASEL_d & ~PIN_nSYNC & ~a15_037;  // CPU-access grant edge
+   assign cpu_grant = RASEL & ~RASEL_d & ~PIN_nSYNC & ~a15_gnt;  // CPU-access grant edge
    assign video_va  = VA[13:1];
 
    // Phase-4 taps: pure reads of existing state, no logic change.

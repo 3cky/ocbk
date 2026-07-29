@@ -147,6 +147,7 @@ module vreg_time_tb;
     wire        mem_ext_ram;
     wire        va_vfetch, va_line_en, va_hgate, va_vgate;
     va_037_sync pr037 (
+        .no_steal(1'b0),   // turbo off: authentic 037 arbitration
         .clk(sys_clk), .en_pos(en_pos), .en_neg(en_neg), .mem_ready(mem_ready),
         .ext_ram(mem_ext_ram),
         .PIN_R(~dclo_cold), .PIN_C(1'b0),
@@ -183,6 +184,7 @@ module vreg_time_tb;
     wire        stop_block;
 
     qbus_mem u_ms (
+        .turbo(1'b0),      // turbo off: RAM RPLY stays the 037's
         .cpu_clk  (~clk),            // as ocbk_top: FSM on the inverted CPU clock
         .reset    (~dclo),
         .ide_rdata(16'h0000),

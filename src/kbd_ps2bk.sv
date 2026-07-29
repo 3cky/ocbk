@@ -23,6 +23,11 @@
 //                            like СТОП - never a matrix code; power-on init
 //                            only (survives ACLO/warm reset), matching a real
 //                            BK's physical monitor-cable switch.
+//   F12 (07, no E0)       -> key_turbo toggle: turbo mode on/off (6.04 MHz CPU
+//                            with the 037's cycle-stealing disabled). Same
+//                            radial shape as Print Screen - never a matrix
+//                            code, never in the held-key list, power-on init
+//                            only, so the setting survives a warm reset.
 //   Scroll Lock (7E)      -> unused. CMT tape-in mode moved to DIP 4 in
 //                            ocbk_top (live ~pDip[3] read; through Phase 8 it
 //                            was a key_cmt toggle here, the esemsx3 CmtScro
@@ -59,7 +64,8 @@ module kbd_ps2bk (
     output logic       key_ar2,
     output logic       key_down,   // any-key-held level (177716 bit 6)
     output logic       key_stop,   // 1-clk: СТОП make -> nIRQ1 one-shot
-    output logic       key_scrmode // level: display-mode toggle (Print Screen)
+    output logic       key_scrmode,// level: display-mode toggle (Print Screen)
+    output logic       key_turbo   // level: turbo-mode toggle (F12)
 );
 
     // ---- prefix tracking --------------------------------------------------
@@ -80,8 +86,11 @@ module kbd_ps2bk (
     logic stop_down   = 1'b0;      // СТОП key level (repeat suppression)
     logic scrmode     = 1'b0;      // display-mode toggle; power-on = colour-256
     logic prtsc_down  = 1'b0;      // Print Screen level (repeat suppression)
+    logic turbo       = 1'b0;      // turbo toggle; power-on = OFF (authentic rate)
+    logic f12_down    = 1'b0;      // F12 level (repeat suppression)
     wire  mod_shift   = mod_shift_l | mod_shift_r;
     assign key_scrmode = scrmode;
+    assign key_turbo   = turbo;
 
     // ---- held-key list (code-producing keys only) ---------------------------
     // 4 slots of {valid, e0, scan}; a make already present = typematic repeat.
@@ -268,6 +277,15 @@ module kbd_ps2bk (
                 else if (got_e0 && ps2_byte == 8'h7C) begin
                     if (!got_f0 && !prtsc_down) scrmode <= ~scrmode;
                     prtsc_down <= !got_f0;
+                end
+                // -- F12 (07, single byte, no E0): toggle turbo mode on make.
+                //    Same radial shape as Print Screen. The !got_e0 guard is
+                //    deliberate: the F-key rows in the table above are written
+                //    x_x_ (E0-agnostic), so an unguarded 07 branch would also
+                //    swallow a stray E0-prefixed 07.
+                else if (!got_e0 && ps2_byte == 8'h07) begin
+                    if (!got_f0 && !f12_down) turbo <= ~turbo;
+                    f12_down <= !got_f0;
                 end
                 // -- code-producing keys --------------------------------------
                 else if (got_f0) begin

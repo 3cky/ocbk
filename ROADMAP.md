@@ -1080,9 +1080,42 @@ is not a single peripheral:
   slower than the pre-fix firmware.
   The PALTST15 harness (`sim/paltst/`, `doc/PALTST15.MAC`/`.EXE`) is not in the
   tree; the recipe for rebuilding it survives in the project memory note.
-- Cycle-accuracy regression vs reference traces; turbo (6 MHz) mode.
+- **Status: TURBO MODE DONE & CONFIRMED ON HARDWARE 2026-07-29**
+  — 6.04 MHz CPU (`cpu_clkgen`'s third rate, /16) with the 037's cycle-stealing
+  disabled, toggled live by the PS/2 **F12** key, state on **`pLed[5]`**. The
+  one deliberately non-authentic feature in the design. Both halves are needed:
+  the 037 grants one DRAM slot per 8 CLKIN and CLKIN is a *fixed* sys_clk/16,
+  so a slot that costs 4 CPU cycles at /32 costs **8** at /16 — doubling the
+  clock alone would roughly double the stall in CPU cycles. Disabling the steal
+  turned out to be cheap here and would not be on real hardware: `cpu_grant` was
+  already unconnected, so the 037's only functional contribution to a RAM access
+  is the RPLY timing, and every RASEL-derived DRAM pin is unused. `no_steal`
+  forces the decoded A15 high (a separate `a15_gnt` wire — the `a15_037` line is
+  a verbatim `sim/grantfit/patch037.py` anchor), the grant folds away, and
+  `qbus_mem` takes the RAM reply at a fixed `N_TURBO`. **Video and the 50 Hz
+  EVNT/IRQ2 are untouched** — they hang off `en_pos`/`en_neg` and never looked at
+  RASEL. Measured (`sim/smktime`, the same loop in 037-fronted RAM):
+  **481.2 → 856.1 Hz = 1.78x on a BK-0011M** (/24, clock 1.50 x cycles 1.186)
+  and **384.5 → 856.1 Hz = 2.23x on a BK-0010** (/32, clock 2.00 x cycles
+  1.113) — the steal-removal factor is *smaller* on the slower machine because
+  an 8-CLKIN grant slot is fixed wall-clock time and so costs 4 CPU cycles at
+  /32 against 5.33 at /24. The per-instruction spread that IS the steal beat
+  collapses 20..23 (bk10) / 20..26 (bk11) → 18..19.
+  Two things the work turned up that were not in the plan: **`N_EXT` = 1 cannot
+  survive /16** (its early-fetch head start is gone — the turbo SMK leg tripped
+  the done-gate on its first fetch), so turbo uses one uniform count for all
+  three SDRAM-backed mem legs; and the **CDC "no interlock" gotcha was stale**,
+  describing the retired `qbus_sdram` rather than the shipped done-gated path.
+  The riskiest logic is the live swap of the RAM reply OWNER, which is
+  `src/turbo_ctl.sv` (bus-idle qualified, a real module so tbs instantiate it)
+  and is covered by `sim/bk11`'s `+turboflip` leg. Everything else is
+  byte-identical at turbo = 0: `make sim` green, `sim/grantfit` baseline still
+  Σ|Δ| = 33.0 — and the board confirms it: F12 toggles the rate live under a
+  running program, in both models and with the SMK512, with the picture and the
+  50 Hz frame interrupt unmoved.
+- Cycle-accuracy regression vs reference traces.
 - Optional CRT effects (scanline dim/gamma) in the upscaler.
-- Config: DIP/menu for model, turbo, video filter.
+- Config: DIP/menu for model and video filter (turbo is the F12 key).
 - **Milestone:** validated, configurable, documented release.
 
 ---

@@ -88,11 +88,17 @@ module boot_check_tb;
     //      rest of the ROM window). NOTE $test$plusargs is a PREFIX match, so
     //      +smk10 satisfies $test$plusargs("smk") too - that is what makes
     //      `smk` true for both legs. -----------------------------------------
-    reg model11, smk, smk10;
+    reg model11, smk, smk10, turbo;
     initial begin
         smk10   = $test$plusargs("smk10");
         smk     = $test$plusargs("smk");
         model11 = ($test$plusargs("bk11") || smk) && !smk10;
+        // +turbo (Phase 9): boot the REAL firmware at /16 = 6.04 MHz with the
+        // 037 out of the RAM path. This is the only oracle that runs actual
+        // MONITOR/BOS/BIOS code, so it is the one that answers "does a real
+        // ROM still boot when qbus_mem owns the RAM reply", which no synthetic
+        // program can. Composable with every other leg (+bk11, +smk, ...).
+        turbo   = $test$plusargs("turbo");
     end
 
     // ---- clocks (as ref037_soc_video_tb / bk11_soc_tb) --------------------------
@@ -111,7 +117,7 @@ module boot_check_tb;
     reg       cpu_clk_r;
     initial begin cdiv = 4'd0; cpu_clk_r = 1'b0; end
     always @(posedge sys_clk) begin
-        if (cdiv >= (model11 ? 4'd11 : 4'd15)) begin
+        if (cdiv >= (turbo ? 4'd7 : (model11 ? 4'd11 : 4'd15))) begin
             cdiv <= 4'd0; cpu_clk_r <= ~cpu_clk_r;
         end else
             cdiv <= cdiv + 1'b1;
@@ -166,6 +172,7 @@ module boot_check_tb;
     wire        mem_ext_ram;   // window-1 banked RAM -> 037 a15 force (from u_ms; 0 in bk10)
     wire        va_vfetch, va_palstb, va_line_en, va_hgate, va_vgate;
     va_037_sync pr037 (
+        .no_steal(turbo),   // +turbo: the 037 stops owning RAM
         .clk(sys_clk), .en_pos(en_pos), .en_neg(en_neg), .mem_ready(mem_ready),
         .ext_ram(mem_ext_ram),
         .PIN_R(~dclo_cold), .PIN_C(1'b0),
@@ -362,6 +369,7 @@ module boot_check_tb;
     wire [DW-1:0] s_dq;
 
     qbus_mem u_ms (
+        .turbo(turbo),      // +turbo: this FSM owns the RAM reply
         .cpu_clk  (~clk),
         .reset    (~dclo),
         .ide_rdata(ide_rdata),

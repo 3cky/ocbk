@@ -61,13 +61,19 @@ module smk_time_tb;
     localparam real SYS_HZ = 96647715.0;
 
     // ---- leg select --------------------------------------------------------
-    reg stdram, bk10;
+    reg stdram, bk10, turbo;
     integer nhalf, nsettle;
     real    CPU_HZ;
     initial begin
         stdram = $test$plusargs("stdram");
         bk10   = $test$plusargs("bk10");
-        CPU_HZ = SYS_HZ / (bk10 ? 32.0 : 24.0);
+        // +turbo: the Phase-9 turbo mode - /16 = 6.04 MHz AND the 037 out of
+        // the RAM path (no_steal; qbus_mem replies at N_TURBO instead). On the
+        // --stdram leg, whose loop lives in ordinary MK_RAM037 RAM, this is the
+        // direct readout of "the cycle-stealing is gone": the per-instruction
+        // LOOP table's min != max spread IS the steal beat, so it must go flat.
+        turbo  = $test$plusargs("turbo");
+        CPU_HZ = SYS_HZ / (turbo ? 16.0 : (bk10 ? 32.0 : 24.0));
         if (!$value$plusargs("halves=%d",  nhalf))   nhalf   = 4;
         if (!$value$plusargs("settle=%d",  nsettle)) nsettle = 2;
     end
@@ -94,7 +100,7 @@ module smk_time_tb;
     reg [3:0] cdiv;
     reg       cpu_clk_r;
     initial begin cdiv = 4'd0; cpu_clk_r = 1'b0; end
-    wire [3:0] cdiv_max = bk10 ? 4'd15 : 4'd11;   // /32 bk10, /24 bk11
+    wire [3:0] cdiv_max = turbo ? 4'd7 : (bk10 ? 4'd15 : 4'd11); // /16, /32, /24
     always @(posedge sys_clk) begin
         if (cdiv >= cdiv_max) begin cdiv <= 4'd0; cpu_clk_r <= ~cpu_clk_r; end
         else                  cdiv <= cdiv + 1'b1;
@@ -145,6 +151,7 @@ module smk_time_tb;
     wire        mem_ext_ram;
     wire        va_vfetch, va_line_en, va_hgate, va_vgate;
     va_037_sync pr037 (
+        .no_steal(turbo),   // +turbo: the 037 stops owning RAM
         .clk(sys_clk), .en_pos(en_pos), .en_neg(en_neg), .mem_ready(mem_ready),
         .ext_ram(mem_ext_ram),
         .PIN_R(~dclo_cold), .PIN_C(1'b0),
@@ -181,6 +188,7 @@ module smk_time_tb;
     wire        stop_block;
 
     qbus_mem u_ms (
+        .turbo(turbo),      // +turbo: this FSM owns the RAM reply
         .cpu_clk  (~clk),            // as ocbk_top: FSM on the inverted CPU clock
         .reset    (~dclo),
         .ide_rdata(16'h0000),

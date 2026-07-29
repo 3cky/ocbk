@@ -43,6 +43,7 @@ module spk_capture_tb;
     integer errors = 0;
 
     qbus_mem dut (
+        .turbo(1'b0),      // turbo off: RAM RPLY stays the 037's
         .cpu_clk   (cclk),
         .reset     (reset),
         .ide_rdata(16'h0000),  // no SMK IDE device in this tb

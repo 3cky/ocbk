@@ -191,3 +191,45 @@ build "$SRC/qbus_pkg.sv"
 run_leg "SMK RAM"        ""         "+halves=4"        golden_smk.txt
 run_leg "ordinary RAM"   "--stdram" "+stdram +halves=6" golden_std.txt
 run_leg "SMK RAM, bk10"  "--bk10"   "+bk10 +halves=4"  golden_smk10.txt
+
+# ---- Phase-9 TURBO legs (non-authentic: /16 = 6.04 MHz, 037 cycle-stealing
+# disabled).  There is no real machine to compare against - turbo is
+# ahistorical - so these are a REGRESSION on the speed-up, not a calibration.
+# The ordinary-RAM leg is the one that matters: its loop is MK_RAM037, so it
+# reads out both halves of the feature at once.  Two things to watch in the
+# golden:
+#   * the HALF cycle count drops (the /16 clock is only half of it - the rest
+#     is the grant slot no longer being waited for);
+#   * the per-instruction LOOP table COLLAPSES.  That spread IS the 037 steal
+#     beat - a fetch landing at different phases of the 8-CLKIN grant slot -
+#     so it is the direct readout of whether anything is still arbitrating.
+#     Measured: the SOB fetch goes min=20/max=26 (spread 6, i.e. most of a
+#     4-cycle slot) -> min=18/max=19, and every other instruction in the loop
+#     goes exactly flat.  The residual 1 is NOT arbitration: it is the
+#     done-gate holding the reply one extra cycle when the SDRAM has not
+#     landed, which N_TURBO = 2 makes a routine, by-design event (it is why
+#     those holds are dbg_turbowait and not dbg_romgate).  A turbo golden that
+#     showed a spread of ~6 again would mean no_steal is not reaching the
+#     arbiter.  Net at the time of writing: 481.2 -> 856.1 Hz, 1.78x.
+run_leg "ordinary RAM, turbo" "--stdram" "+stdram +turbo +halves=6" golden_turbo.txt
+run_leg "SMK RAM, turbo"      ""         "+turbo +halves=4"         golden_turbo_smk.txt
+
+# The bk10 pair, which is what makes the turbo speed-up a TABLE rather than one
+# number - the same loop in 037-fronted RAM at /32 and at /16:
+#
+#   BK-0011M /24  481.2 Hz (4184 cyc) -> 856.1 Hz (3527.8) = 1.78x = 1.50 x 1.186
+#   BK-0010  /32  384.5 Hz (3928 cyc) -> 856.1 Hz (3527.8) = 2.23x = 2.00 x 1.113
+#
+# The two factors move OPPOSITE ways across the models, and that is the
+# fixed-slot argument in the data: a bk10 gains more overall (clock ratio 2.0)
+# but LESS from removing the steal, because an 8-CLKIN grant slot is fixed
+# wall-clock time and so costs 4 CPU cycles at /32 against 5.33 at /24 - the
+# faster machine was losing more cycles to arbitration to begin with. The steal
+# beat says the same: min=20/max=23 here vs 20/26 on bk11, both -> 18/19.
+# The turbo leg below must land the SAME 21167 cycles as golden_turbo.txt: in
+# turbo neither the rate nor the memory path depends on the model, so a diff
+# between those two goldens means a model term leaked into a turbo path.
+run_leg "ordinary RAM, bk10"       "--stdram --bk10" "+stdram +bk10 +halves=6" \
+        golden_std10.txt
+run_leg "ordinary RAM, bk10 turbo" "--stdram --bk10" "+stdram +bk10 +turbo +halves=6" \
+        golden_turbo10.txt

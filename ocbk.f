@@ -44,4 +44,5 @@ src/fb_linebuf.sv
 src/vga_timing.sv
 src/vga_out.sv
 src/bk_audio.sv
+src/turbo_ctl.sv
 src/ocbk_top.sv

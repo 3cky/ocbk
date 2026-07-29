@@ -39,7 +39,16 @@ module romwr_tb;
     always @(posedge sys_clk) divc <= divc + 1'b1;
     wire en_pos = (divc[3:0] == 4'd15);
     wire en_neg = (divc[3:0] == 4'd7);
-    wire clk    = divc[4];
+    // +turbo (Phase 9): /16 = 6.04 MHz with the 037 out of the RAM path.  This
+    // oracle is the sharpest test of the turbo `selected` change, because the
+    // whole point of the program is that RAM and ROM must behave DIFFERENTLY
+    // in the same FSM: the conditionless screen clear marches out of RAM (which
+    // must now be replied to HERE) into ROM (which must still get no reply, so
+    // the trap-4 that ends the clear still happens).  Get the term wrong and
+    // either the clear never ends or it ends too early.
+    reg turbo;
+    initial turbo = $test$plusargs("turbo");
+    wire clk    = turbo ? divc[3] : divc[4];
 
     // ---- Q-bus --------------------------------------------------------------
     tri1 [15:0] ad;
@@ -83,6 +92,7 @@ module romwr_tb;
     wire        mem_ready;
     wire        va_vfetch, va_line_en, va_hgate, va_vgate;
     va_037_sync pr037 (
+        .no_steal(turbo),   // +turbo: the 037 stops owning RAM
         .clk(sys_clk), .en_pos(en_pos), .en_neg(en_neg), .mem_ready(mem_ready),
         .ext_ram(1'b0),
         .PIN_R(~dclo), .PIN_C(1'b0),
@@ -119,6 +129,7 @@ module romwr_tb;
     wire        stop_block_nc;
 
     qbus_mem u_ms (
+        .turbo(turbo),      // +turbo: this FSM owns the RAM reply
         .cpu_clk  (~clk),
         .reset    (~dclo),
         .ide_rdata(16'h0000),  // no SMK IDE device in this tb
