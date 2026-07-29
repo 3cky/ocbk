@@ -3,7 +3,7 @@
 //
 //   vm1 CPU + va_037_sync + the REAL qbus_mem (smk_en=1, BK-0011M mode,
 //   the new sel_ide decode + reply-point ide_rdata merge) + the REAL
-//   src/smk_ide.sv + the behavioral ide_disk_model (loaded with
+//   src/peripheral/smk_ide.sv + the behavioral ide_disk_model (loaded with
 //   mem/gen_ide_image.py's AltPro image) + behavioural sdram_model
 //   (1<<19 words) + the port-2 video-fetch saturator for contention.
 //
@@ -307,7 +307,7 @@ module ide_soc_tb;
     end
 
 
-// D8:B, the board's RPLY re-timing flop (src/bk_rply.sv) - the REAL module,
+// D8:B, the board's RPLY re-timing flop (src/bus/bk_rply.sv) - the REAL module,
 // never a replica (the cpu_clkgen drift lesson).  Placed at the end of the
 // module so it cannot depend on where the reset regs are declared.
 bk_rply u_rply (.cpu_clk(clk), .rst_n(dclo_cold),

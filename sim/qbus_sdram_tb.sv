@@ -1,7 +1,7 @@
 //
 // qbus_sdram_tb - cosim of the Phase-2 RAM-in-SDRAM datapath against the vm1 core.
 //
-// Wires the real synthesizable src/qbus_sdram.sv (with its embedded sdram_ctrl)
+// Wires the real synthesizable src/bus/qbus_sdram.sv (with its embedded sdram_ctrl)
 // to a behavioural SDRAM model and runs the ROM-resident RAM-test program. Two
 // independent clocks - the ~3 MHz CPU clock and a fast ~96.65 MHz SDRAM clock -
 // deliberately stress the clock-domain-crossing handshake (on hardware they are

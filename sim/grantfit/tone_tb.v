@@ -130,7 +130,7 @@ module tone_tb;
     wire        rply037_n;                        // 037 reply (RAM) -> open-collector
 
     // ---- the board's D8:B RPLY re-timing flop ------------------------------
-    // SHIPPED SINCE 2026-07-26: this is now src/bk_rply.sv, instantiated for
+    // SHIPPED SINCE 2026-07-26: this is now src/bus/bk_rply.sv, instantiated for
     // real (never a replica), and `+nod8b` bypasses it so the sweep can still
     // ask what it is worth.  What follows is the reasoning that put it there.
     // On a real BK-0011M the wired-OR bus RPLY (net S1-21) never reaches the
@@ -451,7 +451,7 @@ module tone_tb;
     end
 
 
-// D8:B, the board's RPLY re-timing flop (src/bk_rply.sv) - the REAL module,
+// D8:B, the board's RPLY re-timing flop (src/bus/bk_rply.sv) - the REAL module,
 // never a replica (the cpu_clkgen drift lesson).  Placed at the end of the
 // module so it cannot depend on where the reset regs are declared.
 bk_rply u_rply (.cpu_clk(clk), .rst_n(dclo_cold),

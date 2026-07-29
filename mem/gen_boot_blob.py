@@ -18,7 +18,7 @@ and the SMK512 BIOS (Phase 8; BkEmu res/raw/disk_smk512_v205.rom):
                             (rom6 @ BK 160000, rom7 @ BK 170000; selection
                             per SMK mode in mem_mapper)
 
-Blob format (shared; read by the two-pass src/epcs_boot.sv):
+Blob format (shared; read by the two-pass src/sdram/epcs_boot.sv):
     8-byte header:  u16 magic 0x4B42 ("BK"), u16 length in words,
                     u16 checksum (16-bit sum of all data words), u16 zero
     then the data bytes; all u16 fields little-endian (low byte first),

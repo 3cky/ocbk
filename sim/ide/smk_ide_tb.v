@@ -1,5 +1,5 @@
 // ============================================================================
-//  smk_ide_tb - unit oracle for src/smk_ide.sv (Phase-8 IDE increment (a)).
+//  smk_ide_tb - unit oracle for src/peripheral/smk_ide.sv (Phase-8 IDE increment (a)).
 //
 //  Transcribes BkEmu IdeControllerTest.testIdeController plus the
 //  SmkIdeController bus packing onto real Q-bus-shaped transactions at the

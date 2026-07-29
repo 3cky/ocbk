@@ -227,7 +227,7 @@ module smk_soc_tb;
     );
 
     // ---- EVNT/IRQ2: the REAL detector (Phase 9) ------------------------------
-    // src/bk_evnt.sv, instantiated rather than replicated (see bk11_soc_tb).
+    // src/peripheral/bk_evnt.sv, instantiated rather than replicated (see bk11_soc_tb).
     // The program keeps 662 bit 14 SET throughout (no ISR is installed), so
     // this must never fire - the guards below turn a stray assert into a
     // loud failure (a broken mask gate would otherwise go unnoticed here).
@@ -419,7 +419,7 @@ module smk_soc_tb;
     end
 
 
-// D8:B, the board's RPLY re-timing flop (src/bk_rply.sv) - the REAL module,
+// D8:B, the board's RPLY re-timing flop (src/bus/bk_rply.sv) - the REAL module,
 // never a replica (the cpu_clkgen drift lesson).  Placed at the end of the
 // module so it cannot depend on where the reset regs are declared.
 bk_rply u_rply (.cpu_clk(clk), .rst_n(dclo_cold),

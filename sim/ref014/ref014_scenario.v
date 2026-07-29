@@ -3,7 +3,7 @@
 //
 // Included (`include) by BOTH ref014_tb.v (the vendored gate netlist -- the
 // ground truth that generates golden_014.txt) and ref014_beh_tb.v (the
-// synthesizable src/bk_kbd014.sv). Each testbench implements the t_* tasks
+// synthesizable src/peripheral/bk_kbd014.sv). Each testbench implements the t_* tasks
 // with IDENTICAL $display formats; the two outputs must diff-match the same
 // committed golden. The log is transaction-granular on purpose: the netlist
 // is asynchronous (RC debounce, no clock), so only the bus-visible contract

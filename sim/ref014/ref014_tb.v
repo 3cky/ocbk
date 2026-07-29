@@ -1,7 +1,7 @@
 //
 // Phase 6 contract oracle: the VENDORED 1801VP1-014 gate netlist driven
 // through the shared scenario (ref014_scenario.v). This run's output is the
-// committed golden_014.txt; the behavioral src/bk_kbd014.sv must reproduce
+// committed golden_014.txt; the behavioral src/peripheral/bk_kbd014.sv must reproduce
 // it line-for-line (ref014_beh_tb.v).
 //
 // Bus tasks mimic the vm1 master shapes that matter for the contract:

@@ -1,5 +1,5 @@
 // ============================================================================
-//  mapper_tb - unit oracle for src/mem_mapper.sv (Phase 7, BK-0011M banking).
+//  mapper_tb - unit oracle for src/bus/mem_mapper.sv (Phase 7, BK-0011M banking).
 //
 //  Two halves, matching the module's contract:
 //    * translate: BK-0010 mode is swept over ALL 64K addresses against the

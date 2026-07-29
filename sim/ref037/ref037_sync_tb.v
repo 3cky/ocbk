@@ -2,7 +2,7 @@
 // Phase 3 equivalence testbench: vm1 CPU + retimed va_037_sync + behavioural DRAM.
 //
 // Identical program, memory model and measurement to ref037_tb.v, but the 037 is
-// the retimed sys_clk-domain core (src/va_037_sync.sv) driven by ÷16 enables, and
+// the retimed sys_clk-domain core (src/bus/va_037_sync.sv) driven by ÷16 enables, and
 // the CPU runs at sys_clk/32 = CLKIN/2 (same phase as the reference). If the
 // retime is correct this reproduces sim/ref037/golden_037.txt bit-for-bit.
 //
@@ -271,7 +271,7 @@ initial begin
 end
 
 
-// D8:B, the board's RPLY re-timing flop (src/bk_rply.sv) - the REAL module,
+// D8:B, the board's RPLY re-timing flop (src/bus/bk_rply.sv) - the REAL module,
 // never a replica (the cpu_clkgen drift lesson).  Placed at the end of the
 // module so it cannot depend on where the reset regs are declared.
 bk_rply u_rply (.cpu_clk(clk), .rst_n(dclo),

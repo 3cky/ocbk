@@ -5,7 +5,7 @@ Ground-truth bus contract for the BK keyboard controller (1801ВП1-014 at
 
 - `vp_014.v` — vendored **reference gate netlist**, from
   `~/projects/other/fpga/k1801/014/rtl/vp_014.v` (do not edit; re-sync from
-  upstream). Sim-only; the synth path uses the behavioral `src/bk_kbd014.sv`.
+  upstream). Sim-only; the synth path uses the behavioral `src/peripheral/bk_kbd014.sv`.
 - `lib_1801.v` — vendored 1801-series cell library the netlist instantiates,
   from `~/projects/other/fpga/k1801/lib/rtl/lib_1801.v`.
 - `tb_014.v` — vendored upstream unit testbench (kept for reference: its
@@ -16,7 +16,7 @@ Ground-truth bus contract for the BK keyboard controller (1801ВП1-014 at
 - `ref014_tb.v` — drives the **netlist** through the scenario (matrix + RC
   model, vm1-shaped bus tasks: IAK = DIN+IAKI with no SYNC, DATIO RMW under
   one SYNC, nCS latched at SYNC fall). Its output IS `golden_014.txt`.
-- `ref014_beh_tb.v` — drives the behavioral `src/bk_kbd014.sv` through the
+- `ref014_beh_tb.v` — drives the behavioral `src/peripheral/bk_kbd014.sv` through the
   same scenario over the 16-bit shared Q-bus; must diff-match the same golden.
 - `golden_014.txt` — committed netlist output. **Regenerate only from the
   netlist run**, never from the behavioral module. Netlist wins all disputes.

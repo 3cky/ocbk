@@ -1,6 +1,6 @@
 # sim/evnt — the BK-0011M EVNT/IRQ2 detector contract (Phase 9)
 
-`src/bk_evnt.sv` is a gate-faithful replica of the real BK-0011M's **external**
+`src/peripheral/bk_evnt.sv` is a gate-faithful replica of the real BK-0011M's **external**
 frame-interrupt detector. This directory is its oracle.
 
 ## Why the module exists
@@ -63,7 +63,7 @@ sim/evnt/run.sh --regen    # regenerate golden_evnt.txt (REFERENCE netlist only)
 ```
 
 **Golden rule (the `sim/ref014` shape):** `golden_evnt.txt` is generated from
-the **reference netlist** run only. The retimed `src/va_037_sync.sv` must then
+the **reference netlist** run only. The retimed `src/bus/va_037_sync.sv` must then
 reproduce it line-for-line — it currently does, byte-identically. Never
 regenerate the golden from a `va_037_sync` run, and never regenerate it to
 "fix" a detector change.

@@ -1,5 +1,5 @@
 // ============================================================================
-//  sd_backend_tb - unit oracle for src/sd_backend.sv against sd_model.v
+//  sd_backend_tb - unit oracle for src/peripheral/sd_backend.sv against sd_model.v
 //  (Phase-8 IDE increment (b)). The tb plays the smk_ide engine role on
 //  the bk_* backend sector port; the card model is loaded with the SAME
 //  gen_ide_image.py AltPro image the ide oracles use (sectors past the

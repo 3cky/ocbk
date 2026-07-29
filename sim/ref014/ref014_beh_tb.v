@@ -1,5 +1,5 @@
 //
-// Phase 6 contract equivalence: the behavioral src/bk_kbd014.sv driven
+// Phase 6 contract equivalence: the behavioral src/peripheral/bk_kbd014.sv driven
 // through the SAME shared scenario (ref014_scenario.v) as the vp_014 gate
 // netlist; the output must diff-match the same committed golden_014.txt.
 //

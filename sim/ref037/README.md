@@ -4,7 +4,7 @@ Ground-truth cycle-accurate timing for the 037 arbiter (Phase 3).
 
 - `va_037.v`  — vendored **reference** 1801VP1-037 model, from
   `~/projects/other/fpga/k1801/037/rtl/va_037.v` (do not edit; re-sync from
-  upstream). Sim-only; the synth path uses the retimed `src/va_037_sync.sv`.
+  upstream). Sim-only; the synth path uses the retimed `src/bus/va_037_sync.sv`.
 - `tb_037.v`  — vendored upstream 037 unit testbench (netlist-equivalence oracle
   for the retimed core).
 - `ref037_tb.v` — vm1 CPU + `va_037` + behavioural DRAM running the bk10 test
@@ -21,7 +21,7 @@ Ground-truth cycle-accurate timing for the 037 arbiter (Phase 3).
 
 The shipped 037 carries a deliberate, hardware-calibrated deviation from the
 netlist: `va_037_sync`'s `GRANT_SETUP` window plus the board's D8:B RPLY flop
-(`src/bk_rply.sv`). Its authority is the seven real-BK-0011M tone legs of
+(`src/bus/bk_rply.sv`). Its authority is the seven real-BK-0011M tone legs of
 `sim/grantfit`, **not** this netlist — which has been shown to reproduce *our*
 numbers rather than silicon's (26.46/20.51 cyc against the real 31.7/21.4, with
 no SDRAM in the loop), and whose fix was confirmed on hardware by the Babylona

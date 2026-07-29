@@ -256,7 +256,7 @@ module bk11_soc_tb;
 
     // ---- EVNT/IRQ2: the REAL detector (Phase 9; model_bk11 = 1 here) ---------
     // The authentic external D28+D3:B missing-pulse pair off the 037's WTI and
-    // SYNCO pins - src/bk_evnt.sv, instantiated rather than replicated so this
+    // SYNCO pins - src/peripheral/bk_evnt.sv, instantiated rather than replicated so this
     // tb cannot drift from the RTL (the cpu_clkgen replica lesson). Its output
     // is sys_clk-registered; the 2-FF onto posedge cpu_clk is the pin-sync
     // rule. The vm1's arm/fire edge detector makes it one vector-0100
@@ -433,7 +433,7 @@ module bk11_soc_tb;
     end
 
 
-// D8:B, the board's RPLY re-timing flop (src/bk_rply.sv) - the REAL module,
+// D8:B, the board's RPLY re-timing flop (src/bus/bk_rply.sv) - the REAL module,
 // never a replica (the cpu_clkgen drift lesson).  Placed at the end of the
 // module so it cannot depend on where the reset regs are declared.
 bk_rply u_rply (.cpu_clk(clk), .rst_n(dclo_cold),

@@ -1,4 +1,4 @@
-// sdram_arbiter_tb - unit cosim for src/sdram_arbiter.sv against src/sdram_ctrl.sv
+// sdram_arbiter_tb - unit cosim for src/sdram/sdram_arbiter.sv against src/sdram/sdram_ctrl.sv
 // and the behavioural sdram_model. Checks:
 //   * datapath: word + byte writes read back correctly through the arbiter;
 //   * read-return routing: p_rvalid/p_rdata land on the port that was granted;

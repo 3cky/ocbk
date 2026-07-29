@@ -1,12 +1,12 @@
 //
-// Phase-9 EVNT/IRQ2 oracle: src/bk_evnt.sv against the 037.
+// Phase-9 EVNT/IRQ2 oracle: src/peripheral/bk_evnt.sv against the 037.
 //
 // bk_evnt is a gate-faithful replica of the real BK-0011M's external frame-
 // interrupt detector (D28 K555IE5 /2 + D3:B K555TM2, off the 037's WTI and
-// SYNCO pins - see src/bk_evnt.sv for the schematic trace). The 037 itself is
+// SYNCO pins - see src/peripheral/bk_evnt.sv for the schematic trace). The 037 itself is
 // the timing authority, so the transcript this tb prints is diffed against a
 // golden GENERATED FROM THE REFERENCE NETLIST RUN ONLY (`-DREF037`, the
-// vendored sim/ref037/va_037.v). The retimed src/va_037_sync.sv must then
+// vendored sim/ref037/va_037.v). The retimed src/bus/va_037_sync.sv must then
 // reproduce the same transcript line-for-line - the sim/ref014 contract shape.
 //
 // Build flags:
@@ -120,7 +120,7 @@ va_037_sync dut (
 
 // ---------------------------------------------------------------------------
 // DUT: the detector. run.sh compiles this against either the real
-// src/bk_evnt.sv or a sed-mutated copy of it (see the run.sh header) - there
+// src/peripheral/bk_evnt.sv or a sed-mutated copy of it (see the run.sh header) - there
 // is deliberately NO inline replica here that could drift from the RTL.
 // ---------------------------------------------------------------------------
 reg irq_en = 1'b1;

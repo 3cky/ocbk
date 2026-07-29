@@ -1,6 +1,6 @@
 // ============================================================================
 //  sd_harness - drop-in replacement for ide_disk_model wrapping the REAL
-//  increment-(b) SD stack (src/sd_backend.sv + sd_model.v) behind the
+//  increment-(b) SD stack (src/peripheral/sd_backend.sv + sd_model.v) behind the
 //  identical port list, so the existing smk_ide_tb legs re-run unchanged
 //  over the full SPI path (run.sh's -DSD_STACK second pass; also the
 //  boot_check +sdspi leg). SPI nets live inside; the dividers and

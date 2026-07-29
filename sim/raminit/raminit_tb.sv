@@ -1,4 +1,4 @@
-// raminit_tb - unit oracle for src/ram_init.sv (the authentic DRAM power-on
+// raminit_tb - unit oracle for src/sdram/ram_init.sv (the authentic DRAM power-on
 // pattern filler). Drives ram_init with a served-mask-honoring grant model and
 // checks, per fill pass:
 //   * the address walk covers exactly the model's RAM range, contiguously

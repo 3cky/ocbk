@@ -410,7 +410,7 @@ module boot_check_tb;
     );
 
     // ---- EVNT/IRQ2: the REAL detector (Phase 9; idle in bk10) ----------------
-    // src/bk_evnt.sv, instantiated rather than replicated - so a boot smoke run
+    // src/peripheral/bk_evnt.sv, instantiated rather than replicated - so a boot smoke run
     // exercises the same detector the board will fit. Real BOS unmasks 662
     // bit 14, so this leg actually drives the frame interrupt during the run.
     wire      irq2_lvl;
@@ -610,7 +610,7 @@ module boot_check_tb;
         $readmemh("../mem/boot_blob_flash.hex", blob, 'h40000);
         for (ii = 0; ii < (1<<19); ii = ii + 1) u_mem.mem[ii] = 16'o000000;
         // Authentic DRAM power-on pattern in the RAM region, exactly as
-        // src/ram_init.sv leaves it (bkemu-QT InitMemoryValues, Board.cpp /
+        // src/sdram/ram_init.sv leaves it (bkemu-QT InitMemoryValues, Board.cpp /
         // Board_11M.cpp): bk10 word = idx[0]^idx[6]^(idx[5:0]==0 & idx!=0)
         // (64-word phase flip), bk11 word = idx[3]^idx[6].  The CPU must
         // cold-boot on this garbage exactly as on real silicon (this replica
@@ -674,7 +674,7 @@ module boot_check_tb;
     end
 
 
-// D8:B, the board's RPLY re-timing flop (src/bk_rply.sv) - the REAL module,
+// D8:B, the board's RPLY re-timing flop (src/bus/bk_rply.sv) - the REAL module,
 // never a replica (the cpu_clkgen drift lesson).  Placed at the end of the
 // module so it cannot depend on where the reset regs are declared.
 bk_rply u_rply (.cpu_clk(clk), .rst_n(dclo_cold),

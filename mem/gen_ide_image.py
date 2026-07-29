@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate the synthetic raw-AltPro HDD image for the Phase-8 IDE oracles.
 
-The SMK512 IDE engine (src/smk_ide.sv) parses drive geometry from the AltPro
+The SMK512 IDE engine (src/peripheral/smk_ide.sv) parses drive geometry from the AltPro
 partition table in image sector 7 exactly as BkEmu does
 (IdeController.IdeDriveImage.setupAltProGeometry): word values are stored
 BIT-INVERTED in the image (readInt16Inv = ~le16), the logical-disk records

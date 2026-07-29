@@ -119,7 +119,7 @@ goldens are regenerated from a run that is no longer netlist-equivalent and
 deliberately, recorded here, and not a licence to loosen any other golden's
 provenance.
 
-Candidates are built by `patch037.py` from a **copy** of `src/va_037_sync.sv`
+Candidates are built by `patch037.py` from a **copy** of `src/bus/va_037_sync.sv`
 (the `sim/evnt` idiom: anchored rewrites that fail loudly if the RTL moved,
 never an inline replica that can drift). Every register it adds is reset —
 without that `RASEL` goes X and the sim hangs.
@@ -294,7 +294,7 @@ fast. The fit predicted them and they went away.
 
 This bench is now the regression that keeps the calibration pinned.
 
-The fit is implemented — `va_037_sync`'s `GRANT_SETUP = 2` and `src/bk_rply.sv`
+The fit is implemented — `va_037_sync`'s `GRANT_SETUP = 2` and `src/bus/bk_rply.sv`
 — so a plain `./run.sh` prints the fit column above, and that is what must stay
 true. `./run.sh --setup 0 --nod8b` reproduces every pre-fix number exactly, so
 the change is cleanly reversible and the two configurations are exactly what

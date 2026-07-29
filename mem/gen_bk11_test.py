@@ -278,7 +278,7 @@ def build_stage2():
     # tb's vgate-at-assert guard keeps the window phase pinned).
     # Configure the 037 for a FULL screen (177664 bit 9) as the real BOS does.
     # Phase 9: this now matters. nIRQ2 comes from the authentic WTI/SYNCO
-    # detector (src/bk_evnt.sv), and WTI only pulses on DISPLAYED lines - so in
+    # detector (src/peripheral/bk_evnt.sv), and WTI only pulses on DISPLAYED lines - so in
     # the 1/4-screen power-on default the frame interrupt legitimately asserts
     # during active video, ~129 lines before blanking. The 037 replies to this
     # write itself (its RWR strobe), so it does not bus-time-out.

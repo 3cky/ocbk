@@ -40,9 +40,9 @@ under "Architecture & conventions" further down.
 | Block | Upstream | Notes |
 |-------|----------|-------|
 | **1801ВМ1 CPU** | `~/projects/other/fpga/cpu11/vm1/hdl/syn` | Gate-accurate reverse-engineered model → `src/cpu/`. Ships its own `sim/bk10` timing testbench (our first oracle). No EIS — fine, Cyclone I has no multipliers. Keep the marked `pin_sel_n` hook (see the conventions section). |
-| **1801ВП1-037** | `~/projects/other/fpga/k1801/037/rtl` | `va_037.v` (refactored) + `vp_037.v` (netlist). **`va_037.v` is the reference `sim/ref037` and `sim/evnt` generate their goldens from** — it is ground truth, and `src/va_037_sync.sv` is its retime. |
-| **1801ВП1-014** | vendored into `sim/ref014/` | The keyboard gate netlist + `lib_1801.v`. Wins every dispute with `src/bk_kbd014.sv`. |
-| **Platform harness** | `~/projects/other/fpga/ocb-test` | Where the clocking, SDRAM and VGA were validated. `src/sdram_ctrl.sv` and `src/vga_timing.sv` come from here. |
+| **1801ВП1-037** | `~/projects/other/fpga/k1801/037/rtl` | `va_037.v` (refactored) + `vp_037.v` (netlist). **`va_037.v` is the reference `sim/ref037` and `sim/evnt` generate their goldens from** — it is ground truth, and `src/bus/va_037_sync.sv` is its retime. |
+| **1801ВП1-014** | vendored into `sim/ref014/` | The keyboard gate netlist + `lib_1801.v`. Wins every dispute with `src/peripheral/bk_kbd014.sv`. |
+| **Platform harness** | `~/projects/other/fpga/ocb-test` | Where the clocking, SDRAM and VGA were validated. `src/sdram/sdram_ctrl.sv` and `src/video/vga_timing.sv` come from here. |
 | **Toolchain reference** | `~/projects/other/fpga/ocm-pld-dev/esemsx3` | Pin map, build flow, the CMT-jack scheme, the megasd SPI pin roles. |
 
 Behaviour references (not code): **BkEmu** (`~/projects/studio/BkEmu`) is the
@@ -80,7 +80,7 @@ the 177662 register specifically; `doc/bk0011m.sch` is the real board.
 | clk1 | ÷3 | **64.43 MHz** | `pix_clk`: 1024×768@60 readout |
 | (enable) | 96.65 ÷8 | **12.08 MHz** | BK dot clock; 037 CLKIN = ÷2 = 6.04 MHz |
 
-CPU clock = a fabric divider of `sys_clk` in `src/cpu_clkgen.sv`: **/32 =
+CPU clock = a fabric divider of `sys_clk` in `src/sys/cpu_clkgen.sv`: **/32 =
 3.02 MHz (BK-0010), /24 = 4.03 MHz (BK-0011M), /16 = 6.04 MHz (turbo)**. All
 integer ratios, so the design is internally cycle-exact; the absolute rate is
 +0.674 % with the CLKIN:CPU ratio preserved exactly (see the clocking bullet).
@@ -135,39 +135,48 @@ physical translation is pure concatenation — no adders.
 
 ### Source tree
 
+The split mirrors the groupings this document already used, and follows the
+esemsx3 convention: functional subdirectories, the top level and the shared
+package loose at the root of `src/`, the vendored core in its own directory.
+`ocbk_common.qsf` lists every file one per line **in compile order** — that is
+not the directory order and must not be shuffled; `ocbk.f` (the slang/verilator
+filelist) mirrors the same set and must be kept in sync with it.
+
 ```
-src/cpu/            vendored vm1 core (1801ВМ1) + config + the synth vcram stub
-src/qbus_pkg.sv     shared Q-bus decode + the RPLY-latency constants (N_*)
 src/ocbk_top.sv     top: PLL, resets, DIP latches, LEDs, the sibling peripherals
-src/cpu_clkgen.sv   fabric divider: dot/CLKIN enables + the CPU clock (/32,/24,/16)
-src/turbo_ctl.sv    bus-idle-qualified turbo level (the reply-owner swap guard)
---- memory / bus ---
-src/va_037_sync.sv  retimed 1801ВП1-037: RAM RPLY, grants, video counters, GRANT_SETUP
-src/bk_rply.sv      the board's D8:B flop re-timing the 037's reply onto CPU RPLY
-src/qbus_mem.sv     bus front-end: region reply FSM, 177662/spk/stop captures,
+src/qbus_pkg.sv     shared Q-bus decode + the RPLY-latency constants (N_*)
+src/cpu/            vendored vm1 core (1801ВМ1) + config + the synth vcram stub
+--- src/bus/ (Q-bus front end, RPLY ownership, address translation) ---
+va_037_sync.sv      retimed 1801ВП1-037: RAM RPLY, grants, video counters, GRANT_SETUP
+bk_rply.sv          the board's D8:B flop re-timing the 037's reply onto CPU RPLY
+qbus_mem.sv         bus front-end: region reply FSM, 177662/spk/stop captures,
                     the SMK/IDE decodes, the boot-writer mux
-src/mem_mapper.sv   the one translate seam: (addr, map regs) -> (kind, phys word)
-src/cpu_sdram_dp.sv CPU RAM/ROM datapath on arbiter port 0 + the RPLY done-gate
-src/sdram_arbiter.sv 4-port fixed-priority arbiter (CPU/readout/fetch/FB write)
-src/sdram_ctrl.sv   vendored single-word SDR controller (+ the byte-enable hook)
-src/ram_init.sv     authentic К565РУ6/РУ5 power-on DRAM pattern filler
-src/epcs_boot.sv    two-pass EPCS flash -> SDRAM loader (cyclone_asmiblock)
-src/qbus_sdram.sv   retired Phase-2 RAM slave (kept for its cosim only)
-src/qbus_slot.sv    cartridge-slot bridge (forward seam, SLOT_ENABLE=0)
---- video ---
-src/fb_video.sv     037 fetch -> palette -> FB writer (ports 2+3, buffer swap)
-src/palette_apply.sv 16-palette stage (MiSTer palette ROM; bk10 = palette 0)
-src/fb_readout.sv   paced FB line prefetcher (port 1) + the pixel-side CDC
-src/fb_linebuf.sv   dual-clock ping-pong line buffer (1 M4K)
-src/vga_out.sv      1024x768@60 scan-out: scheduling, colour decode, x2/x3 scale
-src/vga_timing.sv   vendored VESA timing generator (ocb-test, board-proven)
---- peripherals ---
-src/ps2_rx.sv       PS/2 frame receiver          src/kbd_ps2bk.sv  scan -> BK codes
-src/bk_kbd014.sv    1801ВП1-014 equivalent (177660-663, VIRQ/IAK)
-src/bk_audio.sv     speaker DAC + the CMT tape comparator network
-src/bk_evnt.sv      the real 0011M D28+D3:B EVNT/IRQ2 missing-pulse detector
-src/smk_ide.sv      SMK512 IDE task file + ATA engine + tier-1 prefetch
-src/sd_backend.sv   SPI-mode SD host serving the smk_ide sector port
+mem_mapper.sv       the one translate seam: (addr, map regs) -> (kind, phys word)
+qbus_sdram.sv       retired Phase-2 RAM slave (kept for its cosim only)
+qbus_slot.sv        cartridge-slot bridge (forward seam, SLOT_ENABLE=0)
+--- src/sdram/ (the SDRAM datapath and its writers) ---
+cpu_sdram_dp.sv     CPU RAM/ROM datapath on arbiter port 0 + the RPLY done-gate
+sdram_arbiter.sv    4-port fixed-priority arbiter (CPU/readout/fetch/FB write)
+sdram_ctrl.sv       vendored single-word SDR controller (+ the byte-enable hook)
+ram_init.sv         authentic К565РУ6/РУ5 power-on DRAM pattern filler
+epcs_boot.sv        two-pass EPCS flash -> SDRAM loader (cyclone_asmiblock)
+--- src/video/ ---
+fb_video.sv         037 fetch -> palette -> FB writer (ports 2+3, buffer swap)
+palette_apply.sv    16-palette stage (MiSTer palette ROM; bk10 = palette 0)
+fb_readout.sv       paced FB line prefetcher (port 1) + the pixel-side CDC
+fb_linebuf.sv       dual-clock ping-pong line buffer (1 M4K)
+vga_out.sv          1024x768@60 scan-out: scheduling, colour decode, x2/x3 scale
+vga_timing.sv       vendored VESA timing generator (ocb-test, board-proven)
+--- src/peripheral/ ---
+ps2_rx.sv           PS/2 frame receiver           kbd_ps2bk.sv  scan -> BK codes
+bk_kbd014.sv        1801ВП1-014 equivalent (177660-663, VIRQ/IAK)
+bk_audio.sv         speaker DAC + the CMT tape comparator network
+bk_evnt.sv          the real 0011M D28+D3:B EVNT/IRQ2 missing-pulse detector
+smk_ide.sv          SMK512 IDE task file + ATA engine + tier-1 prefetch
+sd_backend.sv       SPI-mode SD host serving the smk_ide sector port
+--- src/sys/ (clocking / CPU-rate control) ---
+cpu_clkgen.sv       fabric divider: dot/CLKIN enables + the CPU clock (/32,/24,/16)
+turbo_ctl.sv        bus-idle-qualified turbo level (the reply-owner swap guard)
 --- generators / images ---
 mem/gen_mem.py      ROM test-program assembler + the test picture
 mem/gen_boot_blob.py boot-blob builder (header/checksum + the COF hex pages)
@@ -247,7 +256,7 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
 - `sim/ref014/run.sh` — the Phase-6 keyboard oracles, **four legs**. Contract:
   the vendored `vp_014.v` **gate netlist** (+ `lib_1801.v`) runs the shared
   transaction-granular scenario (`ref014_scenario.v`) → `golden_014.txt`, and
-  the behavioral `src/bk_kbd014.sv` must reproduce it line-for-line (netlist
+  the behavioral `src/peripheral/bk_kbd014.sv` must reproduce it line-for-line (netlist
   wins all disputes; the pinned contract — press-while-ready queuing with
   key-held re-delivery, retro-fire on unmask, no АР2 flag in 662 bit 7, 662
   writes bus-timeout, INIT keeps the code register — is in
@@ -361,7 +370,7 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   **Mutation-tested ×8 at the SoC level** (see the run.sh header — incl.
   the increment-1 documented masked mutation, now KILLED by the reworked
   issued-legs done-gate).
-- `sim/ide/run.sh` — the Phase-8 **SMK512 IDE unit oracle**: `src/smk_ide.sv`
+- `sim/ide/run.sh` — the Phase-8 **SMK512 IDE unit oracle**: `src/peripheral/smk_ide.sv`
   (the task-file register block + ATA engine + AltPro geometry parse)
   driven with Q-bus-shaped transactions against the behavioral
   `ide_disk_model` loaded with `mem/gen_ide_image.py`'s synthetic AltPro
@@ -411,7 +420,7 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   **Mutation-tested ×3 at the SoC level** (run_soc.sh header: qbus_mem
   merge-term drop, write-claim drop, command lane swap — all fail).
 - `sim/ide/run_sd.sh` — the increment-(b) **SD backend unit oracle**:
-  `src/sd_backend.sv` (the SPI-mode SD host serving the backend sector
+  `src/peripheral/sd_backend.sv` (the SPI-mode SD host serving the backend sector
   port) against the protocol-checking `sd_model.v` card (CRCs, CMD55
   pairing, SDSC 512-alignment, init ordering — card protocol errors
   fail the run) loaded with the same AltPro image. Legs: the exact
@@ -507,10 +516,10 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   the RMW leg also proved the S_REPLY refinement unnecessary — the DATIO gap
   already drops the read reply). The gen program is `mem/gen_romwr_test.py`.
 - `sim/evnt/run.sh` — the Phase-9 **EVNT/IRQ2 detector oracle** and the
-  authority on `src/bk_evnt.sv` (the authentic D28+D3:B missing-pulse pair off
+  authority on `src/peripheral/bk_evnt.sv` (the authentic D28+D3:B missing-pulse pair off
   the 037's WTI/SYNCO pins). Contract = the `sim/ref014` shape: the vendored
   **reference** netlist `sim/ref037/va_037.v` generates `golden_evnt.txt`, and
-  the retimed `src/va_037_sync.sv` must reproduce it line-for-line (it does,
+  the retimed `src/bus/va_037_sync.sv` must reproduce it line-for-line (it does,
   byte-identically). Three legs in one transcript — **L1** full screen
   (assert = VGATE rise + **452 CLKIN**, deassert = VGATE fall + 452 CLKIN,
   every frame), **L2** 1/4 screen (WTI stops after 64 displayed lines, so the
@@ -578,7 +587,7 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   wrecked another. `tone_tb.v` is the sim/vregtime stack with sim/smktime's
   SMK option folded in (`+smk`, `+bk10`, `+image/+entry/+loop_lo/+fetch_*`);
   `patch037.py` builds candidates by ANCHORED rewrites of a **copy** of
-  `src/va_037_sync.sv` (the sim/evnt idiom — it fails loudly if the RTL moved,
+  `src/bus/va_037_sync.sv` (the sim/evnt idiom — it fails loudly if the RTL moved,
   and every register it adds is reset or RASEL goes X and the sim hangs). The
   D8:B candidate is a tb plusarg, not a patch: it is a BOARD chip the 037
   netlist does not contain. **`real` is normalised at 4.000 MHz** — see the
@@ -703,7 +712,7 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   chip clock (`pMemClk`) is the PLL's `extclk0` at the same 96.65 MHz as the
   internal `clk0`/`sys_clk` (phase-matched, like esemsx3's c1/e0). The PLL and
   resets live in `src/ocbk_top.sv`; the fabric divider chain (dot/037-CLKIN
-  enables + the CPU clock) is `src/cpu_clkgen.sv` (Phase 7): a toggle divider
+  enables + the CPU clock) is `src/sys/cpu_clkgen.sv` (Phase 7): a toggle divider
   giving **/32 = 3.02 MHz (BK-0010) or /24 = 4.03 MHz (BK-0011M)**, selected by
   `model_bk11` = **DIP 1** (ON = 0011M), latched in `ocbk_top` while DCLO is
   held — power-on AND warm reset, so the reset button switches the model — and
@@ -798,7 +807,7 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   it survives the reset button and needs no reset to take effect. Current LED
   map: `pLed[7]` = SMK drive access, `[6]` = CMT mode, `[5]` = turbo,
   `[0]` = speaker activity, `[4:1]` unused.
-- **Authentic DRAM power-on pattern (`src/ram_init.sv`):** the board SDRAM has
+- **Authentic DRAM power-on pattern (`src/sdram/ram_init.sv`):** the board SDRAM has
   no defined power-on state, so before this the BK startup screen showed FPGA
   garbage / stale content (worst on a model-switch warm reset, where DIP 1
   reinterprets the previous model's screen). `ram_init` fills the selected
@@ -900,16 +909,16 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   ground truth for MONITOR behaviour alongside BkEmu. Tape-out fidelity note:
   a real BK mixes write bits 6+5 into a 3-level record waveform; bit 6 alone
   is shipped (dominant component).
-- Cartridge-slot Q-bus is a **forward seam**: `src/qbus_slot.sv`, default
+- Cartridge-slot Q-bus is a **forward seam**: `src/bus/qbus_slot.sv`, default
   `SLOT_ENABLE=0` (drives nothing, slot pins stay reserved-tristated). The full
   slot pin map lives commented in `ocbk_common.qsf`. Real BK hardware needs an
   external 5V↔3.3V level-shifter (Cyclone I is not 5V-tolerant).
 - On-chip RAM is tight (~239 Kbit). BK RAM (000000–077777) lives in the board
   **SDRAM** via the 037-fronted arbiter path (`qbus_mem`; the Phase-2
   `qbus_sdram` is retired from the build but kept for its cosim). The vendored
-  `src/sdram_ctrl.sv` (from `ocb-test`) gained a 2-bit `cmd_be` byte mask for
+  `src/sdram/sdram_ctrl.sv` (from `ocb-test`) gained a 2-bit `cmd_be` byte mask for
   the BK's byte writes — re-sync from upstream but keep that hook.
-  `src/vga_timing.sv` is likewise vendored verbatim from `ocb-test`.
+  `src/video/vga_timing.sv` is likewise vendored verbatim from `ocb-test`.
 - **ROM-in-SDRAM (Phase 5):** the full BK-0010.01 ROM (`mem/roms/`, committed;
   canonical source = the BkEmu project, also the reference for BK register
   semantics) is 262 Kbit > the device's 239 Kbit, so ROM reads ride the CPU
@@ -929,7 +938,7 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   (un-selected) access. Applies to the fixed top ROM AND BK-0011M window-1 ROM
   overlays alike. Oracle: `sim/romwr/run.sh` (both DATO and RMW legs, mutation-
   tested); `sim/bk11` §6 asserts the overlay-write trap. Boot:
-  `src/epcs_boot.sv` copies the blob from EPCS offset 0x40000 through the
+  `src/sdram/epcs_boot.sv` copies the blob from EPCS offset 0x40000 through the
   boot-writer mux onto port 0 during reset-hold (DCLO held until `boot_done`).
   **Phase 7: two-pass loader.** After the bk10 blob (pass 0, → words 0x4000+),
   the same FSM re-runs for the **bk11 ROM set** — flash 0x48000 → SDRAM words
@@ -949,7 +958,7 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   default-mode bootstrap JMP therefore lives in the SDRAM ROM region (word
   0x4000 → RAM program) instead of an on-chip stub — timing-identical (same
   fixed `N_ROM`), `golden_037.txt` unchanged.
-- **Memory mapper (Phase 7):** `src/mem_mapper.sv` is the one translation seam
+- **Memory mapper (Phase 7):** `src/bus/mem_mapper.sv` is the one translation seam
   in `qbus_mem`: *(CPU address, map registers) → (region kind `MK_*`, physical
   SDRAM word)*; the kind encodes the RPLY owner AND writability (see
   `qbus_pkg`). BK-0010 mode is a **bit-identical pass-through** of the old
@@ -1065,7 +1074,7 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   done-gate keys on the legs u_dp actually ISSUES (an smk_wo read / smk_ro
   write never issues — gating on raw `sel_ext` would hold RPLY forever
   where `sel_io` coexists). **IDE increment (a) — the drive engine
-  (`src/smk_ide.sv`), done in sim:** the SMK IDE task file at word
+  (`src/peripheral/smk_ide.sv`), done in sim:** the SMK IDE task file at word
   addresses **0177740–0177756** (BkEmu `SmkIdeController` over
   `IdeController` is the contract; `IdeControllerTest` the transcribed
   oracle) — ALL data bit-inverted **both** directions at the bus adapter
@@ -1125,7 +1134,7 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   ~43 ms flash — the stretch window is exactly one blink period — while
   continuous access, which re-arms the stretch every few µs, blinks
   instead of sitting solid). **Increment (b) — the SD/SPI
-  backend (`src/sd_backend.sv`) — DONE, CONFIRMED ON HARDWARE
+  backend (`src/peripheral/sd_backend.sv`) — DONE, CONFIRMED ON HARDWARE
   2026-07-18: the BIOS boots an OS from the SD-backed HDD image.** The
   card in the megasd slot (PIN_61–66, esemsx3 SPI-mode pin roles:
   DAT3 = CS — push-pull per the virq_n lone-Z rule — CMD = MOSI,
@@ -1475,7 +1484,7 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   EVNT/IRQ2 are bit-identical in turbo** — a real-time-timed effect keeps real
   time while CPU-timed loops run 1.78x faster, which is the differential to
   check on the board.
-  **The reply-owner swap is the dangerous part, and `src/turbo_ctl.sv` is why it
+  **The reply-owner swap is the dangerous part, and `src/sys/turbo_ctl.sv` is why it
   is not:** if the level moved mid-cycle, an access could start under one owner
   and finish under the other — and the bad direction is SILENT (the 037 declines
   the grant, qbus_mem is past its detection edge, nobody replies, qbto turns it
@@ -1573,7 +1582,7 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   study found a candidate fitting ALL SEVEN hardware tone legs and **it is now
   shipped RTL**: a **request setup window of 2 half-CLKIN phases at the PC==4
   grant decision** (`va_037_sync`'s `GRANT_SETUP` parameter) **+ the board's
-  D8:B RPLY re-timing flop on the 037's reply** (`src/bk_rply.sv`). Every
+  D8:B RPLY re-timing flop on the 037's reply** (`src/bus/bk_rply.sv`). Every
   residual lands inside ±1 Hz of tone-reading error (Σ|Δ| = 33 cycles over
   seven legs); per instruction it adds **exactly one grant slot to the second
   read of a back-to-back pair** and nothing to a fetch 2.5 slots later.
@@ -1603,7 +1612,7 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   `va_037_sync` MUST be reset — without it RASEL goes X and the sim hangs.)
 - **EVNT/IRQ2 frame interrupt (Phase 9 rework, BK-0011M):** the 50 Hz system
   timer. **The 037 has NO vertical-blanking output pin** — the real board
-  synthesises IRQ2 externally, and `src/bk_evnt.sv` is a gate-faithful replica
+  synthesises IRQ2 externally, and `src/peripheral/bk_evnt.sv` is a gate-faithful replica
   of that detector (**schematic-traced pin-by-pin in `doc/bk0011m.sch`; see
   `sim/evnt/README.md` for the full trace and contract**): **D28** (К555ИЕ5,
   ÷2 section) with `CKA = ~(SYNCO | QA)` (D6:C, QA fed back) and its async
@@ -1757,7 +1766,7 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   nRPLY onto the CPU's RPLY pin (Q̄→R28→pin 39; the CPU never sees raw bus
   RPLY, only its own internal self-reply bypasses it), and D11 (К555ТМ9 hex
   posedge D) re-times IRQ1–3/VIRQ *plus ACLO and DMR*.
-  **D8:B IS NOW MODELLED — `src/bk_rply.sv`, Phase 9 (2026-07-26)**, and it is
+  **D8:B IS NOW MODELLED — `src/bus/bk_rply.sv`, Phase 9 (2026-07-26)**, and it is
   half of the 037 grant-rule fit (see the beam-race bullet). The long-deferred
   worry that it "shifts ROM/IO by a full cycle and N_ROM would need
   recalibration" is resolved by scoping: it re-times **only the 037's reply**,
@@ -1872,7 +1881,7 @@ Roughly in order of how much they'd be missed.
   `sim/smktime`'s recipe (a tone whose frequency reads out one memory's access
   time, with an already-calibrated control leg) is the method that settled
   `N_EXT`; these two want the same treatment against a real SMK512.
-- **The SMK-RAM power-on `ram_init` pattern.** `src/ram_init.sv` fills the
+- **The SMK-RAM power-on `ram_init` pattern.** `src/sdram/ram_init.sv` fills the
   machine's own RAM with the authentic К565РУ6/РУ5 pattern; the SMK512's
   512 KB segment is left zero-filled.
 
@@ -1883,7 +1892,7 @@ Roughly in order of how much they'd be missed.
   the tape bullet.
 - **Keyboard reset chord** — `warm_rst_req` has the OR seam, no chord decodes
   into it.
-- **Cartridge slot** (`src/qbus_slot.sv`, `SLOT_ENABLE=0`) drives nothing; the
+- **Cartridge slot** (`src/bus/qbus_slot.sv`, `SLOT_ENABLE=0`) drives nothing; the
   pin map is commented in `ocbk_common.qsf`. Real 5V BK Q-bus hardware needs an
   external level shifter — Cyclone I is not 5V-tolerant. If a second nVIRQ
   source ever lands here, OR the active-high asserts and invert at the top —
