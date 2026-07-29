@@ -1,5 +1,4 @@
 PROJECT  := ocbk
-PARKING  := fw
 
 QUARTUS_HOME ?= /opt/altera/11.0/quartus
 QUARTUS_BIN  := $(QUARTUS_HOME)/bin
@@ -13,9 +12,9 @@ QUARTUS_CPF  := $(QUARTUS_BIN)/quartus_cpf
 QUARTUS_PGM  := $(QUARTUS_BIN)/quartus_pgm
 PGM_CABLE    := USB-Blaster
 
-.PHONY: all compile collect sim clean distclean flash blob-check
+.PHONY: all compile sim clean distclean flash blob-check
 
-all: compile collect
+all: compile
 
 # --- simulation regressions (no Quartus required) -------------------------
 sim:
@@ -58,7 +57,7 @@ compile: mem/ram_test.hex mem/boot_blob.hex mem/boot_blob11.hex
 	$(QUARTUS_ASM) $(PROJECT).qpf
 	@echo ">> Phase 5 - Convert Programming Files"
 	$(QUARTUS_CPF) -c $(PROJECT).cof
-	mv -f $(PROJECT).pof recovery.pof
+	@echo ">> Done! Firmware in $(PROJECT).pof"
 
 mem/ram_test.hex: mem/gen_mem.py
 	cd mem && python3 gen_mem.py ram_test.hex
@@ -75,22 +74,15 @@ mem/boot_blob.hex: mem/gen_boot_blob.py mem/roms/monit10.rom \
 
 mem/boot_blob11.hex: mem/boot_blob.hex ;
 
-collect:
-	mkdir -p $(PARKING)
-	-mv -f recovery.pof $(PARKING)/
-	-cp $(PROJECT).fit.summary $(PARKING)/fit_summary.log
-	@echo ">> Done! Firmware in $(PARKING)/"
-
 clean:
 	rm -rf db/ greybox_tmp/ incremental_db/
 	rm -f *.done *.map.* *.pin *.rpt *.sta.* *.qmsg
 
 distclean: clean
-	rm -f $(PROJECT).pof $(PROJECT).sof $(PROJECT).rbf recovery.pof
-	rm -rf $(PARKING)/
+	rm -f $(PROJECT).pof $(PROJECT).sof $(PROJECT).rbf $(PROJECT).rpd
 
-flash: $(PARKING)/recovery.pof
-	$(QUARTUS_PGM) -c "$(PGM_CABLE)" -m AS -o "PV;$(PARKING)/recovery.pof"
+flash: $(PROJECT).pof
+	$(QUARTUS_PGM) -c "$(PGM_CABLE)" -m AS -o "PV;$(PROJECT).pof"
 
 # Verify the ROM blob inside the flashable POF: convert to RPD and compare the
 # hex_block page at 0x40000 against boot_blob.bin. The RPD is in RBF/LSB-first
@@ -99,11 +91,11 @@ flash: $(PARKING)/recovery.pof
 # Page_0 equals ocbk.rbf verbatim) - so the RPD page must hold rev(blob), and
 # the PHYSICAL flash then holds the blob verbatim for the loader's MSB-first
 # SPI read.
-blob-check: $(PARKING)/recovery.pof mem/boot_blob.hex
-	$(QUARTUS_CPF) -c $(PARKING)/recovery.pof $(PARKING)/recovery.rpd
+blob-check: $(PROJECT).pof mem/boot_blob.hex
+	$(QUARTUS_CPF) -c $(PROJECT).pof $(PROJECT).rpd
 	python3 -c "import sys; \
 	  rev = bytes(int(format(i,'08b')[::-1],2) for i in range(256)); \
-	  rpd = open('$(PARKING)/recovery.rpd','rb').read(); \
+	  rpd = open('$(PROJECT).rpd','rb').read(); \
 	  ok = True; \
 	  blob = open('mem/boot_blob.bin','rb').read(); \
 	  ok &= rpd[0x40000:0x40000+len(blob)] == bytes(rev[b] for b in blob); \

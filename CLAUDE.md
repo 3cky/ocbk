@@ -205,7 +205,7 @@ exact bit fields and the reset rule.
 
 ```
 make sim       # Icarus regressions: bk10 cycle-count oracle + slave cosim
-make           # Quartus: map -> fit -> sta -> asm -> POF (parked in fw/)
+make           # Quartus: map -> fit -> sta -> asm -> POF (ocbk.pof in the project root)
 make flash     # program EPCS4 over USB-Blaster (Active Serial; JTAG TDO not wired)
 make clean     # remove build intermediates
 ```

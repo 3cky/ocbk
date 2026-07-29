@@ -13,14 +13,13 @@ greybox_tmp/
 *.sof
 *.pof
 *.rbf
+*.rpd
 *.map
 *.map.*
 *.sta.*
 *.fit.*
 *.asm.*
 *.qpf.bak
-recovery.pof
-fw/
 
 # Simulation outputs
 *.vvp

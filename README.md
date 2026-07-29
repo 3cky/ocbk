@@ -100,7 +100,7 @@ and reset for a plain machine.
 ## Building and flashing
 
 ```
-make          # build the bitstream (Quartus II 11.0) -> fw/
+make          # build the bitstream (Quartus II 11.0) -> ocbk.pof
 make flash    # write it to the board's config flash over USB-Blaster
 ```
 
