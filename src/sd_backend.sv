@@ -1,6 +1,6 @@
 // ============================================================================
 //  sd_backend - SPI-mode SD card host serving the smk_ide backend sector
-//  port (Phase-8 IDE increment (b)).
+//  port.
 //
 //  The card in the board's megasd slot (esemsx3 pin roles: DAT3 = CS,
 //  CMD = MOSI, DAT0 = MISO) holds a raw AltPro HDD image dd'd at card
@@ -20,7 +20,7 @@
 //  bk_media_ok rises and the SPI clock switches to /8 = 12.08 MHz (the
 //  proven epcs_boot rate, well under the 25 MHz SPI-mode limit). Any
 //  init failure/timeout parks in S_DEAD: bk_media_ok stays 0 and the
-//  drive reports absent - exactly the increment-(a) tie-off behaviour;
+//  drive reports absent - the same tie-off as having no backend at all;
 //  dbg_fail then carries WHERE it died (a TEMPORARY bring-up aid on the
 //  board LEDs): 1 CMD0 exhausted, 2 CMD8 answered neither a valid R7 echo
 //  nor illegal-command, 3 CMD55 rejected, 4 ACMD41 never ready as v2,
@@ -42,20 +42,19 @@
 //  - BkEmu ignores drive.read/write rc - and honors it only for the
 //  attach-time sector-7 geometry read); bk_media_ok never drops mid-run.
 //
-//  MULTI-BLOCK (CMD18/CMD25) WAS IMPLEMENTED, HARDWARE-CONFIRMED, AND
-//  REVERTED (2026-07-23). It coalesced a contiguous run into one streamed
-//  transfer, saving the ~10-byte command frame per sector - about 7 us
-//  against a 342 us block at the /8 data clock, i.e. ~2%. But that 2% is
-//  invisible: the BK drains 256 words through the task file at 4.03 MHz
-//  (~500-750 us per sector), so the drain, not the fetch, is the
-//  bottleneck, and the tier-1 prefetch already hides the whole fetch
-//  behind it. In exchange it cost a real fault: streams were closed
-//  lazily, so a stream stayed open across idle time, a warm reset left the
-//  card streaming (DCLO resets US, not the card), and the machine needed a
-//  SECOND reset press to find its disk. Not worth it - and the ~150 LE are
-//  better spent elsewhere. If it is ever revisited, close the stream when
-//  the operation ends (ao486's rtl/soc/driver_sd/card_read.v issues CMD12
-//  on the last sector) rather than lazily.
+//  SINGLE-BLOCK ONLY, deliberately. Multi-block (CMD18/CMD25) coalescing
+//  buys about 2% here and is not worth its failure mode: it saves the
+//  ~10-byte command frame per sector (~7 us against a 342 us block at the
+//  /8 data clock), but the BK drains 256 words through the task file at
+//  4.03 MHz (~500-750 us per sector), so the DRAIN is the bottleneck and
+//  smk_ide's tier-1 prefetch already hides the whole fetch behind it. The
+//  hazard is that an open stream shares MISO with the response path, so a
+//  stream left open across idle time survives a warm reset (DCLO resets
+//  US, not the card) and the machine cannot find its disk until a second
+//  reset press. If this is ever revisited: close the stream when the
+//  OPERATION ends - ao486's rtl/soc/driver_sd/card_read.v issues CMD12 on
+//  the last sector of every read - never lazily on the next non-contiguous
+//  request.
 //
 //  All on sys_clk like the engine - no CDC on the seam. The SPI byte
 //  engine follows epcs_boot: mode 0, MSB first, MOSI advances at the SCK
@@ -260,18 +259,18 @@ module sd_backend #(
     logic         sdhc;              // OCR CCS -> block addressing
     logic [3:0]   init_try;
     // shared settle/ACMD41/token/busy budget. 20 bits holds the largest
-    // default (BUSY_POLLS=400000 < 2^19) with margin; the full 32-bit width
-    // made the decrement ripple the sys_clk critical path (a -0.646 ns setup
-    // violation once the CMD18 states added load sites) - narrowing is
+    // default (BUSY_POLLS=400000 < 2^19) with margin; keep it narrow - at the
+    // full 32-bit width the decrement ripple lands on the sys_clk critical
+    // path (-0.646 ns) once enough states load it. Narrowing is
     // behaviour-identical since every assigned budget fits.
     logic [19:0]  wait_cnt;
-    // registered "wait_cnt is zero". The 20-bit zero-compare used to sit in
-    // the `st` next-state cone, in a dozen states at once; with the recovery
-    // preamble's four extra states that cone became the design's worst path
-    // (-0.689 ns). Testing a pre-computed flag moves the compare off the
-    // state machine's critical path and into the counter's own (flop-to-flop)
-    // one - the x_ff treatment, applied to the timeout side. Every load site
-    // must set it, every decrement must look one ahead; loads clear it
+    // registered "wait_cnt is zero". Keep the test on this flag: the 20-bit
+    // zero-compare placed directly in the `st` next-state cone lands there in
+    // a dozen states at once and, with the recovery preamble's extra states,
+    // becomes the design's worst path (-0.689 ns). The flag moves the compare
+    // off the state machine's critical path and into the counter's own
+    // (flop-to-flop) one - the x_ff treatment on the timeout side. Every
+    // load site must set it, every decrement must look one ahead; loads clear it
     // unconditionally, so every budget parameter must stay NON-ZERO (a
     // zero override would read as "not expired" for one wrap).
     logic         wait_z;
@@ -745,9 +744,8 @@ module sd_backend #(
                 end
 
                 // ---- serving loop ------------------------------------------
-                // Single-block only (CMD17/CMD24). Multi-block coalescing
-                // (CMD18/CMD25) was implemented, hardware-confirmed and then
-                // REVERTED 2026-07-23 - see the module header for why.
+                // Single-block only (CMD17/CMD24) - deliberately; see the
+                // module header for why multi-block is not worth it here.
                 A_IDLE: begin
                     if (bk_req) begin
                         bk_ack   <= 1'b1;

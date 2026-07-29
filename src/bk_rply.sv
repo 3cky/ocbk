@@ -1,4 +1,4 @@
-// bk_rply - the board's D8:B RPLY re-timing flop (Phase 9).
+// bk_rply - the board's D8:B RPLY re-timing flop.
 //
 // On a real BK the CPU NEVER sees the raw wired-OR bus RPLY. Traced pin-by-pin
 // in doc/bk0011m.sch: the bus RPLY net S1-21 goes through D21 (ЛП9, OC) to
@@ -25,7 +25,7 @@
 //
 // So this module does not add a deviation; it completes a convention.
 //
-// CALIBRATION: this is one of the TWO ingredients of the Phase-9 037 grant-rule
+// CALIBRATION: this is one of the TWO ingredients of the 037 grant-rule
 // fit (sim/grantfit/README.md). On its own it is worth little (it closes none
 // of the seven hardware tone legs); together with va_037_sync's GRANT_SETUP it
 // puts all seven inside +/-1 Hz of the real BK-0011M readings. Neither works

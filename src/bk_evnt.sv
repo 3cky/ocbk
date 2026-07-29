@@ -1,4 +1,4 @@
-// bk_evnt - the BK-0011M 50 Hz EVNT/IRQ2 frame-interrupt detector (Phase 9).
+// bk_evnt - the BK-0011M 50 Hz EVNT/IRQ2 frame-interrupt detector.
 //
 // A gate-faithful replica of the real 0011M's external interrupt detector.
 // The 1801VP1-037 has NO "vertical blanking" output pin: IRQ2 is synthesised
@@ -37,9 +37,9 @@
 //   Sampling the new value would shorten the delay by a full scanline.
 //
 //   `irq_en` is an asynchronous CLEAR of the request flop, not a combinational
-//   gate. Consequence, and a real divergence from both our pre-Phase-9 model
-//   and MiSTer's: un-masking mid-blanking does NOT retro-fire instantly - the
-//   flop leaves reset and only sets at the NEXT SYNCO edge.
+//   gate. Consequence, and a real divergence from MiSTer: un-masking
+//   mid-blanking does NOT retro-fire instantly - the flop leaves reset and only
+//   sets at the NEXT SYNCO edge.
 //
 // Measured against the vendored reference netlist (sim/ref037/va_037.v),
 // full-screen (177664 bit 9 set), stable every frame:
@@ -49,8 +49,8 @@
 //
 // and in 1/4-screen mode (177664 bit 9 clear) WTI stops after the 64th
 // displayed line, so the request asserts 49604 CLKIN BEFORE the VGATE rise -
-// i.e. during active video. That is authentic, and is exactly what the old
-// "nIRQ2 = vgate" model could not express.
+// i.e. during active video. That is authentic, and a simplified
+// "nIRQ2 = vgate" model cannot express it at all.
 //
 // Domain: all sys_clk. The 037 outputs change on the en_pos/en_neg /16 strobes
 // (CLKIN = sys_clk/16), so sys_clk edge detection is exact - no CDC here. The

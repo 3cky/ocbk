@@ -1,5 +1,5 @@
 // sdram_arbiter - fixed-priority, single-word, non-preemptive arbiter that funnels
-// several requestors onto the single-word sdram_ctrl command port (Phase 3).
+// several requestors onto the single-word sdram_ctrl command port.
 //
 // Everything on the BK SDRAM is single-word (the controller's command port is one
 // word), so the arbiter never issues bursts: it picks the highest-priority pending
@@ -9,7 +9,7 @@
 // RPLY-window margin relies on once the SDRAM is contended (see CLAUDE.md's
 // "SDRAM arbiter ports" bullet - there is NO fairness, so port 1 must stay paced).
 //
-// Priority = port index: port 0 is highest. Integration mapping (Phase 3/4):
+// Priority = port index: port 0 is highest. Integration mapping:
 //   [0] CPU RAM/ROM   (highest - protects cycle-accuracy; the 037 grant, not the
 //                      arbiter, sets its timing). During boot the ROM-loader is
 //                      MUXED onto port 0 externally (CPU is held in reset then, so

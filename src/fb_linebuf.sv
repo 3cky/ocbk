@@ -1,4 +1,4 @@
-// fb_linebuf - dual-clock ping-pong BK line buffer (Phase 4 readout CDC).
+// fb_linebuf - dual-clock ping-pong BK line buffer (the readout CDC).
 //
 // Two 512-nibble banks (bank = BK line LSB): the sys_clk side fills the bank of
 // the NEXT BK line while the pixel side displays the other - the triple-ahead

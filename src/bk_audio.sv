@@ -15,18 +15,17 @@
 //  channels), centred on mid-scale - the board-proven scheme from
 //  ocb-test/audio_test.sv (which produces an audible 1 kHz tone on this exact
 //  board). The speaker level maps to a full-swing code (0 <-> 63) and
-//  idle/reset holds mid-scale (32) so there is no DC step/click. NOTE: an
-//  earlier version used the esemsx3 tri-stated {lvl,4'bZ,lvl} pattern for
-//  audio - that is for esemsx3's 21 MHz sigma-delta bitstream and produced NO
-//  sound here; drive all six taps push-pull for audio.
+//  idle/reset holds mid-scale (32) so there is no DC step/click. Do NOT
+//  tri-state the ladder for audio (the esemsx3 {lvl,4'bZ,lvl} pattern): that
+//  scheme is for esemsx3's 21 MHz sigma-delta bitstream and is SILENT on this
+//  board. All six taps push-pull.
 //
 //  CMT (cassette) mode - the ONE intentional tri-state use of the ladder,
 //  esemsx3's board-proven Cassette Magnetic Tape trick (emsx_top.vhd, the
-//  CmtScro block): while cmt_mode is on (DIP 4 in the top, read live; it was
-//  the PS/2 Scroll Lock toggle through Phase 8; gating on the 177716 motor bit was tried
-//  first but real BK software writes bit 7 = 0 outside tape ops and wrongly
-//  killed the right audio channel), the right-channel ladder becomes a
-//  comparator at the jack:
+//  CmtScro block): while cmt_mode is on (DIP 4 in the top, read live - and do
+//  NOT gate it on the 177716 motor bit instead, however authentic that looks:
+//  real BK software writes bit 7 = 0 outside tape ops, which kills the right
+//  audio channel), the right-channel ladder becomes a comparator at the jack:
 //    dac_r[5] = Z            <- CMT INPUT pad, sampled below
 //    dac_r[4] = Z
 //    dac_r[3] = tape_lvl     \  positive feedback through the R-2R resistors

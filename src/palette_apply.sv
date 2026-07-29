@@ -1,8 +1,8 @@
-// palette_apply - BK palette stage (Phase 4; BK-0011M palettes in Phase 7).
+// palette_apply - the BK palette stage.
 //
 // Sits between the 037 video fetch and the framebuffer write, modelling the
 // palette hardware that is EXTERNAL to the 037 chip. Decodes one fetched 16-bit
-// video word into 16 canonical framebuffer slots. Since Phase 7 the canonical
+// video word into 16 canonical framebuffer slots. The canonical
 // 4-bit FB index IS the BK-0011M physical colour nibble {R1, B, G, R0} (2-bit
 // red, 1-bit blue/green - the machine's whole colour space is exactly 16
 // colours; vga_out decodes the nibble combinationally, no CLUT):

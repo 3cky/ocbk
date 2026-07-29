@@ -1,4 +1,4 @@
-// ps2_rx - minimal receive-only PS/2 front end (Phase 6 keyboard).
+// ps2_rx - minimal receive-only PS/2 front end.
 //
 // Runs entirely on cpu_clk (~3.02 MHz): the PS/2 clock is 10-16 kHz, so a
 // 2-FF synchronizer plus falling-edge detection oversamples it ~100x - no

@@ -1,15 +1,15 @@
-// qbus_pkg - shared Q-bus constants for the ocbk BK-0010 core.
+// qbus_pkg - shared Q-bus constants for the ocbk BK-0010 / BK-0011M core.
 //
 // The Q-bus itself is carried as plain tri-state wires shared at the parent
-// (cpu_test) level - every participant (the vm1 core, the qbus_sdram slave, and
-// the optional qbus_slot bridge) connects to the same inverted, active-low nets
+// level - every participant (the vm1 core, the qbus_mem front-end, and the
+// optional qbus_slot bridge) connects to the same inverted, active-low nets
 // and follows open-collector / drive-Z discipline, exactly as vm1.v already does
 // (`x ? 1'b0 : 1'bZ` and `ad_n = ena ? ~out : 1'bZ`). SystemVerilog interfaces
 // are avoided deliberately: neither Quartus II 11.0 nor Icarus handle tri-state
 // interface members reliably, and plain nets resolve multiple drivers naturally.
 //
-// This package only carries the decode bounds and the deterministic RPLY latency
-// reproduced from the bk10 timing testbench.
+// The package carries the address-decode bounds, the deterministic RPLY latency
+// counts (N_*), the mem_mapper region kinds (MK_*) and the physical SDRAM map.
 package qbus_pkg;
 
    // True-polarity address decode (octal), matching bk10_tb:
@@ -27,7 +27,7 @@ package qbus_pkg;
    localparam int unsigned N_RAM = 4;
    localparam int unsigned N_ROM = 2;
 
-   // Keyboard controller (bk_kbd014, Phase 6): fixed RPLY latency for the
+   // Keyboard controller (bk_kbd014): fixed RPLY latency for the
    // 177660/177662 register accesses and for the IAK vector cycle, in
    // cpu_clk FSM edges (N_ROM convention; N==1 = reply at the detection
    // edge itself). Calibrated against the vp_014 netlist reference run by
@@ -37,7 +37,7 @@ package qbus_pkg;
    localparam int unsigned N_KBD = 1;
    localparam int unsigned N_IAK = 1;
 
-   // ---- TURBO mode (Phase 9): the RAM reply when the 037 is not stealing ----
+   // ---- TURBO mode: the RAM reply when the 037 is not stealing -------------
    // Turbo is an explicitly NON-AUTHENTIC performance mode (PS/2 F12, 6.04 MHz
    // CPU). In it the 037 is told to stop decoding CPU accesses as its own
    // (va_037_sync's no_steal), so nobody would reply for RAM - qbus_mem's wait
@@ -58,7 +58,7 @@ package qbus_pkg;
    // was extended UNEXPECTEDLY" and sim/smktime fails a run on it).
    localparam int unsigned N_TURBO = 2;
 
-   // ---- Phase-7 mem_mapper region kinds (BK-0011M banking) -----------------
+   // ---- mem_mapper region kinds (BK-0011M banking) -------------------------
    // Plain localparams (no enum) - Quartus II 11.0 chokes on package enums used
    // across module boundaries. Writability is encoded by the kind itself:
    //   MK_NONE   : undecoded -> no reply, the CPU's qbto timer -> trap 4
@@ -66,7 +66,7 @@ package qbus_pkg;
    //               ALL internal RAM, incl. BK-0011M window-1 banked RAM (the
    //               real 037 fronts it too: qbus_mem exports ext_ram so
    //               va_037_sync forces A15 low - see the a15_037 note there)
-   //   MK_EXT    : Phase-8 SMK512 external RAM (its own controller on the real
+   //   MK_EXT    : SMK512 external RAM (its own controller on the real
    //               Q-bus -> a genuine fixed-latency FSM reply, NOT 037-owned /
    //               cycle-stolen). Rides the same cpu_sdram_dp port-0 datapath
    //               with the mapper's phys; read+write, done-gated both ways.
@@ -86,10 +86,9 @@ package qbus_pkg;
    localparam logic [1:0] MK_EXT    = 2'd2;
    localparam logic [1:0] MK_ROM    = 2'd3;
 
-   // MK_EXT fixed reply count = the SMK512 RAM reply. CALIBRATED 2026-07-25
-   // against a real BK-0011M + SMK512 (was the Phase-8 placeholder N_RAM = 4),
-   // CONFIRMED ON HARDWARE 2026-07-26: the board plays 602 Hz against the real
-   // machine's 601.
+   // MK_EXT fixed reply count = the SMK512 RAM reply. CALIBRATED against a real
+   // BK-0011M + SMK512 and CONFIRMED ON HARDWARE: the board plays 602 Hz
+   // against the real machine's 601.
    //
    // Method (sim/smktime, the oracle that keeps it honest): test/sndtestsmk.mac
    // toggles the 177716 speaker bit around a 192-iteration SOB delay loop, so
@@ -100,13 +99,13 @@ package qbus_pkg;
    //
    //                     loop in SMK RAM     loop in ordinary RAM (control)
    //     real            601 Hz (3351 cyc)   478 Hz (4212 cyc)
-   //     board @4        514 Hz (3918 cyc)   482 Hz (4177 cyc)  -14.5% / +0.84%
-   //     board @1        602 Hz              482 Hz             +0.17% / +0.84%
+   //     board @N=4      514 Hz (3918 cyc)   482 Hz (4177 cyc)  -14.5% / +0.84%
+   //     board @N=1      602 Hz              482 Hz             +0.17% / +0.84%
    //     sim/smktime @1  599 Hz (3362 cyc)   482 Hz (4176 cyc)
    //
    // The control leg being right to +0.8% is what makes this a measurement of
    // N_EXT and not of the clock rate or the CPU core. One unit of N is exactly
-   // one CPU cycle, and the gap was 567 cycles / 197 accesses = 2.88, putting
+   // one CPU cycle, and the gap is 567 cycles / 197 accesses = 2.88, putting
    // the real board at N ~= 1: it replies WITHIN the strobe cycle, like any
    // async external SRAM board - the same reason N_KBD = 1 for the 1801ВП1-014.
    //
@@ -121,7 +120,7 @@ package qbus_pkg;
    // WHAT THE RESIDUAL IS: **our CPU clock, and essentially nothing else.**
    // Both legs run the identical instruction stream, so
    //   C = C_internal + reply_overhead + 037_steal
-   // and the N_EXT=4 board pair separates the terms (at N=4 both legs carry the
+   // and the N=4 board pair separates the terms (at N=4 both legs carry the
    // same 197*3 overhead, so their difference IS the steal):
    //   C_internal  ours 3326.3   037 steal  ours 260.1 = 1.320/access
    // Ask what real CPU clock would make the real machine's measured tones agree
@@ -140,11 +139,10 @@ package qbus_pkg;
    // tightens N_EXT itself: against a 4.000 MHz machine the real SMK leg is
    // 3327.8 cycles against our ideal 3326.3, where N=2 would be 3523.
    //
-   // (An earlier revision of this comment claimed the leftover ~0.67% belonged
-   // to the 037 steal, from dividing the WHOLE control-leg gap by the access
-   // count - 35 cyc / 197 = 0.18/access. That double-counts everything that is
-   // not memory at all. Correctly decomposed it is 0.056/access, and once the
-   // clock is accounted for, 0.027 and not significant.)
+   // Do NOT re-derive a per-access error by dividing a whole-leg gap by the
+   // access count (35 cyc / 197 = "0.18/access"): that double-counts everything
+   // that is not memory. Decomposed as above it is 0.056/access, and once the
+   // clock is accounted for, 0.027 and not significant.
    //
    // N = 1 is a reply at the detection edge itself, which the wait FSM's wcnt
    // cannot count (see `ext_fast` in qbus_mem) AND which lands before the SDRAM
@@ -156,14 +154,15 @@ package qbus_pkg;
 
    // SMK512 memory-layout register 177130 (the floppy control register the SMK
    // "ab-uses"; BkEmu SmkMemoryManager). Write-only fixed reply count for the
-   // qbus_mem positive-decode write path. PLACEHOLDER like N_EXT/N_VREG:
-   // recalibrate reference-tb-first (the real register is board logic, not the
-   // 037).
+   // qbus_mem positive-decode write path. Still an UNCALIBRATED placeholder
+   // (unlike N_EXT/N_VREG): recalibrate reference-tb-first against a real
+   // SMK512, the way sim/smktime settled N_EXT. The real register is board
+   // logic, not the 037.
    localparam int unsigned N_SMKREG = N_ROM;
 
-   // SMK512 IDE task file 0177740-0177756 (Phase-8 IDE increment; BkEmu
-   // SmkIdeController is the reference). Eight word registers - DATA 177756,
-   // ERROR/FEATURES 177754, SECTOR COUNT 177752, SECTOR NUMBER 177750,
+   // SMK512 IDE task file 0177740-0177756 (BkEmu SmkIdeController is the
+   // reference). Eight word registers - DATA 177756, ERROR/FEATURES 177754,
+   // SECTOR COUNT 177752, SECTOR NUMBER 177750,
    // CYL LOW 177746, CYL HIGH 177744, COMP_1 177742 (read {alt-status,
    // drive/head}, write-at-exact-742 = drive/head, byte 177743 = control
    // register), COMP_0 177740 (read {drive-addr, status}, write-at-exact-740
@@ -185,7 +184,7 @@ package qbus_pkg;
    // qbus_mem write-only reply path.
    //
    // N = 1 - "RPLY follows the strobe inside the cycle", the N_KBD convention.
-   // SCHEMATIC-DERIVED (doc/bk0011m.sch, traced 2026-07-26), not guessed: the
+   // SCHEMATIC-DERIVED (doc/bk0011m.sch), not guessed: the
    // palette register D35 (К555ТМ9) is clocked by net S1-78 = D6:C (К555ЛЕ4,
    // 3-input NOR of the 037's BS D19.38, DOUT D19.40 and the latched address
    // bit D27.9 Q2) - the write strobe itself - and THAT SAME NET drives D34.1
@@ -198,9 +197,9 @@ package qbus_pkg;
    // the 014 does NOT reply to a 662 write (sim/ref014/README.md) and the 037
    // decodes only 177664 (va_037_sync RWR/ROE) - D34 is the whole reply.
    //
-   // Was the N_ROM (=2) placeholder through Phase 8.  This is now the value the
-   // board actually implements - but note what sim/vregtime MEASURED while
-   // establishing it, because it closes the question permanently:
+   // This is the value the board implements - but note what sim/vregtime
+   // MEASURED while establishing it, because it closes the question
+   // permanently:
    //
    //   **N_VREG is invisible to the CPU.  The whole 1..4 ladder produces
    //     BIT-IDENTICAL cycle counts.**
@@ -212,8 +211,8 @@ package qbus_pkg;
    // the other path (VREGWR fast=192 vs slow=192).  So this constant is NOT a
    // cycle-accuracy risk in either direction - it is set to 1 because that is
    // what the hardware does, not because anything depends on it.  In
-   // particular it is NOT the cause of the beam-raced-palette skew: that was
-   // the hypothesis this oracle was built to test, and it falsified it.
+   // particular it is NOT the cause of the beam-raced-palette skew: that skew
+   // is the 037 grant rule (va_037_sync's GRANT_SETUP + bk_rply).
    //
    // Like N_EXT, the mechanism that expresses N=1 (qbus_mem's `vreg_fast`) is
    // gated on N_VREG == 1 and folds away, so raising this back to >= 2 is safe.
@@ -231,13 +230,13 @@ package qbus_pkg;
    localparam logic [23:0] BK11_TOPROM_BASE = 24'h038000; // fixed 140000-177577 ROM
                                                           // (tops out at 0x39FBF)
 
-   // Phase-8 SMK512 external RAM: 512 KB = 256 Kwords at 0x40000-0x7FFFF,
+   // SMK512 external RAM: 512 KB = 256 Kwords at 0x40000-0x7FFFF,
    // 2^18-aligned so the mapper's translation stays pure concatenation:
    //   phys = SMK_RAM_BASE | {abs_seg[6:0], addr[11:1]}
    // (128 segments x 2 Kwords; abs_seg = page[3:0]*8 + rel_seg[2:0]).
    localparam logic [23:0] SMK_RAM_BASE = 24'h040000;
 
-   // Phase-8 SMK512 BIOS ROM: ONE 4 KB image (2048 words, appended to the
+   // SMK512 BIOS ROM: ONE 4 KB image (2048 words, appended to the
    // bk11 blob right after MSTD) backing BOTH selectable windows (rom6
    // @160000, rom7 @170000 - selection per SMK mode in mem_mapper). 2^11-
    // aligned so phys = SMK_BIOS_BASE | addr[11:1]. Reads reuse the fixed

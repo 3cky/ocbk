@@ -1,4 +1,4 @@
-// kbd_ps2bk - PS/2 scan codes -> BK keyboard events (Phase 6 translator).
+// kbd_ps2bk - PS/2 scan codes -> BK keyboard events.
 //
 // Consumes scan-code bytes from ps2_rx and produces the event interface of
 // bk_kbd014 (make strobe + final KOI-7 code + АР2 flag + any-key-down
@@ -28,14 +28,10 @@
 //                            radial shape as Print Screen - never a matrix
 //                            code, never in the held-key list, power-on init
 //                            only, so the setting survives a warm reset.
-//   Scroll Lock (7E)      -> unused. CMT tape-in mode moved to DIP 4 in
-//                            ocbk_top (live ~pDip[3] read; through Phase 8 it
-//                            was a key_cmt toggle here, the esemsx3 CmtScro
-//                            convention). (The 177716 motor bit was tried as
-//                            the CMT enable first - authentic, but real BK
-//                            software writes bit 7 = 0 outside tape ops and
-//                            wrongly killed the right audio channel; hardware
-//                            finding 2026-07-10.)
+//   Scroll Lock (7E)      -> unused. CMT tape-in mode is DIP 4 in ocbk_top
+//                            (a live ~pDip[3] read), not a key here - see
+//                            bk_audio.sv for why it is not the 177716 motor
+//                            bit either.
 //
 // Case algebra per BkEmu KeyboardManager (the canonical BK behaviour):
 // letters take low register = latin ^ (caps_upper | shift); СУ masks codes

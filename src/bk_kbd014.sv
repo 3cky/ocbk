@@ -1,4 +1,4 @@
-// bk_kbd014 - behavioral 1801ВП1-014 keyboard-controller equivalent (Phase 6).
+// bk_kbd014 - behavioral 1801ВП1-014 keyboard-controller equivalent.
 //
 // Serves 177660 (CSR) / 177662 (data) and the interrupt-acknowledge vector
 // (060 / 0274) on the shared Q-bus. The bus-visible contract is validated
@@ -218,7 +218,7 @@ module bk_kbd014 (
     // ad_n/rply_n are genuine wired-AND nets (the CPU + memory + this chip all
     // drive them), so they stay open-collector: Quartus infers the wired-AND
     // from the multiple Z-idle drivers. virq_n, by contrast, has a SINGLE
-    // driver in Phase 6 (this is the only VIRQ source) - a lone Z-idle
+    // driver (this is the design's only VIRQ source) - a lone Z-idle
     // tri-state degenerates on Cyclone I (no internal tri-state/pull-up:
     // Quartus "converts the tri-state buffer feeding internal logic into a
     // wire" and ties the idle state to 0 = permanently asserted, so virq_ff

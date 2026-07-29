@@ -1,4 +1,4 @@
-// epcs_boot - boot-time ROM loader: EPCS config flash -> SDRAM (Phase 5 + 7).
+// epcs_boot - boot-time ROM loader: EPCS config flash -> SDRAM.
 //
 // After SDRAM init (start), reads TWO boot blobs (built by mem/gen_boot_blob.py)
 // from the EPCS4 serial flash with the plain READ (0x03) command and streams
@@ -18,9 +18,9 @@
 // the EPCS. The two reversals cancel: the physical flash holds the Intel-HEX
 // bytes verbatim as seen by an MSB-first SPI READ, so gen_boot_blob.py emits
 // true bytes and this loader is a plain MSB-first shift, matching the
-// behavioural sim/epcs_model.sv. (A first attempt pre-reversed the HEX on the
-// mistaken belief RPD = physical bytes; on the board the loader then read
-// rev(blob) and parked in the checksum-fail fallback.)
+// behavioural sim/epcs_model.sv. Do NOT pre-reverse the HEX on the belief that
+// RPD = physical bytes: the two reversals already cancel, and pre-reversing
+// makes the loader read rev(blob) and park in the checksum-fail fallback.
 //
 // SPI: mode 0, DCLK = clk/8 (12.08 MHz at the 96.65 MHz sys_clk - EPCS4 plain
 // READ is only rated to ~20-25 MHz). MOSI advances at the DCLK fall, MISO is

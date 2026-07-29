@@ -1,12 +1,12 @@
-// mem_mapper - the qbus_mem memory-mapper sub-module (Phase 7, BK-0011M banking).
+// mem_mapper - the qbus_mem memory-mapper sub-module (BK-0011M banking).
 //
 // One config-driven translation seam: (CPU address, mapping registers) ->
 // (physical SDRAM word, region kind). The region kind encodes both the RPLY
 // owner and writability (see qbus_pkg MK_*). In BK-0010 mode (model_bk11=0)
-// the translate is BIT-IDENTICAL to the pre-Phase-7 inline decode in qbus_mem
-// (RAM < 100000 -> MK_RAM037, ROM 100000-177577 -> MK_ROM, else MK_NONE, all
-// at phys = addr[15:1]) and none of the mapping state participates - every
-// existing timing golden stays the regression anchor.
+// the translate is a plain pass-through (RAM < 100000 -> MK_RAM037, ROM
+// 100000-177577 -> MK_ROM, else MK_NONE, all at phys = addr[15:1]) and none of
+// the mapping state participates. That invariant is what makes every BK-0010
+// timing golden the regression anchor for this module - keep it.
 //
 // BK-0011M semantics (canonical reference: BkEmu Bk11MemoryManager.java):
 //   000000-037777  fixed RAM page 6            (037-owned, MK_RAM037)
@@ -56,17 +56,19 @@
 // I/O, never as memory - and cpu_clk is the same divided clock tree, so the
 // new map is stable long before the next SYNC address latch.
 //
-// Phase-8 hook: window ownership is a selectable source - the SMK512 (or any
+// Expansion hook: window ownership is a selectable source - the SMK512 (or any
 // other expansion mapper) layers in HERE as an alternative page/bank source,
 // not as another decode strewn through qbus_mem.
 //
-// Phase 8 (SMK512, increment 1): the 512 KB segmented RAM extension layers in
-// exactly at that hook, as a second translate stage over the bk11 decode.
+// SMK512: the 512 KB segmented RAM extension layers in exactly at that hook,
+// as a second translate stage over the bk11 decode.
 // Canonical reference: BkEmu SmkMemoryManager.java (+ its unit test) - MiSTer
 // rtl/memory.sv was cross-checked and loses every dispute (reset default,
 // strobe arming width). Contract:
 //   * control register = 177130 (the floppy control register the SMK
-//     "ab-uses"; no floppy is modelled - reads stay un-replied -> trap 4).
+//     "ab-uses"). This module only SNOOPS its writes; the reply for
+//     177130/177132 belongs to qbus_mem's sel_fdd КНГМД stub, which answers
+//     BOTH directions regardless of the layout.
 //     TWO-PHASE STROBE: every write recomputes strobe = (value & 017) == 06;
 //     a layout commit fires on the strobe FALLING edge - the write FOLLOWING
 //     an arming write, carrying the new mode+page in its own value. Byte
@@ -83,7 +85,7 @@
 //     read-only seg 0 AND the ALL-mode extent (write -> no reply -> trap 4,
 //     the MK_ROM write rule); smk_wo flags the HLT-mode write-only extent
 //     (read -> no reply -> trap 4, the mirror).
-//   * SMK BIOS ROM (increment 2): ONE 4 KB image (mem/roms/smk512_v205.rom,
+//   * SMK BIOS ROM: ONE 4 KB image (mem/roms/smk512_v205.rom,
 //     at SDRAM SMK_BIOS_BASE via the bk11 blob) backs BOTH selectable
 //     windows - rom6 @ 160000 (selected in SYS, STD10, STD11) and rom7
 //     @ 170000 (SYS only). MK_ROM: reads ride the SDRAM path, writes are not
@@ -231,7 +233,7 @@ module mem_mapper #(
         end
     end
 
-    // ---- Phase-8 SMK512 layout register (177130 write snoop) ---------------
+    // ---- SMK512 layout register (177130 write snoop) -----------------------
     // The mode is stored PRE-DECODED as the per-segment source vectors (the
     // case table below runs on the commit edge, not in the translate cone):
     // decode-at-commit and decode-at-use are behaviourally identical - the
@@ -351,15 +353,14 @@ module mem_mapper #(
     // bases from qbus_pkg (no adders). Fed by the transparent SYNC address
     // latch, so it may glitch mid-address-phase exactly like the old inline
     // sel_ram - every consumer samples on a clock edge.
-    // This block is the pre-Phase-8 translate VERBATIM (only its outputs are
-    // renamed kind_std/phys_std): with smk_en=0 the overlay stage below is a
-    // wire-through, keeping bk10 AND plain-bk11 bit-identical - every existing
-    // timing golden stays the regression anchor.
+    // This block is the standard (non-SMK) translate: with smk_en=0 the overlay
+    // stage below is a wire-through, so bk10 AND plain-bk11 stay bit-identical
+    // to it - which is what keeps every timing golden the regression anchor.
     logic [1:0]           kind_std;
     logic [ADDR_BITS-1:0] phys_std;
     always_comb begin
         if (!model_bk11) begin
-            // BK-0010: bit-identical to the pre-Phase-7 inline decode.
+            // BK-0010: the plain pass-through decode (no mapping state).
             if (addr < RAM_TOP) begin
                 kind_std = MK_RAM037;
                 phys_std = ADDR_BITS'(addr[15:1]);

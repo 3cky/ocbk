@@ -1,7 +1,6 @@
-// cpu_sdram_dp - CPU Q-bus <-> SDRAM datapath for the Strategy-A memory subsystem
-// (Phase 3 SoC integration).
+// cpu_sdram_dp - the CPU Q-bus <-> SDRAM datapath.
 //
-// Under Strategy A the 037 (va_037_sync) owns RAM RPLY and its timing (the grant /
+// The 037 (va_037_sync) owns RAM RPLY and its timing (the grant /
 // cycle-stealing); this block is purely the DATA path plus the done-gate signal. On
 // a CPU RAM access it issues one word through the sdram_arbiter (port 0), drives the
 // read word back onto the bus, and raises mem_ready once the SDRAM access has
@@ -12,7 +11,8 @@
 //
 // One access is outstanding at a time (the CPU bus is single-threaded), so there is
 // no write buffer and no read-after-write hazard. Everything is in the sys_clk
-// domain; the bus strobes are synchronous to it (cpu_clk = sys_clk/32), so they are
+// domain; the bus strobes are synchronous to it (cpu_clk is a divider of sys_clk -
+// /32, /24 or /16 by model and turbo - so the phase is deterministic), so they are
 // sampled directly, exactly as va_037_sync samples them.
 //
 // DATIO(B) read-modify-write cycles (INC/BIS/XOR/... on memory) are two sequential
@@ -21,13 +21,14 @@
 // latch and sel_ram are SYNC-framed, so they still hold). mem_ready drops during
 // the write phase, done-gating the 037's second RPLY exactly like a plain write.
 //
-// Phase 5: SDRAM-backed ROM reads (sel_romr) ride the same read path - the linear
+// SDRAM-backed ROM reads (sel_romr) ride the same read path - the linear
 // addr[15:1] map puts ROM 100000-177577 at SDRAM words 0x4000-0x7F7F, below the
 // framebuffers. ROM is read-only here: a ROM write (or the DOUT phase of a ROM
-// DATIO) is never issued to the SDRAM - the qbus_mem front-end replies and
-// ignores it, so nothing in this FSM changes for it.
+// DATIO) is never issued to the SDRAM - the qbus_mem front-end does not select
+// it, so it gets no reply at all (qbto -> trap 4) and nothing in this FSM
+// changes for it.
 //
-// Phase 7: the physical word address now comes from mem_mapper as `phys` (in
+// The physical word address comes from mem_mapper as `phys` (in
 // BK-0010 mode it IS addr[15:1], so nothing moves); `addr` stays connected for
 // the addr[0] byte-lane select. BK-0011M window-1 banked RAM is a normal
 // MK_RAM037 access (sel_ram) - it reads AND writes through this same datapath
@@ -37,7 +38,7 @@
 // INC/BIS/... issue its write phase); a window-1 write is a posted write
 // (D_WR_REQ -> D_DONE on gnt) with mem_ready as the write done-gate.
 //
-// Phase 9 - the EARLY (SYNC-time) read issue, `fast_rd`. Normally a read is
+// The EARLY (SYNC-time) read issue, `fast_rd`. Normally a read is
 // issued when DIN asserts, and by the time the reply point comes round the
 // SDRAM word is long since there. That stops being true for a reply shorter
 // than the SDRAM latency: the SMK512 RAM is calibrated at N_EXT = 1, i.e.
@@ -70,19 +71,19 @@ module cpu_sdram_dp #(
     input  logic                 sel_ram,   // this access targets RAM (SYNC-framed;
                                             // incl. 0011M window-1 banked RAM)
     input  logic                 sel_romr,  // targets SDRAM-backed ROM (read-only)
-    input  logic                 sel_ramw,  // write-ONLY RAM leg (Phase-8 SMK
+    input  logic                 sel_ramw,  // write-ONLY RAM leg (the SMK
                                             // HLT-mode seg-7 extent): issues the
                                             // write like sel_ram but has NO read
                                             // path - a read is structurally never
                                             // fetched/driven (the smk_wo mirror
                                             // of sel_romr's never-issued write)
-    input  logic                 fast_rd,   // Phase-9: this SYNC-framed access is
+    input  logic                 fast_rd,   // this SYNC-framed access is
                                             // a short-reply (N=1) read leg - issue
                                             // the SDRAM read at SYNC, not at DIN,
                                             // so mem_ready is up before the reply
                                             // point (see the header note)
     input  logic                 rd_noe,    // fetch but do NOT drive this read
-                                            // (Phase-8 I/O-page overlay: the
+                                            // (the SMK I/O-page overlay: the
                                             // qbus_mem FSM drives the OR-merged
                                             // word instead); sampled into the
                                             // issue-time was_drive flop - never
@@ -273,12 +274,12 @@ module cpu_sdram_dp #(
     // combinational translate OUT of the bus-pad output-enable cone - the
     // live gate looped mapper regs -> kind -> OE -> ad pads -> the register
     // write snoops' data pins, a functionally false path (DIN and DOUT are
-    // mutually exclusive) that cost the Phase-8 netlist its sys_clk timing
+    // mutually exclusive) that once cost this netlist its sys_clk timing
     // closure. Cycle-identical: every ref037 golden pins it. was_drive is the
     // same idea for the I/O-page overlay reads (rd_noe sampled at issue): the
     // word is fetched for the qbus_mem FSM's OR-merge, never driven from here.
     //
-    // Phase 9 takes that one step further: even the state decode is gone. The
+    // The rule is taken one step further here: even the state decode is gone. The
     // whole (state==D_DONE && was_read && was_drive) term is precomputed into
     // `oe_arm` at the transitions into and out of D_DONE - identical by
     // construction (D_DONE is entered from D_RD_WAIT with was_read=1, from

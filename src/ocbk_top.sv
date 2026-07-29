@@ -1,16 +1,16 @@
 // ocbk_top - top level for the BK-0010 CPU + RAM-in-SDRAM + video pipeline on
 // the OneChipBook.
 //
-// Phase 3+4: the vm1 (1801ВМ1) core runs the ROM-resident test program with the
-// retimed 037 (va_037_sync) owning RAM RPLY / cycle-stealing; BK RAM (000000-
-// 077777) is in the board SDRAM behind sdram_arbiter; the 037 video fetch is
+// The vm1 (1801ВМ1) core runs the ROM image loaded from the config flash, with
+// the retimed 037 (va_037_sync) owning RAM RPLY / cycle-stealing; BK RAM is in
+// the board SDRAM behind sdram_arbiter; the 037 video fetch is
 // decoded through palette_apply into a double-buffered 4-bit-index framebuffer
 // in SDRAM and scanned out at 1024x768@60 (x2H/x3V) on the 6-bit R-2R VGA DAC.
 //
 // Only the pins the design drives are declared; every other device pin -
 // including the entire cartridge-slot block PIN_121-180 - is reserved as a
 // tri-stated input by the .qsf. The cartridge-slot Q-bus seam lives in qbus_slot
-// and is disabled (SLOT_ENABLE=0) for this phase.
+// and is held disabled (SLOT_ENABLE=0) - a forward seam, not a build option.
 //
 // Clock tree (one PLL only - board constraint: the PIN_28 crystal feeds a single
 // PLL). The x9 VCO yields 96.65 MHz; the pixel clock is the same VCO /3; the
@@ -20,8 +20,10 @@
 //   96.65 MHz  pMemClk   altpll extclk0  - SDRAM chip clock (phase-matched, e0)
 //   64.43 MHz  pix_clk   altpll clk1     - 1024x768@60 video readout
 //   /8  -> 12.08 MHz   dot_ena (1-in-8 strobe)             (spare)
-//   /32 -> ~3.02 MHz   cpu_clk (BK-0010) or /24 -> 4.03 MHz (BK-0011M),
-//          50% duty, model-selected by DIP 1 (cpu_clkgen)
+//   /16 ->  6.04 MHz   037 CLKIN enables en_pos/en_neg     (model-independent)
+//   cpu_clk, 50% duty, from the same cpu_clkgen chain:
+//          /32 -> 3.02 MHz (BK-0010)  /24 -> 4.03 MHz (BK-0011M), by DIP 1
+//          /16 -> 6.04 MHz (turbo, PS/2 F12 - overrides the model select)
 //          cpu_clk_n = ~cpu_clk                            (anti-phase pair)
 //
 // sys_clk <-> pix_clk are same-VCO related clocks; every real crossing is a
@@ -29,8 +31,9 @@
 // false-paths the pair (TimeQuest would otherwise time the 3:2 ~5.2 ns transfer).
 //
 // Reset: the SDRAM controller is released as soon as the PLL locks and runs its
-// ~200 us init; the EPCS boot loader then copies the BK-0010.01 ROM blob from
-// the config flash into the SDRAM ROM region (~22 ms); the CPU is held in reset
+// ~200 us init; the EPCS boot loader then copies BOTH ROM blobs from the config
+// flash into the SDRAM ROM regions - the BK-0010.01 set, then the BK-0011M set
+// plus the SMK512 BIOS image (~77 ms total); the CPU is held in reset
 // (DCLO low) until init_done AND boot_done, after which DCLO and ACLO are
 // released in sequence (the bk10_tb power-up ordering). The video readout +
 // pixel domain are held until init_done; RGB stays black until the first
@@ -52,8 +55,10 @@
 //
 // Real-BK reset wiring: DCLO/ACLO go to the CPU ONLY. All BK peripherals are
 // reset by the CPU's nINIT Q-bus line (driven open-collector by the vm1:
-// asserted during its own reset AND pulsed by the RESET instruction) - every
-// Phase-6+ peripheral keys its reset to init_n, never to dclo_n.
+// asserted during its own reset AND pulsed by the RESET instruction) - a
+// peripheral keys its reset to init_n, never to dclo_n. The documented
+// exceptions (map / 177662 / spk / СТОП-block / smk_ide) are DCLO-only and say
+// so at each site.
 //
 // ROM source: always the SDRAM image (the loaded MONITOR+BASIC set). There is
 // no on-chip ROM fallback - a failed EPCS boot (boot_ok=0) holds the CPU in
@@ -61,14 +66,13 @@
 // Naming: "DIP n" = physical switch n = pDip[n-1]; ON pulls the pin low.
 // DIP 1 = model select (OFF = BK-0010, ON = BK-0011M: /24 CPU clock, banking,
 // 177662, EVNT/IRQ2, BOS boot), latched while DCLO is held (power-on and warm
-// reset). DIP 8 = SMK512 enable (Phase 8; BK-0011M only, same DCLO-hold
-// latch; non-booting until the SMK BIOS blob lands - see the latch comment).
-// DIP 2 is unused.
+// reset). DIP 8 = SMK512 enable, same DCLO-hold latch - in BOTH models (the SMK
+// is an МПИ expansion board), and DIP-8-ON boots the SMK BIOS either way.
+// DIP 4 = CMT tape-in mode (read LIVE, no reset needed). DIP 2 is unused.
 //
 // screen_mode (mono-512 vs colour-256) models the physical monitor-cable switch
-// of a real BK-0010 -> now toggled by the PS/2 Print Screen key (each press
-// cycles the mode; power-on default = colour-256; survives warm reset). DIP 1 is
-// no longer used for it.
+// of a real BK-0010, toggled by the PS/2 Print Screen key (each press
+// cycles the mode; power-on default = colour-256; survives warm reset).
 //
 // LEDs (liveness):
 //   pLedPwr (red)  : solid once SDRAM init_done; BLINKS if the boot blob failed
@@ -85,18 +89,19 @@ module ocbk_top (
     input  logic        pClk21m,   // 21.47727 MHz crystal (PIN_28)
     output logic [7:0]  pLed,      // green LEDs   (1 = on)
     output logic        pLedPwr,   // red power LED (1 = on)
-    input  logic [7:0]  pDip,      // DIP switches (ON = low); [0] = model,
-                                   //   [7] = SMK512 enable (Phase 8)
-                                    // select (OFF = BK-0010, ON = BK-0011M),
-                                    // [1] = free (was force on-chip test ROM,
-                                    // removed with the on-chip ROM fallback)
+    input  logic [7:0]  pDip,      // DIP switches (ON = low):
+                                   //   [0] = model select (OFF = BK-0010,
+                                   //         ON = BK-0011M)
+                                   //   [3] = CMT tape-in mode (read live)
+                                   //   [7] = SMK512 enable
+                                   //   [1], [2], [4:6] = unused
     input  logic        pSltRst_n, // reset button (slot RESET net; low = pressed)
 
     // ---- PS/2 keyboard (receive-only; pins pulled up, driven Z) ----------
     inout  wire         pPs2Clk,
     inout  wire         pPs2Dat,
 
-    // ---- SD card (megasd slot; the SMK512 HDD backing store, Phase 8b) ---
+    // ---- SD card (megasd slot; the SMK512 HDD backing store) -------------
     // SPI-mode roles per esemsx3: DAT3 = chip select, CMD = MOSI,
     // DAT0 = MISO; DAT1/DAT2 unused (weak pull-ups in the QSF, driven Z -
     // pad-only tri-states like pDac_SR, never internal logic).
@@ -206,7 +211,7 @@ module ocbk_top (
     // hold (cpu_clkgen's >= wrap; the reset sequencer below just sees its
     // cpu_clk period change between edges). dclo_n is a quasi-static
     // cpu_clk-domain FF, 2-FF resynced here; pDip is a static switch.
-    // --- SMK512 enable: DIP 8 (ON = low = SMK present; Phase 8) -------------
+    // --- SMK512 enable: DIP 8 (ON = low = SMK present) ----------------------
     // The identical DCLO-hold latch: model and SMK config switch together on
     // a warm reset. Independent of DIP 1 - the SMK is an МПИ expansion board
     // and works on BOTH models (BkEmu BK_0010_SMK512 / BK_0011M_SMK512; see
@@ -236,10 +241,11 @@ module ocbk_top (
 
     // --- divider chain off the 96.65 MHz VCO (cpu_clkgen): the fixed /16
     //     dot/037-CLKIN enables + the model-selected /32 (BK-0010, 3.02 MHz)
-    //     or /24 (BK-0011M, 4.03 MHz) CPU clock. In /32 mode the CPU edges
-    //     fire ON the en_pos/en_neg strobes (CPU=CLKIN/2), matching the
-    //     reference CPU:037 phase (see va_037_sync); the /32 waveforms are
-    //     pinned bit-identical to the historical divc[4] tap by sim/clkgen_tb.
+    //     or /24 (BK-0011M, 4.03 MHz) CPU clock, or /16 (6.04 MHz) in turbo.
+    //     In /32 mode the CPU edges fire ON the en_pos/en_neg strobes
+    //     (CPU=CLKIN/2), matching the reference CPU:037 phase (see
+    //     va_037_sync); sim/clkgen_tb pins those /32 waveforms exactly, so
+    //     BK-0010 timing cannot move.
     cpu_clkgen u_clkgen (
         .sys_clk    (sys_clk),
         .rst_n      (locked),
@@ -280,15 +286,14 @@ module ocbk_top (
     //     convention shared with DIP 1/DIP 8 above). Read LIVE - a 2-FF
     //     resync of the static switch into sys_clk - so flipping DIP 4
     //     changes the mode without a reset (CMT never touches the CPU, unlike
-    //     the DCLO-latched model/SMK DIPs). Was the PS/2 Scroll Lock key
-    //     (esemsx3 CmtScro convention) through Phase 8. (The 177716 motor bit
-    //     was the enable first - real BK software writes bit 7 = 0 outside
-    //     tape ops and wrongly killed the right audio channel.)
+    //     the DCLO-latched model/SMK DIPs). Do NOT gate CMT on the 177716
+    //     motor bit instead: real BK software writes bit 7 = 0 outside tape
+    //     ops, which kills the right audio channel (see bk_audio.sv).
     logic [1:0] cmt_sr;
     always_ff @(posedge sys_clk) cmt_sr <= {cmt_sr[0], ~pDip[3]};
     wire cmt_mode = cmt_sr[1];
 
-    // --- turbo (Phase 9): toggled by the PS/2 F12 key, power-on default OFF.
+    // --- turbo: toggled by the PS/2 F12 key, power-on default OFF.
     //     Same quasi-static cpu_clk toggle + 2-FF resync as screen_mode above,
     //     and it likewise SURVIVES a warm reset (it is a user setting, not
     //     machine state). Turbo takes the CPU to /16 = 6.04 MHz AND tells the
@@ -414,7 +419,7 @@ module ocbk_top (
     // debounce tail, then the sequencer below re-runs the normal DCLO->ACLO
     // release. Everything DCLO-keyed re-initialises; SDRAM init, the EPCS load
     // and memory contents are untouched (BK hardware-reset semantics). Bounce
-    // just reloads the tail - idempotent. The Phase-6 keyboard reset chord ORs
+    // just reloads the tail - idempotent. A keyboard reset chord would OR
     // into warm_rst_req when it exists.
     logic [1:0]  btn_sr;
     logic [15:0] warm_cnt;
@@ -513,10 +518,10 @@ module ocbk_top (
     );
     assign rply_n = (rply037_rt_n === 1'b0) ? 1'b0 : 1'bZ;
 
-    // 037 video-side taps consumed by the Phase-4 pipeline below
+    // 037 video-side taps consumed by the video pipeline below
     wire        vid_fetch, vid_pal_stb, vid_line_en, hgate, vgate;
     wire [13:1] video_va;
-    // 037 pins driving the Phase-9 EVNT/IRQ2 detector (see bk_evnt.sv)
+    // 037 pins driving the EVNT/IRQ2 detector (see bk_evnt.sv)
     wire        wti_037, synco_037;
 
     va_037_sync u_037 (
@@ -552,7 +557,7 @@ module ocbk_top (
         .vgate     (vgate)
     );
 
-    // ---- keyboard (Phase 6): PS/2 -> translator -> 1801ВП1-014 equivalent
+    // ---- keyboard: PS/2 -> translator -> 1801ВП1-014 equivalent
     // All on cpu_clk: the PS/2 clock is ~100x oversampled through the 2-FF
     // syncs inside ps2_rx - no new clock domain. The pins stay tri-stated
     // (receive-only). bk_kbd014 serves 177660/177662 + the VIRQ/IAK vector,
@@ -612,7 +617,7 @@ module ocbk_top (
     // on the rising edge - the pin-sync rule; the same width and shape the
     // sim/ref014 interrupt oracle pinned). On a real BK-0010 with BASIC the
     // net effect is trap 4: the HALT entry's 177674/676 stores time out.
-    // Phase 7 (BK-0011M): the launch is gated by the 177716 bit-12
+    // BK-0011M: the launch is gated by the 177716 bit-12
     // СТОП-enable latch (stop_block, captured in u_mem on sclk - see there
     // for the pinned contract). 2-FF resync onto cpu_clk (quasi-static: it
     // only moves during a 177716 DOUT window); no model_bk11 term needed -
@@ -629,10 +634,10 @@ module ocbk_top (
     end
     wire stop_pulse = (stop_cnt != 0);
 
-    // EVNT/IRQ2 (Phase 9, BK-0011M): the 50 Hz frame interrupt, generated by
+    // EVNT/IRQ2 (BK-0011M): the 50 Hz frame interrupt, generated by
     // the authentic external detector (src/bk_evnt.sv - the D28 + D3:B
-    // missing-pulse pair off the 037's WTI and SYNCO pins). This REPLACED the
-    // Phase-7 "nIRQ2 = vgate" model, which was MiSTer's and fired 452 CLKIN
+    // missing-pulse pair off the 037's WTI and SYNCO pins). Do NOT simplify
+    // this to "nIRQ2 = vgate" (MiSTer's model): that fires 452 CLKIN
     // (~75 us, ~1.18 scanlines, ~301 cpu_clk) too early - a fixed displacement
     // of every beam-raced multicolor/gigascreen effect. See bk_evnt.sv for the
     // schematic trace and the measured offsets.
@@ -693,7 +698,7 @@ module ocbk_top (
     // ---- memory subsystem: ROM/IO on-chip (N_ROM) + RAM datapath in SDRAM
     //      (cpu_sdram_dp + sdram_arbiter + sdram_ctrl). RAM RPLY is owned by the 037
     //      above via mem_ready; this block drives rply_n only for ROM/IO. ----------
-    // Phase-4 video client wires (blocks instantiated below u_mem)
+    // video client wires (blocks instantiated below u_mem)
     wire        f_req, f_gnt, f_rvalid, w_req, w_gnt;
     wire [23:0] f_addr, w_addr;
     wire [15:0] w_wdata, v_rdata;
@@ -712,7 +717,7 @@ module ocbk_top (
     logic [1:0] tape_sr = '0;
     always_ff @(posedge cpu_clk_n) tape_sr <= {tape_sr[0], tape_lvl};
 
-    // ---- SMK512 IDE controller (Phase-8 IDE increment (a)) ----------------
+    // ---- SMK512 IDE controller --------------------------------------------
     // A sibling peripheral like u_kbd: it snoops the shared bus itself and
     // never drives it - qbus_mem's sel_ide decode owns the RPLY and merges
     // ide_rdata at its reply point. All sclk; reset is DCLO-only (BkEmu
@@ -755,7 +760,7 @@ module ocbk_top (
         .bk_rdata   (bk_rdata)
     );
 
-    // ---- SD/SPI backend (Phase-8 IDE increment (b)) ------------------------
+    // ---- SD/SPI backend ----------------------------------------------------
     // All sys_clk (no CDC on the seam); reset = DCLO-only like smk_ide, so
     // card init re-runs at power-on AND warm reset ("insert card, press
     // reset" - the slot has no card-detect pin). enable-gated with the
@@ -827,7 +832,7 @@ module ocbk_top (
         .rply_n   (rply_n),
         .mem_ready(mem_ready),
         .ext_ram  (mem_ext_ram),
-        .v1_req   (ro_req),         // Phase-4 video clients -> arbiter ports 1/2/3
+        .v1_req   (ro_req),         // video clients -> arbiter ports 1/2/3
         .v1_addr  (ro_addr),
         .v1_gnt   (ro_gnt),
         .v1_rvalid(ro_rvalid),
@@ -854,9 +859,9 @@ module ocbk_top (
         .spk_bit  (spk_bit),         // BK speaker: bit 6 of last 177716 write
         .mot_bit  (),                // tape motor: bit 7 (1 = stopped). Captured
                                      // and oracle-pinned but deliberately unused:
-                                     // it was the CMT-mode enable first, but real
-                                     // BK software writes bit 7 = 0 outside tape
-                                     // ops - cmt_mode comes from DIP 4 now.
+                                     // it must NOT gate CMT mode (real BK
+                                     // software writes bit 7 = 0 outside tape
+                                     // ops); cmt_mode comes from DIP 4.
         .vid_page (vid_page),        // 177662 (bk11): screen page + palette; the
         .vid_pal  (vid_pal),         //   video-side muxes below consume them
         .vid_irq2_mask(vid_irq2_mask),// 177662 bit 14: frame-IRQ2 mask -> the
@@ -897,14 +902,14 @@ module ocbk_top (
         end
     endgenerate
 
-    // ---- Phase-4 video pipeline ------------------------------------------
+    // ---- video pipeline ---------------------------------------------------
     // 037 fetch -> palette_apply -> double-buffered FB in SDRAM (fb_video,
     // arbiter ports 2+3) -> paced line prefetch (fb_readout, port 1) ->
     // dual-clock fb_linebuf -> vga_out (1024x768@60, x2H/x3V, physical-colour
     // decode - the FB nibble is {R1,B,G,R0}, see palette_apply.sv).
     import qbus_pkg::*;   // BK11_VPAGE0/1 (body import - Quartus 11.0 gotcha)
 
-    // Phase-7 (BK-0011M) video fetch base + palette, from the 177662 register
+    // BK-0011M video fetch base + palette, from the 177662 register
     // captured in u_mem (sclk = sys_clk, same domain as fb_video - no CDC;
     // model_bk11 is DCLO-latched quasi-static). bk10 keeps the fixed BK 040000
     // base and palette 0 (= MiSTer def_reg662 bk10 semantics).
@@ -990,7 +995,7 @@ module ocbk_top (
         .b        (pDac_VB)
     );
 
-    // ---- cartridge-slot bridge (forward seam, disabled for Phase 2) -----
+    // ---- cartridge-slot bridge (forward seam, held disabled) -------------
     qbus_slot #(.SLOT_ENABLE(1'b0)) u_slot (
         .ad_n      (ad_n),
         .sync_n    (sync_n),
@@ -1008,9 +1013,8 @@ module ocbk_top (
     );
 
 
-    // Free-running PLL counter - the boot-fail blink source for pLedPwr (it is
-    // no longer a heartbeat on pLed[7]: that LED is the drive-access indicator
-    // now, so only the hb[22] blink tap is still used).
+    // Free-running PLL counter - the boot-fail blink source for pLedPwr; only
+    // the hb[22] blink tap is used (pLed[7] is the drive-access indicator).
     logic [22:0] hb;
     always_ff @(posedge sys_clk or negedge locked) begin
         if (!locked) hb <= '0;

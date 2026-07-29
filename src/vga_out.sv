@@ -1,5 +1,4 @@
-// vga_out - 1024x768@60 framebuffer readout, colour decode and scan-out
-// (Phase 4; physical-colour decode since Phase 7).
+// vga_out - 1024x768@60 framebuffer readout, colour decode and scan-out.
 //
 // Pixel-clock (64.43 MHz) side of the readout pipeline. Uses the validated
 // ocb-test mode-2 timing (H 1024/24/136/160 = 1344, V 768/3/6/29 = 806, both
@@ -24,7 +23,7 @@
 // fb_front_valid (synced here) - hides power-on garbage before the first
 // complete BK frame lands in the framebuffer.
 //
-// The FB nibble is the BK-0011M physical colour {R1,B,G,R0} (Phase 7, see
+// The FB nibble is the BK-0011M physical colour {R1,B,G,R0} (see
 // palette_apply.sv), decoded combinationally into 6 bits/channel for the R-2R
 // DAC; the red-level constants below double as the CRT colour-tweak hook.
 module vga_out #(
@@ -127,7 +126,7 @@ module vga_out #(
             hs_d1 <= hs_t;  vs_d1 <= vs_t;  act_d1 <= act_t;
             hsync <= hs_d1; vsync <= vs_d1;
             if (act_d1 && fb_valid_s) begin
-                // Phase 7: the FB nibble IS the BK-0011M physical colour
+                // The FB nibble IS the BK-0011M physical colour
                 // {R1, B, G, R0} (see palette_apply.sv) - decode it, no CLUT.
                 // The two red bits are unequal resistor weights: R1 alone
                 // ~0xC0/0xFF, R0 alone ~0x8E/0xFF, both = saturated (the

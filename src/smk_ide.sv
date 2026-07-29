@@ -1,5 +1,5 @@
 // ============================================================================
-//  smk_ide - the SMK512 IDE drive controller (Phase-8 IDE increment (a)).
+//  smk_ide - the SMK512 IDE drive controller.
 //
 //  BkEmu is the authoritative reference: SmkIdeController (bus packing at
 //  0177740-0177756, ~ bit-inversion BOTH directions) over IdeController (the
@@ -44,9 +44,10 @@
 //  cylinder count is an attach FAILURE (BkEmu throws) - the drive stays
 //  absent.
 //
-//  Backend sector port (the increment-(b) SD/SPI seam; a behavioral tb
-//  disk model in (a)): request/ack/done handshake, 28-bit sector index,
-//  a bank field + the 2-bank sector buffer. TIER-1 READ PREFETCH is live:
+//  Backend sector port (the SD/SPI seam - sd_backend on the board, a
+//  behavioral disk model in the unit tb): request/ack/done handshake, a
+//  28-bit sector index, a bank field + the 2-bank sector buffer, all on
+//  sclk. TIER-1 READ PREFETCH is live:
 //  the buffer is split into a CPU-facing bank_drain and a backend-fill
 //  bank_fetch, so while the CPU drains sector N the engine prefetches N+1
 //  into the other bank (bk_sector+1 == the CHS auto-advance, in-range).
@@ -85,7 +86,7 @@ module smk_ide (
     // pokes alone do NOT light it (a real HDD LED shows drive activity).
     output logic        ide_act,
 
-    // ---- backend sector port (increment-(b) seam) -------------------------
+    // ---- backend sector port (the SD/SPI seam) ----------------------------
     output logic        bk_req,      // level; hold until bk_ack
     output logic        bk_wr,       // 0 = read sector into bank, 1 = commit
     output logic [27:0] bk_sector,
@@ -364,11 +365,11 @@ module smk_ide (
     // DATA-read advance runs solely in E_DRAIN while drq is up (and E_DRAIN
     // clears or reloads ptr the moment it sees 256), and the E_FILL advance is
     // explicitly guarded by ptr != 256 - so bit 8 alone IS the test.
-    // STA: this used to be spelled `ptr == 9'd256`, which put nine ptr bits
-    // into scount[0]'s next-state cone. That cone became the design's worst
-    // sys_clk path (-0.414 ns) when the Phase-9 N_EXT work re-placed the
-    // fitter; the 1-bit decode is the structural cure (the sd_backend
-    // `widx_last` idiom - precompute, never re-derive at the decision point).
+    // STA: keep this as the 1-bit decode. Spelled `ptr == 9'd256` it puts
+    // nine ptr bits into scount[0]'s next-state cone, which is enough to make
+    // that cone the design's worst sys_clk path (-0.414 ns) as soon as an
+    // unrelated change re-places the fitter. Same idiom as sd_backend's
+    // `widx_last`: precompute, never re-derive at the decision point.
     wire ptr_full = ptr[8];
 
     always_ff @(posedge sclk) begin

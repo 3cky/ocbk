@@ -3,13 +3,13 @@
 // Maps the shared internal Q-bus (inverted, active-low, open-collector) out to
 // the physical 1chipMSX/OneChipBook cartridge-slot pins, so real BK Q-bus
 // hardware can be attached later. It is a first-class participant on the same
-// shared nets as the vm1 core and the qbus_sdram slave.
+// shared nets as the vm1 core and the qbus_mem front-end.
 //
 //   PARAMETER SLOT_ENABLE
-//     0 (Phase 1 default) : the bridge drives NOTHING - all slot pins are
+//     0 (the shipped value) : the bridge drives NOTHING - all slot pins are
 //        released (Hi-Z, left reserved-tristated by the .qsf) and the internal
-//        Q-bus is untouched, so the on-chip core + slave run undisturbed.
-//     1 (future)          : the bridge connects the internal bus to the slot
+//        Q-bus is untouched, so the on-chip core + memory run undisturbed.
+//     1 (not yet used)      : the bridge connects the internal bus to the slot
 //        pins and drives the external-transceiver direction on pSltBdir_n.
 //
 // Slot pin map (mirrors esemsx3 emsx_top_common.qsf, documented in the .qsf):

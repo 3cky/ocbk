@@ -1,4 +1,4 @@
-// fb_readout - paced framebuffer line prefetcher (Phase 4, sys_clk domain).
+// fb_readout - paced framebuffer line prefetcher (sys_clk domain).
 //
 // Services line requests from the pixel side (vga_out): on each request it reads
 // the 128 FB words of BK line L from the front buffer over sdram_arbiter port 1

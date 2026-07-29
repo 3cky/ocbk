@@ -1,9 +1,15 @@
-// qbus_sdram - Q-bus memory slave with BK RAM in SDRAM (Phase 2).
+// qbus_sdram - Q-bus memory slave with BK RAM in SDRAM.
 //
-// Supersedes qbus_mem: the RAM region (000000-077777) now lives in the board
-// SDRAM instead of on-chip block RAM, while ROM and I/O stay on-chip. The
-// cycle-faithful deterministic-RPLY front-end is preserved verbatim from
-// qbus_mem - what changes is only the RAM backing store.
+// RETIRED FROM THE BUILD. It is superseded by qbus_mem (+ va_037_sync +
+// cpu_sdram_dp), which owns the shipped memory path, and it is deliberately
+// absent from ocbk_common.qsf. It is kept in the tree only so its standalone
+// cosim (sim/run_sdram_cosim.sh) still runs - that oracle verifies the
+// word/byte SDRAM datapath and the deterministic RPLY against real values,
+// which the timing goldens do not. Do not wire it into the top level.
+//
+// This slave keeps ROM and I/O on-chip and puts only the RAM region
+// (000000-077777) in the board SDRAM; the cycle-faithful deterministic-RPLY
+// front-end is the same shape qbus_mem inherited.
 //
 // Memory map (true polarity, octal):
 //   RAM 000000-077777 : SDRAM, via the embedded sdram_ctrl (word/byte writes)
@@ -17,10 +23,12 @@
 //   sclk = sys_clk (96.65 MHz). The SDRAM controller and the request adapter run
 //          here. The latency is hidden as long as a worst-case SDRAM access
 //          (~16-20 sclk ~= 200 ns, incl. a refresh collision) finishes within the
-//          RPLY window = (N_RAM-2) CPU clocks. At the current 3.02 MHz (sys_clk/32)
-//          that window is ~660 ns (~3x margin); it stays valid up the planned range
-//          - 4.03 MHz BK-0011M (~2.5x) and 6.04 MHz turbo (~1.6x) - and only breaks
-//          above ~10 MHz CPU clock. Re-validate the faster rates when they land.
+//          RPLY window = (N_RAM-2) CPU clocks. At 3.02 MHz (sys_clk/32) that
+//          window is ~660 ns (~3x margin). This standalone slave is only ever
+//          run at that rate by its cosim; the shipped path (qbus_mem) handles
+//          the faster rates with an explicit mem_ready done-gate instead of a
+//          margin argument, so a late word extends RPLY rather than being
+//          latched stale.
 //
 // CDC: a RAM access is launched the moment the FSM accepts the transaction, via a
 // request *toggle* synchronised into the sclk domain (2-FF + edge detect). The
@@ -28,9 +36,10 @@
 // access finishes long before the FSM's wait counter expires, the slow FSM samples
 // sdram_rdata directly at RPLY time as a quasi-static value (stable by then). The
 // request payload (addr/data/be) and sdram_rdata are held stable across the whole
-// transaction; the SDC declares them false paths. (If SDRAM were ever late - e.g.
-// future video contention - it would naturally extend RPLY, the correct behaviour;
-// for Phase 2 there is no contention and the margin is ~3x.)
+// transaction; the SDC declares them false paths. (Nothing contends the SDRAM in
+// this slave's cosim, so the ~3x margin holds by construction. The shipped
+// qbus_mem path, which IS contended by the video clients, does not rely on that
+// - see its mem_ready done-gate.)
 //
 // All Q-bus lines are inverted / active-low; ad_n carries ~data, rply_n is
 // open-collector (driven 0 to reply, released Z otherwise).

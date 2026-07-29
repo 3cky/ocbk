@@ -1,6 +1,6 @@
-// fb_video - 037 video fetch -> palette_apply -> SDRAM framebuffer writer (Phase 4).
+// fb_video - 037 video fetch -> palette_apply -> SDRAM framebuffer writer.
 //
-// Consumes the va_037_sync Phase-4 taps (vid_fetch / vid_line_en / hgate / vgate /
+// Consumes the va_037_sync video taps (vid_fetch / vid_line_en / hgate / vgate /
 // video_va) and, per video slot, reads the fetched BK video word over sdram_arbiter
 // port 2, decodes it through palette_apply into 16 canonical 4-bit slots, and writes
 // them as 4 consecutive FB words over port 3 into the back buffer.
@@ -49,7 +49,7 @@ module fb_video #(
     // as the real board's КР556РТ4А palette PROM is.
     input  logic [3:0]           pal_idx,
 
-    // ---- va_037_sync Phase-4 taps (sys_clk domain) -----------------------
+    // ---- va_037_sync video taps (sys_clk domain) -------------------------
     input  logic                 vid_fetch,
     input  logic                 vid_pal_stb, // fetch + 3 CLKIN: the ИР13
                                               // shift-register load instant

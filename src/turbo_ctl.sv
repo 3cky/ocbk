@@ -1,4 +1,4 @@
-// turbo_ctl - the turbo-mode enable, qualified onto an idle Q-bus (Phase 9).
+// turbo_ctl - the turbo-mode enable, qualified onto an idle Q-bus.
 //
 // Turbo (PS/2 F12) does two things at once: it retargets the CPU divider to
 // /16 = 6.04 MHz, and it moves the RAM RPLY OWNER from the 037 (which stops

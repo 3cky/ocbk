@@ -1,4 +1,4 @@
-// cpu_clkgen - the fabric clock-divider chain off the 96.65 MHz VCO (Phase 7).
+// cpu_clkgen - the fabric clock-divider chain off the 96.65 MHz VCO.
 //
 // Two independent dividers, one reset (the PLL lock), free-running from the
 // same edge so their phase relation is deterministic:
@@ -10,22 +10,20 @@
 //  - the CPU clock: a toggle divider, 50% duty, model-selected rate:
 //      model_bk11 = 0  toggle every 16 sys_clk  -> /32 = 3.02 MHz (BK-0010)
 //      model_bk11 = 1  toggle every 12 sys_clk  -> /24 = 4.03 MHz (BK-0011M)
-//      turbo (either model)  every  8 sys_clk  -> /16 = 6.04 MHz (Phase 9)
+//      turbo (either model)  every  8 sys_clk  -> /16 = 6.04 MHz
 //    Turbo OVERRIDES the model rate and is explicitly non-authentic: at /16 the
 //    CPU clock equals CLKIN (ratio 1:1 instead of the real 1:2 / 1:1.5), which
 //    is only sane because turbo also switches the 037 out of the RAM path
 //    (va_037_sync's no_steal - see qbus_pkg's N_TURBO). Unlike model_bk11 it is
 //    a LIVE control (PS/2 F12), not a DCLO-hold latch; ocbk_top qualifies it on
 //    a bus-idle edge, so a retarget never lands mid-transaction.
-//    In /32 mode this is cycle-identical to the historical divc[4] counter
-//    tap (first rising edge 16 sys_clk after reset release; edges coincide
-//    with en_pos/en_neg fires, CPU = CLKIN/2) - pinned by sim/clkgen_tb.v
-//    against a replica of that tap, so BK-0010 hardware timing cannot move.
-//    In /24 mode the CPU:CLKIN phase walks a 48-sys_clk pattern instead
-//    (offsets 0/4/8 sys_clk) - deterministic. That phase was long suspected of
-//    costing 0011M cycle-accuracy; it was measured flat and exonerated by the
-//    Phase-9 grant-rule study (12 phase/duty combinations, see CLAUDE.md's
-//    beam-race bullet), which found the real divergence in the 037 grant rule.
+//    /32 mode: first rising edge 16 sys_clk after reset release, edges
+//    coinciding with the en_pos/en_neg fires (CPU = CLKIN/2). sim/clkgen_tb.v
+//    pins this waveform exactly, so BK-0010 hardware timing cannot move.
+//    /24 mode: the CPU:CLKIN phase walks a 48-sys_clk pattern instead
+//    (offsets 0/4/8 sys_clk) - deterministic, and MEASURED not to cost
+//    0011M cycle accuracy (12 phase/duty combinations, all flat; the real
+//    divergence is the 037 grant rule - see va_037_sync's GRANT_SETUP).
 //
 // model_bk11 must only change while the CPU is held in reset (ocbk_top latches
 // DIP 1 during the DCLO hold); turbo may change at any bus-idle instant. A

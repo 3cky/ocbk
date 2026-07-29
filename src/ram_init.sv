@@ -1,4 +1,4 @@
-// ram_init - authentic DRAM power-on pattern filler (Phase 7 UX).
+// ram_init - authentic DRAM power-on pattern filler.
 //
 // Fills the selected model's BK RAM region in the board SDRAM with the
 // К565РУ6 (BK-0010) / К565РУ5 (BK-0011M) power-on garbage pattern that the

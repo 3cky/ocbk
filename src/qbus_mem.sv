@@ -1,20 +1,25 @@
-// qbus_mem - Strategy-A memory subsystem (Phase 3 SoC integration).
+// qbus_mem - the memory subsystem: the ROM/IO reply FSM plus the CPU RAM
+// datapath into the board SDRAM.
 //
-// Supersedes qbus_sdram for the integrated top. Under Strategy A the 037
-// (va_037_sync) owns RAM RPLY and its cycle-stealing timing; this block provides:
+// The 037 (va_037_sync) owns RAM RPLY and its cycle-stealing timing; this block
+// provides:
 //   * ROM 100000-177577 + I/O decode, with the fixed N_ROM reply (the 037
 //     never sees these - they are outside its DRAM), driving rply_n itself; and
 //   * the RAM 000000-077777 DATA path into the board SDRAM through sdram_arbiter +
 //     cpu_sdram_dp, producing mem_ready for the 037's RPLY done-gate.
-// RAM RPLY is NOT driven here (va_037_sync drives it, gated by mem_ready).
+// RAM RPLY is NOT driven here (va_037_sync drives it, gated by mem_ready) -
+// except in turbo mode, where the 037 stops arbitrating and this FSM takes the
+// RAM reply over at the fixed N_TURBO count (sel_turbo).
 //
-// ROM source (Phase 5): ROM reads are served from SDRAM through the same
+// ROM source: ROM reads are served from SDRAM through the same
 // cpu_sdram_dp port-0 path as RAM (linear map: ROM word at SDRAM word
 // addr[15:1] = 0x4000-0x7F7F). The reply keeps the fixed N_ROM count but is
 // done-gated on mem_ready - a late SDRAM word EXTENDS RPLY (mirroring the 037's
 // RAM gate) instead of latching stale data. ROM is not 037-arbitrated (real BK
-// mask ROM is not cycle-stolen); ROM writes are replied to and ignored (a real
-// BK would bus-timeout -> trap 4; fidelity deferred to Phase 9). There is no
+// mask ROM is not cycle-stolen). ROM WRITES get NO reply: a write is not
+// `selected` below, so the FSM never replies and the CPU's qbto timer traps
+// through vector 4 - authentic mask/overlay ROM, and the "write until trap 4"
+// fast-screen-clear idiom depends on it (oracle: sim/romwr). There is no
 // on-chip ROM fallback: a failed EPCS boot holds the CPU in reset (see
 // ocbk_top), so ROM is always the loaded SDRAM image.
 //
@@ -33,14 +38,15 @@
 //   177714 = reply, read 0, writes ignored (Covox/joystick/AY not modelled).
 // nSEL covers BOTH bytes of its register (the CPU decodes addr[3:1]), so odd-
 // byte accesses (177715/177717) are served with the full register word too.
-// Phase-7 exception: in BK-0011M mode a WRITE to 177662 (video page/palette
+// Exception: in BK-0011M mode a WRITE to 177662 (video page/palette
 // register, MiSTer video.sv reference) gets a positive decode + fixed-N_VREG
 // reply here; reads there stay with the 014 keyboard chip in both models.
 //
-// Domains: the ROM/IO wait-state FSM runs on cpu_clk (fixed N_ROM, as the validated
-// qbus_sdram FSM); the datapath/arbiter/controller run on sclk (sys_clk). Bus
-// strobes are synchronous to sclk (cpu_clk = sclk/32), so cpu_sdram_dp samples them
-// directly. The Phase-4 video clients (readout / 037 fetch / FB write, all sclk
+// Domains: the ROM/IO wait-state FSM runs on cpu_clk (fixed N_ROM); the
+// datapath/arbiter/controller run on sclk (sys_clk). Bus strobes are
+// synchronous to sclk - cpu_clk is a divider of it (/32, /24 or /16 by model
+// and turbo), same tree and deterministic phase - so cpu_sdram_dp samples them
+// directly. The video clients (readout / 037 fetch / FB write, all sclk
 // domain) pass through to arbiter ports 1/2/3 via the v1_*/v2_*/v3_* ports.
 module qbus_mem #(
     parameter int     CLK_FREQ_HZ = 96_650_000,
@@ -70,7 +76,7 @@ module qbus_mem #(
                                     // so this FSM replies for MK_RAM037 too, at
                                     // the fixed N_TURBO count. See qbus_pkg.
 
-    // ---- SMK512 IDE read data (Phase-8 IDE increment) ---------------------
+    // ---- SMK512 IDE read data ---------------------------------------------
     // smk_ide's registered TRUE-bus-value word: ~packed register data inside
     // its 0177740-0177757 decode, 0 outside it. OR-ed into the reply-point
     // merge latch below (gated on sel_ide, so a tie-to-0 in non-SMK tbs is
@@ -104,7 +110,7 @@ module qbus_mem #(
     input  logic [DQ_BITS-1:0]   bw_wdata,
     output logic                 bw_gnt,
 
-    // ---- Phase-4 video clients (sclk domain; arbiter ports 1/2/3) --------
+    // ---- video clients (sclk domain; arbiter ports 1/2/3) ----------------
     input  logic                 v1_req,     // [1] panel readout (read-only)
     input  logic [ADDR_BITS-1:0] v1_addr,
     output logic                 v1_gnt,
@@ -155,7 +161,7 @@ module qbus_mem #(
     always_ff @(negedge sync_n) addr <= ~ad_n;
     assign bus_addr = addr;
 
-    // ---- Phase-7 memory mapper: (addr, map registers) -> (kind, phys) ------
+    // ---- memory mapper: (addr, map registers) -> (kind, phys) --------------
     // In BK-0010 mode the translate is bit-identical to the old inline decode
     // (RAM/ROM at phys = addr[15:1]); in BK-0011M mode it implements the
     // Bk11MemoryManager banking (see mem_mapper.sv). bank_wr flags a 177716
@@ -215,7 +221,7 @@ module qbus_mem #(
     // bk10 RAM037 is always A15=0), so this flags it for va_037_sync's a15_037
     // force. 0 in BK-0010 mode -> a15_037 == A[15], goldens invariant.
     assign ext_ram = sel_ram && addr[15];
-    // Phase-8 SMK512 external RAM (MK_EXT): FSM-owned fixed N_EXT reply, read
+    // SMK512 external RAM (MK_EXT): FSM-owned fixed N_EXT reply, read
     // AND write - an external controller's RAM is NOT 037-fronted/cycle-stolen.
     // Deliberately NOT in ext_ram: a15_037 stays high, so the 037 treats the
     // access like ROM/IO and never grants or replies (the FSM is uncontested).
@@ -224,7 +230,7 @@ module qbus_mem #(
     // withholds the READ reply the same way.
     wire sel_ext = !sync_n && (mkind == MK_EXT);
 
-    // ---- Phase-8 increment 2: the SMK I/O-page overlay policy ---------------
+    // ---- the SMK I/O-page overlay policy ------------------------------------
     // In SYS mode the rom7 BIOS window / in the extent modes the seg-7 SMK RAM
     // reach INTO the I/O page 177600-177777 (the mapper translates uniformly;
     // BkEmu covers the whole segment). The real bus wire-ORs the SMK's data
@@ -235,8 +241,9 @@ module qbus_mem #(
     // TWO CARVE-OUTS (documented deviations from the uniform overlay):
     //  * 177700-177717 (cpu_blk): the vm1 decodes this block itself
     //    (sel177x), self-replies AND drives read data for 177700-177712 -
-    //    an external reply/drive is a guaranteed ad_n fight (the Phase-5
-    //    177700-13 lesson). Never replied or driven; the boot-critical
+    //    an external reply/drive is a guaranteed ad_n fight (see the
+    //    177700-13 note in the I/O decode above). Never replied or
+    //    driven; the boot-critical
     //    177716/177714 reads are NOT affected - they ride the existing
     //    sel_io (nSEL) reply whose data simply gains the merge term.
     //    Extent WRITES here are posted to SMK RAM silently (u_dp write leg,
@@ -279,12 +286,12 @@ module qbus_mem #(
     // is now just a consequence of not decoding it, not a special exclusion. The
     // previous exclude-list "reply 0 to the whole page minus holes" was
     // inauthentic - it handed MONITOR phantom device responses on its presence
-    // probes. Phase-8 SMK512 note: its registers (177130/177132, AY, ...) live
+    // probes. SMK512 note: its registers (177130/177132, AY, ...) live
     // OUTSIDE this page, INSIDE the ROM window - they get their own positive
     // decode carved out of sel_rom there, not here (no SEL pin involved).
     wire sel_io  = !sync_n && (!sel1_n || !sel2_n);
 
-    // ---- 177662: BK-0011M video page/palette register (Phase 7) -----------
+    // ---- 177662: BK-0011M video page/palette register ---------------------
     // The ONE positive decode besides the nSEL pair: on a BK-0011M a WRITE to
     // 177662/3 must be replied to (the wait FSM below serves it, fixed N_VREG)
     // and captured (the sclk block next to spk_bit). Write-only: reads stay
@@ -295,7 +302,7 @@ module qbus_mem #(
                     && (addr[15:1] == 15'(16'o177662 >> 1));
 
     // ---- 177130/177132: the SMK's КНГМД (FDD controller) register block ----
-    // (Phase 8; the layout register 177130 is the FDD control register the
+    // (the layout register 177130 is the FDD control register the
     // SMK "ab-uses" - mem_mapper snoops its writes independently of this
     // decode.) The SMK board carries a REAL floppy controller, so BOTH
     // registers reply BOTH directions REGARDLESS of the memory layout -
@@ -316,12 +323,12 @@ module qbus_mem #(
     // write order), so a mode write can never re-map its own in-flight
     // cycle. With the SMK absent the decode is dead and 177130 stays plain
     // ROM: reads return the MSTD word, writes trap (sim/romwr).
-    // Model-independent since the bk10+SMK increment (the SMK is an МПИ
-    // expansion board; BkEmu attaches FloppyController in BOTH SMK configs).
+    // Model-independent - gated on smk_en alone (the SMK is an МПИ expansion
+    // board; BkEmu attaches FloppyController in BOTH SMK configs).
     wire sel_fdd = smk_en_q && !sync_n
                    && (addr[15:2] == 14'(16'o177130 >> 2));
 
-    // ---- 177740-177757: SMK512 IDE task file (Phase-8 IDE increment) ------
+    // ---- 177740-177757: SMK512 IDE task file ------------------------------
     // The smk_ide sibling module owns the registers (it snoops the bus
     // itself); THIS decode owns the RPLY, both directions, and merges the
     // device's read word at the reply point - reproducing BkEmu
@@ -390,7 +397,7 @@ module qbus_mem #(
     // u_dp fetches the word but the wait FSM below drives the OR-merged data
     // (see the carve-out block above). Note the extent write posts even in
     // cpu_blk (bus-passive broadcast; only the REPLY is carved out there).
-    // Phase-9: the MK_EXT mem-region read leg is the ONE access whose fixed
+    // The MK_EXT mem-region read leg is the ONE access whose fixed
     // reply (N_EXT = 1, the calibrated SMK512 access time - see qbus_pkg) is
     // shorter than the SDRAM latency, so its read must start at SYNC instead of
     // at DIN or the done-gate would extend it. Scoped to exactly that leg:
@@ -528,7 +535,7 @@ module qbus_mem #(
     // raises BUS_ERROR -> vector 4 (Cpu.java writeMemory/processPendingInterrupts).
     // sel_io still carries I/O reads AND writes (177714/177716 reply+ignore is
     // unchanged); the ROM read path, done-gate and sel_vreg write are untouched.
-    // Phase 8: SMK RAM (sel_ext) contributes reads AND writes - EXCEPT a write
+    // SMK RAM (sel_ext) contributes reads AND writes - EXCEPT a write
     // to a read-only case (m_smk_ro: HLT10 seg 0 / ALL extent) and a read of
     // the write-only extent (m_smk_wo), which fall out un-replied and trap by
     // the exact ROM-write mechanism (incl. the DATIO write half - see the
@@ -578,7 +585,7 @@ module qbus_mem #(
                   && ((is_read  && !m_smk_wo && mem_ready)
                    || (is_write && !m_smk_ro));
 
-    // The same mechanism for the 177662 video register (Phase 9). N_VREG = 1 is
+    // The same mechanism for the 177662 video register. N_VREG = 1 is
     // schematic-derived: the 0011M wire-ORs RPLY straight off the write strobe
     // that clocks the register (D6:C -> D34 -> S1-49 -> D8:B; see qbus_pkg), so
     // it is the fastest reply on the board, and the placeholder N_ROM count was
@@ -615,10 +622,10 @@ module qbus_mem #(
                         if (is_write && !sel1_n)
                             sel1_wflag <= 1'b1;
                         // The 177662/177130 writes and SMK RAM (MK_EXT) get
-                        // their own fixed counts (all PLACEHOLDERS until 0011M
-                        // cycle accuracy - see qbus_pkg). The 3-bit wcnt caps
-                        // any N at 9. (Window-1 RAM no longer lands here - it
-                        // is MK_RAM037, 037-owned, done-gated on mem_ready.)
+                        // their own fixed counts - see qbus_pkg (N_VREG and
+                        // N_EXT are hardware-calibrated; N_SMKREG is still an
+                        // uncalibrated placeholder). The 3-bit wcnt caps any
+                        // N at 9.
                         // MK_EXT takes N_EXT only in the MEM region: an
                         // I/O-page extent access uses the N_ROM (I/O-family)
                         // count, because at 177716 the 037's start-vector
@@ -677,7 +684,7 @@ module qbus_mem #(
                         // entry's 177716 update - the vm1 self-replies there
                         // faster than N_ROM). Stand down instead of firing
                         // RPLY into the idle bus, which would perturb the
-                        // next cycle (caught by the Phase-6 interrupt-latency
+                        // next cycle (caught by the interrupt-latency
                         // golden; no oracle wrote 177716 before it).
                         state <= S_IDLE;
                     end else if (wcnt == 0) begin
@@ -786,7 +793,7 @@ module qbus_mem #(
     // write must NOT touch it). Never runtime-reset (software-owned latch;
     // survives nINIT and warm reset). Bit 6 only = the BkEmu Speaker contract
     // for a BK-0010 (MiSTer's extra spk_out bits are its tape-monitor mixing,
-    // not register semantics). PHASE-7 (BK-0011M) CONTRACT: a WORD write with
+    // not register semantics). BK-0011M CONTRACT: a WORD write with
     // bit 11 SET is a memory-BANKING write and must NOT update the speaker or
     // motor (BkEmu Speaker.BK0011M_ENABLE_BIT; MiSTer agrees) - that is the
     // !bank_wr gate below (mem_mapper's mutual-exclusion flag). Byte writes
@@ -806,7 +813,7 @@ module qbus_mem #(
         end
     end
 
-    // ---- BK-0011M 177662 video register capture (Phase 7) ----------------
+    // ---- BK-0011M 177662 video register capture --------------------------
     // MiSTer rtl/video.sv is the reference (BkEmu simplifies this register).
     // High byte only - the low byte is never stored: bit 15 = displayed
     // screen (0 = RAM page 1, 1 = page 7), bit 14 = frame-IRQ2 mask (active
@@ -834,7 +841,7 @@ module qbus_mem #(
         end
     end
 
-    // ---- BK-0011M СТОП-enable capture (Phase 7) ---------------------------
+    // ---- BK-0011M СТОП-enable capture -------------------------------------
     // 177716 write bit 12: 1 = СТОП (nIRQ1) blocked, 0 = enabled. MiSTer
     // BK0011M.sv is the model (key_stop_block <= dout[12] on a sysreg write
     // with ~dout[11] & wtbt[1]); BkEmu agrees except its even-byte-write
