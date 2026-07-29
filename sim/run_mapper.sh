@@ -34,8 +34,9 @@ cd "$(dirname "$0")"
 SP="$(mktemp -d)"
 trap 'rm -rf "$SP"' EXIT
 
+SRC=../src
 iverilog -g2012 -o "$SP/mapper.vvp" -s mapper_tb \
-   ../src/qbus_pkg.sv ../src/mem_mapper.sv mapper_tb.sv 2>&1 | grep -v 'sorry:' || true
+   $SRC/qbus_pkg.sv $SRC/bus/mem_mapper.sv mapper_tb.sv 2>&1 | grep -v 'sorry:' || true
 
 vvp -n "$SP/mapper.vvp" | tee "$SP/out.txt" | grep -E "MAPPER-ERROR|COSIM" || true
 

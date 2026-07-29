@@ -20,7 +20,8 @@ REGEN_HW=0
 SP="$(mktemp -d)"
 trap 'rm -rf "$SP"' EXIT
 
-CPU=../../src/cpu
+SRC=../../src
+CPU=$SRC/cpu
 K037="."
 
 iverilog -g2012 -o "$SP/ref037.vvp" -s ref037_tb \
@@ -91,7 +92,7 @@ fi
 #     bypassed - one switch, see ref037_sync_tb.v). ---
 iverilog -g2012 -Pref037_sync_tb.GRANT_SETUP=0 -o "$SP/ref037s0.vvp" -s ref037_sync_tb \
    "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
-   "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" ../../src/va_037_sync.sv ../../src/bk_rply.sv \
+   "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" $SRC/bus/va_037_sync.sv $SRC/bus/bk_rply.sv \
    ref037_sync_tb.v 2>&1 | grep -v 'sorry:' || true
 
 vvp -n "$SP/ref037s0.vvp" 2>/dev/null | reduce > "$SP/out_sync0.txt"
@@ -117,7 +118,7 @@ fi
 #     integration leg below must then reproduce it. ---
 iverilog -g2012 -o "$SP/ref037s.vvp" -s ref037_sync_tb \
    "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
-   "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" ../../src/va_037_sync.sv ../../src/bk_rply.sv \
+   "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" $SRC/bus/va_037_sync.sv $SRC/bus/bk_rply.sv \
    ref037_sync_tb.v 2>&1 | grep -v 'sorry:' || true
 
 vvp -n "$SP/ref037s.vvp" 2>/dev/null | reduce > "$SP/out_sync.txt"
@@ -152,9 +153,9 @@ fi
 iverilog -g2012 -o "$SP/ref037soc.vvp" -s ref037_soc_tb \
    "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
    "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" \
-   ../../src/qbus_pkg.sv ../../src/va_037_sync.sv ../../src/bk_rply.sv ../../src/cpu_sdram_dp.sv \
-   ../../src/sdram_arbiter.sv ../../src/sdram_ctrl.sv ../../src/mem_mapper.sv ../../src/qbus_mem.sv \
-   ../../src/epcs_boot.sv ../sdram_model.sv ../epcs_model.sv \
+   $SRC/qbus_pkg.sv $SRC/bus/va_037_sync.sv $SRC/bus/bk_rply.sv $SRC/sdram/cpu_sdram_dp.sv \
+   $SRC/sdram/sdram_arbiter.sv $SRC/sdram/sdram_ctrl.sv $SRC/bus/mem_mapper.sv $SRC/bus/qbus_mem.sv \
+   $SRC/sdram/epcs_boot.sv ../sdram_model.sv ../epcs_model.sv \
    ref037_soc_tb.v 2>&1 | grep -v 'sorry:' || true
 
 vvp -n "$SP/ref037soc.vvp" 2>/dev/null | reduce > "$SP/out_soc.txt"
@@ -219,11 +220,11 @@ fi
 iverilog -g2012 -o "$SP/ref037socv.vvp" -s ref037_soc_video_tb \
    "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
    "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" \
-   ../../src/qbus_pkg.sv ../../src/va_037_sync.sv ../../src/bk_rply.sv ../../src/cpu_sdram_dp.sv \
-   ../../src/sdram_arbiter.sv ../../src/sdram_ctrl.sv ../../src/mem_mapper.sv ../../src/qbus_mem.sv \
-   ../../src/fb_video.sv ../../src/palette_apply.sv \
-   ../../src/fb_readout.sv ../../src/fb_linebuf.sv ../../src/vga_out.sv \
-   ../../src/vga_timing.sv ../sdram_model.sv \
+   $SRC/qbus_pkg.sv $SRC/bus/va_037_sync.sv $SRC/bus/bk_rply.sv $SRC/sdram/cpu_sdram_dp.sv \
+   $SRC/sdram/sdram_arbiter.sv $SRC/sdram/sdram_ctrl.sv $SRC/bus/mem_mapper.sv $SRC/bus/qbus_mem.sv \
+   $SRC/video/fb_video.sv $SRC/video/palette_apply.sv \
+   $SRC/video/fb_readout.sv $SRC/video/fb_linebuf.sv $SRC/video/vga_out.sv \
+   $SRC/video/vga_timing.sv ../sdram_model.sv \
    ref037_soc_video_tb.v 2>&1 | grep -v 'sorry:' || true
 
 vvp -n "$SP/ref037socv.vvp" 2>/dev/null | reduce > "$SP/out_socv.txt"

@@ -15,8 +15,9 @@ trap 'rm -rf "$SP"' EXIT
 # the blob inputs (mem/roms/*.rom) are committed; the blob itself is generated
 ( cd ../mem && python3 gen_boot_blob.py )
 
+SRC=../src
 iverilog -g2012 -o "$SP/epcs.vvp" -s epcs_boot_tb \
-   ../src/epcs_boot.sv ../src/sdram_arbiter.sv ../src/sdram_ctrl.sv \
+   $SRC/sdram/epcs_boot.sv $SRC/sdram/sdram_arbiter.sv $SRC/sdram/sdram_ctrl.sv \
    epcs_model.sv sdram_model.sv epcs_boot_tb.sv 2>&1 | grep -v 'sorry:' || true
 
 vvp -n "$SP/epcs.vvp" 2>/dev/null | tee "$SP/out.txt" | grep -E 'EPCS' || true

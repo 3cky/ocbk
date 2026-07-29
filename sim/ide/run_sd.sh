@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Phase-8 increment-(b) SD backend unit oracle: src/sd_backend.sv (the
+# Phase-8 increment-(b) SD backend unit oracle: src/peripheral/sd_backend.sv (the
 # SPI-mode SD host serving the smk_ide backend sector port) against the
 # protocol-checking sd_model.v card, loaded with mem/gen_ide_image.py's
 # AltPro image. Seven vvp runs of one compile: the SDHC personality, +sdsc
@@ -68,8 +68,9 @@ python3 ../../mem/gen_ide_image.py .
 SP="$(mktemp -d)"
 trap 'rm -rf "$SP"' EXIT
 
+SRC=../../src
 iverilog -g2012 -o "$SP/sd.vvp" -s sd_backend_tb \
-   ../../src/sd_backend.sv sd_model.v sd_backend_tb.v 2>&1 \
+   $SRC/peripheral/sd_backend.sv sd_model.v sd_backend_tb.v 2>&1 \
    | grep -v 'sorry:' || true
 
 for leg in "" "+sdsc" "+noinit" "+rderr" "+wrrej" "+cmd0busy" "+cmd8junk"; do

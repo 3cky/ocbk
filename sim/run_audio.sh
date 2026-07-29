@@ -11,8 +11,9 @@ SP="$(mktemp -d)"
 trap 'rm -rf "$SP"' EXIT
 
 # --- Leg 1: bk_audio DAC/CDC unit oracle ----------------------------------
+SRC=../src
 iverilog -g2012 -o "$SP/audio.vvp" -s bk_audio_tb \
-   ../src/bk_audio.sv audio/bk_audio_tb.v 2>&1 | grep -v 'sorry:' || true
+   $SRC/peripheral/bk_audio.sv audio/bk_audio_tb.v 2>&1 | grep -v 'sorry:' || true
 
 vvp -n "$SP/audio.vvp" | tee "$SP/out.txt" | grep -E "AUDIO-ERROR|COSIM" || true
 
@@ -21,8 +22,8 @@ echo "audio DAC unit cosim: PASS"
 
 # --- Leg 2: 177716-bit-6 speaker capture in qbus_mem ------------------
 iverilog -g2012 -o "$SP/spk.vvp" -s spk_capture_tb \
-   ../src/qbus_pkg.sv ../src/sdram_ctrl.sv ../src/sdram_arbiter.sv \
-   ../src/cpu_sdram_dp.sv ../src/mem_mapper.sv ../src/qbus_mem.sv audio/spk_capture_tb.v \
+   $SRC/qbus_pkg.sv $SRC/sdram/sdram_ctrl.sv $SRC/sdram/sdram_arbiter.sv \
+   $SRC/sdram/cpu_sdram_dp.sv $SRC/bus/mem_mapper.sv $SRC/bus/qbus_mem.sv audio/spk_capture_tb.v \
    2>&1 | grep -v 'sorry:' || true
 
 vvp -n "$SP/spk.vvp" | tee "$SP/spk.txt" | grep -E "AUDIO-ERROR|COSIM" || true

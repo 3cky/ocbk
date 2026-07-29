@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
 # Phase-9 EVNT/IRQ2 oracle: the authentic BK-0011M frame-interrupt detector
-# (src/bk_evnt.sv) - a gate-faithful replica of the motherboard's D28 (K555IE5)
+# (src/peripheral/bk_evnt.sv) - a gate-faithful replica of the motherboard's D28 (K555IE5)
 # + D3:B (K555TM2) missing-pulse pair, driven by the 037's WTI and SYNCO pins.
 #
 # CONTRACT (the sim/ref014 shape): the vendored REFERENCE netlist
 # sim/ref037/va_037.v is the timing authority. golden_evnt.txt is generated
-# from the reference run ONLY; the retimed src/va_037_sync.sv must then
+# from the reference run ONLY; the retimed src/bus/va_037_sync.sv must then
 # reproduce it line-for-line. Never regenerate the golden from a va_037_sync
 # run, and never regenerate it to "fix" a detector change.
 #
@@ -24,7 +24,7 @@
 #       retro-fire - it waits for the next SYNCO edge. Both we and MiSTer used
 #       to retro-fire instantly.
 #
-# MUTATIONS (--mutate): each rewrites one property of a COPY of src/bk_evnt.sv
+# MUTATIONS (--mutate): each rewrites one property of a COPY of src/peripheral/bk_evnt.sv
 # and must break the diff. They pin, in order:
 #   1  the propagation race - D3:B must capture the OLD qa (the same SYNCO edge
 #      toggles qa); sampling the new value shortens the delay by a whole line
@@ -48,7 +48,7 @@ build() {   # build <outfile> <bk_evnt source> [extra defines]
    iverilog -g2012 -o "$out.ref.vvp" -s evnt_tb -DREF037 "$@" \
       "$evnt" "$REF/va_037.v" evnt_tb.v 2>&1 | grep -v 'sorry:' || true
    iverilog -g2012 -o "$out.syn.vvp" -s evnt_tb "$@" \
-      "$evnt" "$SRC/va_037_sync.sv" "$SRC/qbus_pkg.sv" evnt_tb.v 2>&1 \
+      "$evnt" "$SRC/bus/va_037_sync.sv" "$SRC/qbus_pkg.sv" evnt_tb.v 2>&1 \
       | grep -v 'sorry:' || true
 }
 
@@ -58,14 +58,14 @@ run() { vvp -n "$1" 2>/dev/null | grep -E '^EVNT L[0-9]' ; }
 
 # ---- regenerate the golden from the REFERENCE netlist ---------------------
 if [ "${1:-}" = "--regen" ]; then
-   build "$SP/g" "$SRC/bk_evnt.sv"
+   build "$SP/g" "$SRC/peripheral/bk_evnt.sv"
    run "$SP/g.ref.vvp" > golden_evnt.txt
    echo "golden_evnt.txt regenerated from the REFERENCE netlist:"
    wc -l < golden_evnt.txt
    exit 0
 fi
 
-build "$SP/e" "$SRC/bk_evnt.sv"
+build "$SP/e" "$SRC/peripheral/bk_evnt.sv"
 
 # ---- leg A: reference netlist vs golden -----------------------------------
 run "$SP/e.ref.vvp" > "$SP/ref.txt"
@@ -85,8 +85,8 @@ echo "evnt (retimed va_037_sync) transcript: PASS"
 if [ "${1:-}" = "--mutate" ]; then
    mutate() {   # mutate <n> <sed script>
       local n="$1" script="$2"
-      sed "$script" "$SRC/bk_evnt.sv" > "$SP/mut$n.sv"
-      if cmp -s "$SP/mut$n.sv" "$SRC/bk_evnt.sv"; then
+      sed "$script" "$SRC/peripheral/bk_evnt.sv" > "$SP/mut$n.sv"
+      if cmp -s "$SP/mut$n.sv" "$SRC/peripheral/bk_evnt.sv"; then
          echo "MUT$n: sed did not apply - the RTL moved, fix the script" >&2
          exit 1
       fi

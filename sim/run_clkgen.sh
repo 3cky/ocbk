@@ -11,8 +11,9 @@ cd "$(dirname "$0")"
 SP="$(mktemp -d)"
 trap 'rm -rf "$SP"' EXIT
 
+SRC=../src
 iverilog -g2012 -o "$SP/clkgen.vvp" -s clkgen_tb \
-   ../src/cpu_clkgen.sv clkgen_tb.v 2>&1 | grep -v 'sorry:' || true
+   $SRC/sys/cpu_clkgen.sv clkgen_tb.v 2>&1 | grep -v 'sorry:' || true
 
 vvp -n "$SP/clkgen.vvp" | tee "$SP/out.txt" | grep -E "CLKGEN-ERROR|COSIM" || true
 

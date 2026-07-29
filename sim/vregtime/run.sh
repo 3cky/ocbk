@@ -94,8 +94,8 @@ cd "$(dirname "$0")"
 SP="$(mktemp -d)"
 trap 'rm -rf "$SP"' EXIT
 
-CPU=../../src/cpu
 SRC=../../src
+CPU=$SRC/cpu
 
 SWEEP=0; REGEN=0
 [ "${1:-}" = "--sweep" ] && SWEEP=1
@@ -105,9 +105,9 @@ build () {   # $1 = qbus_pkg path
     iverilog -g2012 -o "$SP/vregtime.vvp" -s vreg_time_tb \
        "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
        "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" \
-       "$1" "$SRC/va_037_sync.sv" "$SRC/bk_rply.sv" "$SRC/cpu_sdram_dp.sv" \
-       "$SRC/sdram_arbiter.sv" "$SRC/sdram_ctrl.sv" "$SRC/mem_mapper.sv" \
-       "$SRC/qbus_mem.sv" "$SRC/bk_evnt.sv" ../sdram_model.sv \
+       "$1" "$SRC/bus/va_037_sync.sv" "$SRC/bus/bk_rply.sv" "$SRC/sdram/cpu_sdram_dp.sv" \
+       "$SRC/sdram/sdram_arbiter.sv" "$SRC/sdram/sdram_ctrl.sv" "$SRC/bus/mem_mapper.sv" \
+       "$SRC/bus/qbus_mem.sv" "$SRC/peripheral/bk_evnt.sv" ../sdram_model.sv \
        vreg_time_tb.v 2>&1 | grep -v 'sorry:' || true
 }
 

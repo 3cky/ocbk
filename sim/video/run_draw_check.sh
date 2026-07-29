@@ -21,7 +21,8 @@ EOF
 SP="$(mktemp -d)"
 trap 'rm -rf "$SP"' EXIT
 
-CPU=../src/cpu
+SRC=../src
+CPU=$SRC/cpu
 iverilog -g2012 -o "$SP/draw.vvp" -s draw_check_tb \
    "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
    "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" \

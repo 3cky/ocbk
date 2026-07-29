@@ -23,21 +23,22 @@ run_tb () {
    fi
 }
 
-run_tb palette_tb ../src/palette_apply.sv video/palette_tb.sv
+SRC=../src
+run_tb palette_tb $SRC/video/palette_apply.sv video/palette_tb.sv
 
 run_tb fb_video_tb \
-   ../src/va_037_sync.sv ../src/palette_apply.sv ../src/fb_video.sv \
-   ../src/sdram_arbiter.sv ../src/sdram_ctrl.sv \
+   $SRC/bus/va_037_sync.sv $SRC/video/palette_apply.sv $SRC/video/fb_video.sv \
+   $SRC/sdram/sdram_arbiter.sv $SRC/sdram/sdram_ctrl.sv \
    sdram_model.sv video/fb_video_tb.sv
 
 run_tb vga_out_tb \
-   ../src/vga_timing.sv ../src/vga_out.sv ../src/fb_linebuf.sv \
-   ../src/fb_readout.sv ../src/sdram_arbiter.sv ../src/sdram_ctrl.sv \
+   $SRC/video/vga_timing.sv $SRC/video/vga_out.sv $SRC/video/fb_linebuf.sv \
+   $SRC/video/fb_readout.sv $SRC/sdram/sdram_arbiter.sv $SRC/sdram/sdram_ctrl.sv \
    sdram_model.sv video/vga_out_tb.sv
 
 python3 video/gen_expected.py
 run_tb video_pipe_tb \
-   ../src/va_037_sync.sv ../src/palette_apply.sv ../src/fb_video.sv \
-   ../src/vga_timing.sv ../src/vga_out.sv ../src/fb_linebuf.sv \
-   ../src/fb_readout.sv ../src/sdram_arbiter.sv ../src/sdram_ctrl.sv \
+   $SRC/bus/va_037_sync.sv $SRC/video/palette_apply.sv $SRC/video/fb_video.sv \
+   $SRC/video/vga_timing.sv $SRC/video/vga_out.sv $SRC/video/fb_linebuf.sv \
+   $SRC/video/fb_readout.sv $SRC/sdram/sdram_arbiter.sv $SRC/sdram/sdram_ctrl.sv \
    sdram_model.sv video/video_pipe_tb.sv

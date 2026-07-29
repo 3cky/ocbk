@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Phase-8 IDE unit oracle: src/smk_ide.sv (the SMK512 IDE register block +
+# Phase-8 IDE unit oracle: src/peripheral/smk_ide.sv (the SMK512 IDE register block +
 # ATA engine + AltPro geometry parse) against the behavioral ide_disk_model
 # loaded with mem/gen_ide_image.py's synthetic AltPro image. The tb
 # transcribes BkEmu IdeControllerTest + the SmkIdeController bus packing;
@@ -12,7 +12,7 @@
 # every transcribed BkEmu leg, incl. the every-sector CHS sweep and the
 # DCLO geometry replays, must pass over the full SPI path. Slower (~2 min).
 #
-# MUTATION-TESTED (each applied by hand to src/smk_ide.sv, each must FAIL):
+# MUTATION-TESTED (each applied by hand to src/peripheral/smk_ide.sv, each must FAIL):
 #   1 inversion drop            : ide_rdata <= blk ? rd_word : 0
 #   2 COMP_0 packing byte-swap  : rd_word[0] = {status, dar}
 #   3 COMMAND accepted at 741   : drop the !w_a0 guard on the dispatch
@@ -43,8 +43,9 @@ python3 ../../mem/gen_ide_image.py .
 SP="$(mktemp -d)"
 trap 'rm -rf "$SP"' EXIT
 
+SRC=../../src
 iverilog -g2012 -o "$SP/ide.vvp" -s smk_ide_tb \
-   ../../src/smk_ide.sv ide_disk_model.v smk_ide_tb.v 2>&1 \
+   $SRC/peripheral/smk_ide.sv ide_disk_model.v smk_ide_tb.v 2>&1 \
    | grep -v 'sorry:' || true
 
 vvp -n "$SP/ide.vvp" | tee "$SP/out.txt" | grep -E "IDE-ERROR|COSIM" || true
@@ -53,7 +54,7 @@ grep -q '^COSIM PASS$' "$SP/out.txt" || { echo "ide unit cosim: FAIL" >&2; exit 
 echo "ide unit cosim: PASS"
 
 iverilog -g2012 -DSD_STACK -o "$SP/ide_sd.vvp" -s smk_ide_tb \
-   ../../src/smk_ide.sv ../../src/sd_backend.sv \
+   $SRC/peripheral/smk_ide.sv $SRC/peripheral/sd_backend.sv \
    sd_model.v sd_harness.v smk_ide_tb.v 2>&1 \
    | grep -v 'sorry:' || true
 

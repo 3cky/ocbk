@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Build a candidate variant of src/va_037_sync.sv for the sim/grantfit sweep.
+"""Build a candidate variant of src/bus/va_037_sync.sv for the sim/grantfit sweep.
 
 The sim/evnt idiom: the candidates rewrite a COPY of the real RTL, so there is
 no inline replica that can drift away from what the design actually does, and
 every rewrite is ANCHORED - if the anchor text is gone the RTL moved and this
 script fails loudly rather than silently producing the unpatched file.
 
-    patch037.py --src ../../src/va_037_sync.sv --out mut.sv \
+    patch037.py --src ../../src/bus/va_037_sync.sv --out mut.sv \
                 [--gap G] [--trply neg|both]
 
 NOTE: --setup is GONE.  The request setup window WON the fit and is now shipped
 RTL - `va_037_sync`'s GRANT_SETUP parameter - so sweeping it is a `-P` override
 (`iverilog -Ptone_tb.GRANT_SETUP=0`), not a source rewrite.  run.sh does that.
-Likewise D8:B is now src/bk_rply.sv, instantiated for real, with `+nod8b` as
+Likewise D8:B is now src/bus/bk_rply.sv, instantiated for real, with `+nod8b` as
 the bypass.  What is left here are the candidates that did NOT win, kept so the
 sweep can keep re-rejecting them.
 
@@ -37,7 +37,7 @@ hangs (the experiment note in CLAUDE.md, learned the hard way).
 import os
 import sys
 
-# --- anchors: verbatim lines of src/va_037_sync.sv --------------------------
+# --- anchors: verbatim lines of src/bus/va_037_sync.sv --------------------------
 A_DECL = "   wire a15_037 = A[15] & ~ext_ram;"
 A_RASEL = "            RASEL <= grant_req & ~RPLY;"
 A_TRPLY = "      else if (PIN_nDIN & PIN_nDOUT)    TRPLY <= 1'b0;"
@@ -61,7 +61,7 @@ def replace_once(text, anchor, new, what):
 
 def main():
     src = opt("--src", os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                    "..", "..", "src", "va_037_sync.sv"))
+                                    "..", "..", "src", "bus", "va_037_sync.sv"))
     out = opt("--out")
     if out is None:
         sys.exit("--out is required")

@@ -55,16 +55,17 @@ trap 'rm -rf "$SP"' EXIT
 ( cd ../mem && python3 gen_boot_blob.py )
 python3 ../mem/gen_ide_image.py ide > /dev/null
 
-CPU=../src/cpu
+SRC=../src
+CPU=$SRC/cpu
 iverilog -g2012 -o "$SP/boot.vvp" -s boot_check_tb \
    "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
    "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" \
-   ../src/qbus_pkg.sv ../src/va_037_sync.sv ../src/bk_rply.sv ../src/cpu_sdram_dp.sv \
-   ../src/sdram_arbiter.sv ../src/sdram_ctrl.sv ../src/mem_mapper.sv ../src/qbus_mem.sv ../src/bk_evnt.sv \
-   ../src/bk_kbd014.sv ../src/smk_ide.sv ide/ide_disk_model.v \
-   ../src/sd_backend.sv ide/sd_model.v ide/sd_harness.v \
-   ../src/fb_video.sv ../src/palette_apply.sv ../src/fb_readout.sv \
-   ../src/fb_linebuf.sv ../src/vga_out.sv ../src/vga_timing.sv \
+   $SRC/qbus_pkg.sv $SRC/bus/va_037_sync.sv $SRC/bus/bk_rply.sv $SRC/sdram/cpu_sdram_dp.sv \
+   $SRC/sdram/sdram_arbiter.sv $SRC/sdram/sdram_ctrl.sv $SRC/bus/mem_mapper.sv $SRC/bus/qbus_mem.sv $SRC/peripheral/bk_evnt.sv \
+   $SRC/peripheral/bk_kbd014.sv $SRC/peripheral/smk_ide.sv ide/ide_disk_model.v \
+   $SRC/peripheral/sd_backend.sv ide/sd_model.v ide/sd_harness.v \
+   $SRC/video/fb_video.sv $SRC/video/palette_apply.sv $SRC/video/fb_readout.sv \
+   $SRC/video/fb_linebuf.sv $SRC/video/vga_out.sv $SRC/video/vga_timing.sv \
    sdram_model.sv boot_check_tb.v 2>&1 | grep -v 'sorry:' || true
 
 vvp -n "$SP/boot.vvp" "$@" 2>/dev/null | tee "$SP/out.txt" | grep BOOTCHK || true

@@ -3,7 +3,7 @@
 # Phase 6 keyboard-controller contract oracle: the vendored 1801VP1-014 gate
 # netlist (vp_014.v + lib_1801.v) is driven through the shared scenario
 # (ref014_scenario.v) and its transaction-granular log is diffed against the
-# committed golden_014.txt. The synthesizable src/bk_kbd014.sv must reproduce
+# committed golden_014.txt. The synthesizable src/peripheral/bk_kbd014.sv must reproduce
 # the SAME golden through ref014_beh_tb.v (added in the next step).
 #
 # golden_014.txt is generated ONLY from the netlist run -- never from the
@@ -28,11 +28,12 @@ else
    exit 1
 fi
 
-# --- Equivalence: the behavioral src/bk_kbd014.sv must reproduce the same
+# --- Equivalence: the behavioral src/peripheral/bk_kbd014.sv must reproduce the same
 #     golden through the same scenario (translator-side key events instead
 #     of the matrix; 16-bit shared Q-bus; nBS-window decode). ---
+SRC=../../src
 iverilog -g2012 -I . -o "$SP/beh014.vvp" -s ref014_beh_tb \
-   ../../src/qbus_pkg.sv ../../src/bk_kbd014.sv \
+   $SRC/qbus_pkg.sv $SRC/peripheral/bk_kbd014.sv \
    ref014_beh_tb.v 2>&1 | grep -v 'sorry:' || true
 
 vvp -n "$SP/beh014.vvp" | grep -v '\$finish called' > "$SP/out_beh.txt"
@@ -56,7 +57,7 @@ fi
 #     replies inside the same CPU cycle) and bk_kbd014's write fast path. ---
 ( cd ../../mem && python3 gen_kbd_test.py ../sim/ref014 ) > /dev/null
 
-CPU=../../src/cpu
+CPU=$SRC/cpu
 iverilog -g2012 -o "$SP/irqref.vvp" -s ref014_irq_ref_tb \
    "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
    "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" \
@@ -78,9 +79,9 @@ fi
 iverilog -g2012 -o "$SP/irqsoc.vvp" -s ref014_irq_soc_tb \
    "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
    "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" \
-   ../../src/qbus_pkg.sv ../../src/va_037_sync.sv ../../src/bk_rply.sv ../../src/cpu_sdram_dp.sv \
-   ../../src/sdram_arbiter.sv ../../src/sdram_ctrl.sv ../../src/mem_mapper.sv ../../src/qbus_mem.sv \
-   ../../src/bk_kbd014.sv ../sdram_model.sv \
+   $SRC/qbus_pkg.sv $SRC/bus/va_037_sync.sv $SRC/bus/bk_rply.sv $SRC/sdram/cpu_sdram_dp.sv \
+   $SRC/sdram/sdram_arbiter.sv $SRC/sdram/sdram_ctrl.sv $SRC/bus/mem_mapper.sv $SRC/bus/qbus_mem.sv \
+   $SRC/peripheral/bk_kbd014.sv ../sdram_model.sv \
    ref014_irq_soc_tb.v 2>&1 | grep -v 'sorry:' || true
 
 vvp -n "$SP/irqsoc.vvp" 2>/dev/null | reduce > "$SP/out_irqsoc.txt"

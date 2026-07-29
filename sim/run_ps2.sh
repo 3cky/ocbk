@@ -10,8 +10,9 @@ cd "$(dirname "$0")"
 SP="$(mktemp -d)"
 trap 'rm -rf "$SP"' EXIT
 
+SRC=../src
 iverilog -g2012 -o "$SP/ps2.vvp" -s ps2_tb \
-   ../src/ps2_rx.sv ../src/kbd_ps2bk.sv ps2_tb.sv 2>&1 | grep -v 'sorry:' || true
+   $SRC/peripheral/ps2_rx.sv $SRC/peripheral/kbd_ps2bk.sv ps2_tb.sv 2>&1 | grep -v 'sorry:' || true
 
 vvp -n "$SP/ps2.vvp" | tee "$SP/out.txt" | grep -E "PS2-ERROR|COSIM|events" || true
 

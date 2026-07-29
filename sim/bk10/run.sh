@@ -14,7 +14,8 @@ cd "$(dirname "$0")"
 SP="$(mktemp -d)"
 trap 'rm -rf "$SP"' EXIT
 
-CPU=../../src/cpu
+SRC=../../src
+CPU=$SRC/cpu
 
 iverilog -g2012 -o "$SP/bk10_tb.vvp" -s bk10_tb \
    "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \

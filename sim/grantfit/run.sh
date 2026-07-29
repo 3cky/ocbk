@@ -59,7 +59,7 @@
 #   H  sndtestimm2 @2046  = leg C's loop, in place    ---  6624  (== C)  5648
 #
 # SINCE 2026-07-26 THE FIT IS SHIPPED RTL (va_037_sync's GRANT_SETUP = 2 +
-# src/bk_rply.sv), so the `SHIPPED` column is what a plain `./run.sh` must
+# src/bus/bk_rply.sv), so the `SHIPPED` column is what a plain `./run.sh` must
 # print, and this file is now the REGRESSION that keeps the calibration pinned.
 # Total |delta| = 33 cycles across seven legs; every residual is inside what
 # +/-1 Hz of tone-reading error is worth on its leg (+/-23, 25, 22, 19, 9, 6, 8).
@@ -98,9 +98,9 @@
 # The two WINNING ingredients are shipped RTL now, so exploring them is not a
 # source rewrite any more: the setup window is va_037_sync's GRANT_SETUP
 # parameter (`-Ptone_tb.GRANT_SETUP=k`, i.e. `--setup k`) and D8:B is
-# src/bk_rply.sv, instantiated for real with `+nod8b` as the bypass.  The
+# src/bus/bk_rply.sv, instantiated for real with `+nod8b` as the bypass.  The
 # candidates that did NOT win are still built by patch037.py from a COPY of
-# src/va_037_sync.sv (the sim/evnt idiom - anchored rewrites, never an inline
+# src/bus/va_037_sync.sv (the sim/evnt idiom - anchored rewrites, never an inline
 # replica), so the sweep keeps re-rejecting them.
 #
 set -euo pipefail
@@ -109,8 +109,8 @@ cd "$(dirname "$0")"
 SP="$(mktemp -d)"
 trap 'rm -rf "$SP"' EXIT
 
-CPU=../../src/cpu
 SRC=../../src
+CPU=$SRC/cpu
 MEM=../../mem
 
 SWEEP=0
@@ -152,9 +152,9 @@ build () {   # $1 = va_037_sync path; $2 = optional GRANT_SETUP override
     iverilog -g2012 $pset -o "$SP/tone.vvp" -s tone_tb \
        "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
        "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" \
-       "$SRC/qbus_pkg.sv" "$1" "$SRC/bk_rply.sv" "$SRC/cpu_sdram_dp.sv" \
-       "$SRC/sdram_arbiter.sv" "$SRC/sdram_ctrl.sv" "$SRC/mem_mapper.sv" \
-       "$SRC/qbus_mem.sv" "$SRC/bk_evnt.sv" ../sdram_model.sv \
+       "$SRC/qbus_pkg.sv" "$1" "$SRC/bus/bk_rply.sv" "$SRC/sdram/cpu_sdram_dp.sv" \
+       "$SRC/sdram/sdram_arbiter.sv" "$SRC/sdram/sdram_ctrl.sv" "$SRC/bus/mem_mapper.sv" \
+       "$SRC/bus/qbus_mem.sv" "$SRC/peripheral/bk_evnt.sv" ../sdram_model.sv \
        tone_tb.v 2>&1 | grep -v 'sorry:' || true
     [ -f "$SP/tone.vvp" ] || { echo "grantfit: build failed" >&2; exit 1; }
 }
@@ -220,7 +220,7 @@ table () {   # table <label> <extra vvp plusargs>
 }
 
 if [ "$SWEEP" = 0 ] && [ "$ADHOC" = 0 ]; then
-    build "$SRC/va_037_sync.sv"
+    build "$SRC/bus/va_037_sync.sv"
     table "SHIPPED RTL (GRANT_SETUP=2 + bk_rply)"
     exit 0
 fi
@@ -230,7 +230,7 @@ if [ "$ADHOC" = 1 ]; then
         python3 patch037.py --out "$SP/cand.sv" $CAND
         build "$SP/cand.sv" "$SETUP"
     else
-        build "$SRC/va_037_sync.sv" "$SETUP"
+        build "$SRC/bus/va_037_sync.sv" "$SETUP"
     fi
     table "CANDIDATE ${CAND:-(shipped 037)}${SETUP:+ setup=$SETUP} ${D8B}" "$D8B"
     exit 0
@@ -241,12 +241,12 @@ fi
 # runs BACKWARDS: it starts from the shipped machine and backs each ingredient
 # out again.  The first table is therefore the regression that keeps the fit
 # pinned, and "GRANT_SETUP=0 +nod8b" reproduces the pre-Phase-9 numbers.
-build "$SRC/va_037_sync.sv"
+build "$SRC/bus/va_037_sync.sv"
 table "SHIPPED RTL (GRANT_SETUP=2 + bk_rply)  <- must stay at the fit"
 table "shipped setup, D8:B backed out"                    "+nod8b"
 
 for k in 0 1 3; do
-    build "$SRC/va_037_sync.sv" "$k"
+    build "$SRC/bus/va_037_sync.sv" "$k"
     table "GRANT_SETUP=$k + bk_rply"
     table "GRANT_SETUP=$k, D8:B backed out" "+nod8b"
 done

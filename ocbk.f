@@ -13,6 +13,11 @@
 
 +incdir+src
 +incdir+src/cpu
++incdir+src/bus
++incdir+src/sdram
++incdir+src/video
++incdir+src/peripheral
++incdir+src/sys
 
 // --- package first ---
 src/qbus_pkg.sv
@@ -26,23 +31,40 @@ src/cpu/vm1_vcram_syn.v
 src/cpu/vm1_plm.v
 src/cpu/vm1_tve.v
 
-// --- SoC / peripherals (src) ---
-src/sdram_ctrl.sv
-src/sdram_arbiter.sv
-src/va_037_sync.sv
-src/cpu_sdram_dp.sv
-src/qbus_mem.sv
-src/ps2_rx.sv
-src/kbd_ps2bk.sv
-src/bk_kbd014.sv
-src/epcs_boot.sv
-src/qbus_slot.sv
-src/palette_apply.sv
-src/fb_video.sv
-src/fb_readout.sv
-src/fb_linebuf.sv
-src/vga_timing.sv
-src/vga_out.sv
-src/bk_audio.sv
-src/turbo_ctl.sv
+// --- SDRAM datapath (src/sdram) ---
+src/sdram/sdram_ctrl.sv
+src/sdram/sdram_arbiter.sv
+src/sdram/cpu_sdram_dp.sv
+src/sdram/epcs_boot.sv
+src/sdram/ram_init.sv
+
+// --- Q-bus front end (src/bus) ---
+src/bus/va_037_sync.sv
+src/bus/bk_rply.sv
+src/bus/mem_mapper.sv
+src/bus/qbus_mem.sv
+src/bus/qbus_slot.sv
+
+// --- peripherals (src/peripheral) ---
+src/peripheral/smk_ide.sv
+src/peripheral/sd_backend.sv
+src/peripheral/ps2_rx.sv
+src/peripheral/kbd_ps2bk.sv
+src/peripheral/bk_kbd014.sv
+src/peripheral/bk_evnt.sv
+src/peripheral/bk_audio.sv
+
+// --- video pipeline (src/video) ---
+src/video/palette_apply.sv
+src/video/fb_video.sv
+src/video/fb_readout.sv
+src/video/fb_linebuf.sv
+src/video/vga_timing.sv
+src/video/vga_out.sv
+
+// --- clocking / CPU-rate control (src/sys) ---
+src/sys/cpu_clkgen.sv
+src/sys/turbo_ctl.sv
+
+// --- top ---
 src/ocbk_top.sv
