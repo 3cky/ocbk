@@ -2033,11 +2033,11 @@ Ordered, because the steps constrain each other. The rule this encodes:
 **a debug feature does not ship to end users**, and — since the repo went public
 2026-07-31 — `main` only takes a feature when it is shippable.
 
-1. **Collect acceptance recordings (3) silence and (4) CMT** on the CURRENT
-   firmware. Both work with what is already flashed. (4) is the one that
-   matters most: it is a regression check on an ALREADY-SHIPPED feature, and
-   Phase 10 changed what the left ladder does in CMT mode (it now carries the
-   L+R mono fold where it used to sit at a quasi-static level).
+1. **(3) silence ✅ DONE 2026-07-31 — (4) CMT is the ONE recording still
+   outstanding**, and it is the one that matters most: a regression check on an
+   ALREADY-SHIPPED feature, since Phase 10 changed what the left ladder does in
+   CMT mode (it now carries the L+R mono fold where it used to sit at a
+   quasi-static level). It works on the CURRENT firmware.
 2. ✅ **Sweep, acceptance item (2) — DONE 2026-07-31** on the
    `bringup-audio-sweep` build (that branch exists because DIP 5 plays a FIXED
    440 Hz, so the sweep needed its own firmware). **In-band answered: flat
@@ -2087,13 +2087,11 @@ Ordered, because the steps constrain each other. The rule this encodes:
   own 3rd harmonic departs from ideal) — re-record 6 dB lower; and the frequency
   cross-check caught the **`STEP_B` transposition** (69658 → 69637, voice B was
   0.52 cents sharp), fixed in `audio_tone.sv`, which the recording predates.
-  Still to collect, all from one **DIP 5** session: (2) sweep voice A
-  100 Hz → 100 kHz to **measure the board's analog RC corner**, which is
-  currently undocumented, is the one thing that would justify changing
-  `RATE_DIV` from 16 to 8 or 32, AND is now also the way to resolve the voice-A
-  harmonic anomaly in the next bullet; (3) record silence to confirm the shaper
-  really is inactive there; (4) re-check CMT through the right jack. Keep the
-  recordings in `test/` per the existing `.wav` convention.
+  Items (2) and (3) are now DONE — see the analog-stage bullet for (2) and the
+  no-dither bullet for (3). **Only (4), the CMT re-check through the right
+  jack, is still outstanding.** Keep any recording in `test/` per the existing
+  `.wav` convention (the three takes so far were not kept — the numbers they
+  produced, recorded here and in `sim/audio/README.md`, are the record).
 - **The board's analog stage: the AUDIO BAND is now measured, above it is not.**
   The 2026-07-31 sweep (`bringup-audio-sweep`, 192 kHz capture, four cycles,
   `sim/audio/sweep_analyze.py`) gives **0.00 dB response from 100 Hz to 21 kHz**
@@ -2137,6 +2135,33 @@ Ordered, because the steps constrain each other. The rule this encodes:
   taken from voice B's FUNDAMENTAL amplitude: a static mid-scale code error is
   a distortion mechanism, not a gain error, and the staircase slope held to
   0.19 dB max residual across 42 dB.
+  **VIDEO CROSSTALK INTO THE ANALOG STAGE — a board-level coupling, not an
+  audio-path defect (found 2026-07-31 while recording item 3).** Pressing СТОП
+  made an audible noise appear until the next keypress. It is a **phase-locked
+  line at 15730.04 Hz = EXACTLY the BK horizontal line rate**
+  (96.65 MHz/16/384 = 15730.4; the real machine's 15625 +0.674 %), and what
+  changes is only its AMPLITUDE — 30 dB, −105.7 → −75.4 dBFS — while its
+  frequency and its resolution-limited 0.37 Hz linewidth are IDENTICAL in both
+  states. So it is not the arbiter: a halted CPU letting the video fetch fall
+  into a regular phase would have SHARPENED the line, and it was already
+  maximally sharp. A line-rate-locked carrier whose amplitude swings with
+  machine state is the video subsystem coupling through shared supply/ground,
+  modulated by how much the video DATA toggles — i.e. **by what is on the
+  screen** (СТОП is the trap-4 path here, so it lands in the monitor and
+  displays something; the keypress cleared it). The audio path is a bystander:
+  the disturbance is perfectly COMMON-MODE (L/R correlation 0.9990, L−R pinned
+  at the idle noise floor, −86.7 dBFS), whereas anything driven THROUGH the
+  mixer makes L and R differ — that asymmetry is what localised the ladder DNL
+  above. Nothing in the RTL can fix this, and at −60 dBFS it is only audible in
+  an otherwise silent room. **Unexplained:** the tail decays smoothly to the
+  floor over ~2 s after the keypress, where a screen-content change should be a
+  step. **Cheap test if it ever matters:** put content on the screen WITHOUT
+  touching СТОП (should be noisy) and press СТОП with an already-blank screen
+  (should stay quiet) — if both hold it is screen content, full stop.
+  Useful by-product: that line has **no harmonics at all** (2× at 31.5 kHz
+  reads −130 dBFS, the noise floor), which independently confirms the ~21 kHz
+  brick wall is in the CAPTURE — a coupling artifact that sharp must have
+  harmonics, so their absence is the filter, not the board.
 - **The BK-0010 `/32` prediction is unmeasured.** The 037 grant-rule fit moves
   the bk10 path +0.20 % on `SOB` but **+15.0 % on `MOV #imm`**, and nothing in
   the tree measures it — there is no BK-0010 tone recording, and
@@ -2187,6 +2212,15 @@ Ordered, because the steps constrain each other. The rule this encodes:
   for a DC input with fractional part `p/q` in lowest terms the limit cycle is
   at `Fs/q` with amplitude `O(1/q)` codes, so any **in-band** idle tone is below
   ≈ −85 dBFS while the loud short cycles (Fs/2 = 3.02 MHz, Fs/3) are all ≥ 1 MHz.
+  **MEASURED AND CONFIRMED — acceptance item (3), 2026-07-31** (DIP 5 off,
+  machine idle, 192 kHz capture): the floor is **−85.8 dBFS rms broadband and
+  −97 dBFS over 20–2000 Hz**, DC offset **0.0 LSB**, and there are **NO
+  discrete idle tones** — the only lines are ≤ −102 dBFS and sit at system
+  rates, not at shaper limit-cycle frequencies. The L/R correlation is just
+  0.665 with L−R as loud as either channel, i.e. the residual is the CAPTURE's
+  own noise and the board is contributing essentially nothing. That is the
+  exact-zero fixed point doing what it claims: both quantizers park at static
+  code 32 with no pin activity.
   Insertion point if revisited: `accr = s_in + errp + dither`, RPDF from an
   LFSR; it invalidates exactly one oracle leg (L3, silence), which would have to
   become a bounded-variance check.
