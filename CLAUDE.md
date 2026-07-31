@@ -954,7 +954,15 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   also stays inside the shaper's clip-free window with no extra saturator).
   The BK speaker is panned BOTH, so `mix_l == mix_r` for it and the CMT-mode
   left ladder still sits at its rail code — **turning CMT on cannot change how
-  the speaker sounds**. Two Phase-10 rules for this jack, both in
+  the speaker sounds**. **RE-CONFIRMED ON HARDWARE 2026-07-31 after the
+  Phase-10 rework** (acceptance item 4, the regression check on this
+  already-shipped feature): a program saved to tape and loaded back
+  successfully, the DIP-4-ON and DIP-4-OFF speaker levels measured EQUAL — the
+  fold really is an average and really is a no-op for a BOTH-panned source,
+  where a sum would have shown 6 dB — and a tape load with DIP 4 OFF saw
+  nothing, i.e. the anti-echo force holds now that `pDac_SR[5]` carries a
+  rattling shaped code bit instead of the pre-rework quasi-static level. Two
+  Phase-10 rules for this jack, both in
   `src/audio/audio_out.sv` and both mutation-pinned: **tape-out
   (`dac_r_o[0]`) stays the RAW speaker bit** — never a mixed sample and never a
   shaped code, because bit 0 is the ladder's LSB tap and a shaped code rattles
@@ -2033,11 +2041,12 @@ Ordered, because the steps constrain each other. The rule this encodes:
 **a debug feature does not ship to end users**, and — since the repo went public
 2026-07-31 — `main` only takes a feature when it is shippable.
 
-1. **(3) silence ✅ DONE 2026-07-31 — (4) CMT is the ONE recording still
-   outstanding**, and it is the one that matters most: a regression check on an
-   ALREADY-SHIPPED feature, since Phase 10 changed what the left ladder does in
-   CMT mode (it now carries the L+R mono fold where it used to sit at a
-   quasi-static level). It works on the CURRENT firmware.
+1. ✅ **DONE 2026-07-31 — (3) silence and (4) CMT both collected.** (4) was the
+   one that mattered most (a regression check on an ALREADY-SHIPPED feature,
+   since Phase 10 changed what the left ladder does in CMT mode): save + load
+   round trip good, DIP-4-ON/OFF speaker levels EQUAL, and a load with DIP 4
+   OFF sees nothing. See the tape bullet. **All four acceptance recordings are
+   now in — the measurement side of Phase 10 is closed.**
 2. ✅ **Sweep, acceptance item (2) — DONE 2026-07-31** on the
    `bringup-audio-sweep` build (that branch exists because DIP 5 plays a FIXED
    440 Hz, so the sweep needed its own firmware). **In-band answered: flat
@@ -2087,11 +2096,11 @@ Ordered, because the steps constrain each other. The rule this encodes:
   own 3rd harmonic departs from ideal) — re-record 6 dB lower; and the frequency
   cross-check caught the **`STEP_B` transposition** (69658 → 69637, voice B was
   0.52 cents sharp), fixed in `audio_tone.sv`, which the recording predates.
-  Items (2) and (3) are now DONE — see the analog-stage bullet for (2) and the
-  no-dither bullet for (3). **Only (4), the CMT re-check through the right
-  jack, is still outstanding.** Keep any recording in `test/` per the existing
-  `.wav` convention (the three takes so far were not kept — the numbers they
-  produced, recorded here and in `sim/audio/README.md`, are the record).
+  **All four are now DONE (2026-07-31)** — (1) here, (2) in the analog-stage
+  bullet, (3) in the no-dither bullet, (4) in the tape bullet. The takes
+  themselves were not kept; the numbers they produced, recorded in those
+  bullets and in `sim/audio/README.md`, are the record. Keep any FUTURE
+  recording in `test/` per the existing `.wav` convention.
 - **The board's analog stage: the AUDIO BAND is now measured, above it is not.**
   The 2026-07-31 sweep (`bringup-audio-sweep`, 192 kHz capture, four cycles,
   `sim/audio/sweep_analyze.py`) gives **0.00 dB response from 100 Hz to 21 kHz**
