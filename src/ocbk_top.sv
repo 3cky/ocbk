@@ -68,8 +68,11 @@
 // 177662, EVNT/IRQ2, BOS boot), latched while DCLO is held (power-on and warm
 // reset). DIP 8 = SMK512 enable, same DCLO-hold latch - in BOTH models (the SMK
 // is an МПИ expansion board), and DIP-8-ON boots the SMK BIOS either way.
-// DIP 4 = CMT tape-in mode and DIP 5 = the audio self-test tone (both read
-// LIVE, no reset needed - neither touches the CPU). DIP 2 is unused.
+// DIP 4 = CMT tape-in mode (read LIVE, no reset needed - it never touches the
+// CPU). DIP 2 and DIP 5 are unused; DIP 5 drove the audio self-test tone,
+// retired from the shipped build in 2026-07-31 once the resolution claim it
+// existed to demonstrate had been measured on hardware (a debug feature does
+// not ship). The wiring is still here - see the tone_en note below.
 //
 // screen_mode (mono-512 vs colour-256) models the physical monitor-cable switch
 // of a real BK-0010, toggled by the PS/2 Print Screen key (each press
@@ -85,10 +88,10 @@
 //                    cassette port).
 //   pLed[5]        : TURBO mode (PS/2 F12; lit = 6.04 MHz CPU with the 037's
 //                    cycle-stealing disabled).
-//   pLed[3]        : audio self-test tone live (DIP 5).
 //   pLed[2]        : a DAC quantizer clipped (sticky; should never light).
 //   pLed[1]        : the audio mixer saturated (sticky; should never light).
-//   pLed[4]        : unused (0).
+//   pLed[4], [3]   : unused (0); [3] was the self-test indicator, retired
+//                    with DIP 5.
 module ocbk_top (
     input  logic        pClk21m,   // 21.47727 MHz crystal (PIN_28)
     output logic [7:0]  pLed,      // green LEDs   (1 = on)
@@ -97,9 +100,9 @@ module ocbk_top (
                                    //   [0] = model select (OFF = BK-0010,
                                    //         ON = BK-0011M)
                                    //   [3] = CMT tape-in mode (read live)
-                                   //   [4] = audio self-test tone (read live)
                                    //   [7] = SMK512 enable
-                                   //   [1], [2], [5], [6] = unused
+                                   //   [1], [2], [4], [5], [6] = unused
+                                   //         ([4] drove the retired self-test)
     input  logic        pSltRst_n, // reset button (slot RESET net; low = pressed)
 
     // ---- PS/2 keyboard (receive-only; pins pulled up, driven Z) ----------
@@ -300,17 +303,23 @@ module ocbk_top (
     always_ff @(posedge sys_clk) cmt_sr <= {cmt_sr[0], ~pDip[3]};
     wire cmt_mode = cmt_sr[1];
 
-    // --- tone_en: DIP 5 (ON = low = the audio self-test tone). Same live
-    //     2-FF resync as DIP 4 and for the same reason - it never touches the
-    //     CPU, so flipping it needs no reset. A DIAGNOSTIC, not a user
-    //     feature: it plays a 440 Hz reference on both channels plus a
-    //     1567 Hz right-only tone whose level steps down 6 dB every ~0.7 s
-    //     through levels BELOW one ladder step, which is the by-ear
-    //     demonstration that the noise-shaped DAC resolves finer than its six
-    //     physical bits (and, with the two different pans, that stereo works).
-    //     It MUTES the BK speaker while it runs - the speaker is a full-scale
-    //     source and would otherwise saturate the mix; see the gain-budget
-    //     note in src/audio/bk_audio.sv. pLed[3] says the mode is on.
+    // --- tone_en: DIP 5, the audio self-test tone - RETIRED FROM THE SHIPPED
+    //     BUILD (2026-07-31). It was a DIAGNOSTIC, never a user feature: a
+    //     440 Hz reference on both channels plus a 1567 Hz right-only tone
+    //     whose level stepped down 6 dB every ~0.7 s through levels BELOW one
+    //     ladder step - the by-ear demonstration that the noise-shaped DAC
+    //     resolves finer than its six physical bits. It did its job: the
+    //     resolution claim was measured off the jacks and is confirmed
+    //     (sim/audio/README.md). A debug feature does not ship, so bk_audio is
+    //     now instantiated with TONE_ENABLE = 0 and this DIP is FREE.
+    //
+    //     The wiring is deliberately LEFT IN PLACE rather than deleted, so
+    //     restoring the diagnostic is the one-token change the docs promise:
+    //     flip TONE_ENABLE back to 1'b1 at the instance below. At 0 the tone
+    //     slots hold constant zero and the fitter strips this resync, the
+    //     generator and dbg_tone entirely - it costs nothing to keep. See also
+    //     the bringup-audio-sweep branch, which turns this same source into a
+    //     100 Hz -> 100 kHz response sweep.
     logic [1:0] tone_sr;
     always_ff @(posedge sys_clk) tone_sr <= {tone_sr[0], ~pDip[4]};
     wire tone_en = tone_sr[1];
@@ -926,7 +935,14 @@ module ocbk_top (
     // warm reset; spk_bit is never cleared by nINIT (software owns it).
     wire spk_active, snd_sat, snd_clip, snd_tone;
     wire [5:0] dac_r_o, dac_r_oe;
-    bk_audio u_audio (
+    // TONE_ENABLE = 0: the DIP-5 self-test is retired from the shipped build
+    // (see the tone_en note above). Set it back to 1'b1 for a diagnostic
+    // firmware - that single token is the whole difference, and it costs
+    // ~130 LE. audio_tone.sv and its oracle leg stay in the tree precisely so
+    // this stays a one-token change: the BK speaker maps to the rails and
+    // emits a STATIC code, so the tone is the only stimulus that can exercise
+    // the shaper on hardware at all.
+    bk_audio #(.TONE_ENABLE (1'b0)) u_audio (
         .sys_clk    (sys_clk),
         .rst_n      (vid_rst_n),
         .spk_bit    (spk_bit),
@@ -1099,16 +1115,17 @@ module ocbk_top (
     // pLed[7]: SMK IDE drive access (stretched + blinking).  pLed[6]: CMT
     // tape-in mode (DIP 4; lit = right jack is the cassette port).
     // pLed[5]: TURBO mode (PS/2 F12; lit = 6.04 MHz, no 037 cycle-stealing).
-    // pLed[3]: audio self-test tone live (DIP 5).  pLed[2]: a DAC quantizer
-    // clipped (STICKY).  pLed[1]: the audio mixer saturated (STICKY).
-    // pLed[0]: BK speaker activity (solid while a tone plays; audio bring-up
-    // tap).  pLed[4]: unused.
+    // pLed[2]: a DAC quantizer clipped (STICKY).  pLed[1]: the audio mixer
+    // saturated (STICKY).  pLed[0]: BK speaker activity (solid while a tone
+    // plays; audio bring-up tap).  pLed[4], pLed[3]: unused - [3] was the
+    // audio self-test indicator and was retired with DIP 5 (snd_tone is now
+    // constant 0 anyway, since TONE_ENABLE = 0).
     // The two sticky audio flags are bring-up observability, the same reasoning
     // that put spk_active on pLed[0] in Phase 6: they turn "it sounds wrong"
     // into "the digital side says the level overflowed", which is otherwise
     // indistinguishable from an analog fault. Neither should ever light in
     // normal use - the gain budget, not the saturator, is the mixing strategy.
     assign pLed    = {ide_led, cmt_mode, turbo_eff, 1'b0,
-                      snd_tone, snd_clip, snd_sat, spk_active};
+                      1'b0, snd_clip, snd_sat, spk_active};
 
 endmodule

@@ -54,9 +54,15 @@
 // ============================================================================
 module bk_audio #(
     parameter int RATE_DIV    = 16,      // sys_clk/RATE_DIV = the DAC update rate
-    // The DIP-5 self-test source. Set to 0 to reclaim ~130 LE in a fit/STA
-    // emergency; the audio path itself is unaffected (the tone slots then hold
-    // a constant zero and fold away entirely).
+    // The DIP-5 self-test source. MEASURED: setting this to 0 reclaims
+    // 355 LE (7,357 -> 7,002 on 2026-07-31) - the two DDS voices and the
+    // staircase shifter, plus mixer slots 1-2 and their adder trees folding
+    // away with them. An earlier note here guessed ~130; it was wrong.
+    // The audio path itself is unaffected (the tone slots hold constant zero).
+    // The SHIPPED build sets this to 0: the self-test was a diagnostic, it
+    // did its job (the resolution claim is measured and confirmed), and a
+    // debug feature does not ship. Set it back to 1 for a diagnostic
+    // firmware - that one token is the whole difference.
     parameter bit TONE_ENABLE = 1'b1,
     // Staircase dwell for the self-test, 2^N sys_clk. Only the testbench should
     // ever shorten this.

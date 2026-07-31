@@ -1058,24 +1058,31 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
     omitting the ports is deliberate: it puts the seam where a device
     implementer looks, and keeps the map report free of four
     "dangling port" warnings.
-  * **Cost and timing (confirmed):** **6,979 → 7,357 LE (58 % → 61 %)**, +378,
-    all of it mixer + shapers + tone; M4K unchanged at 3/52, pins unchanged at
-    98/173, no new PLL. **No STA chase was needed for the audio work itself** —
-    unusual for this design at 61 % LE, and down to every stage being one carry
-    chain deep and every pad being driven from a flop. `TONE_ENABLE = 0` on
-    `bk_audio` reclaims ~130 LE if a later increment needs them.
-    ⚠️ **But the shipped bitstream's sys_clk margin is THIN: +0.034 ns**
-    (TNS 0, zero negative paths; boot-confirmed on hardware 2026-07-31, so it
-    is real margin, not a near-miss). The intermediate build measured +0.260,
-    and the *only* RTL delta between them was the one-constant `STEP_B` fix in
-    `audio_tone` (+1 LE) — i.e. **this is the placement fragility this file
-    documents elsewhere, not an audio-path cost**, the same shape as the +19 LE
-    that once took an untouched module +0.481 → −0.414. The worst path is
-    `mem_mapper|rom7_en → cpu_sdram_dp|wdata_o[11]`, with `model_bk11` and
-    `mon_en` right behind it into the same `wdata_o`/`addr_o` endpoints: the
-    mapper-translate-into-datapath cone, already this design's chronic one.
-    **Budget for an STA chase on the next increment, and do not chase margin by
-    changing SEED 3** (see `ocbk.qsf`'s header and the SDC-exception rule).
+  * **Cost and timing (confirmed) — the SHIPPED audio subsystem costs
+    +23 LE.** 6,979 → **7,002 LE (58 % → 58 %)** with the self-test retired
+    (`TONE_ENABLE = 0`), M4K unchanged at 3/52, pins unchanged at 98/173, no
+    new PLL. That is the whole rework — N-slot stereo mixer, two noise-shaped
+    output stages, the CMT mono fold and the 177714 capture seam — for 23
+    logic elements, because it REPLACED the pre-rework DAC logic rather than
+    adding to it. **sys_clk setup +0.309 ns, TNS 0, zero negative paths.**
+    The intermediate builds are the interesting part of this story and worth
+    keeping: **with the tone compiled in it was 7,357 LE at +0.034 ns** — so
+    the diagnostic cost **355 LE, not the ~130 first estimated** (the two DDS
+    voices and the staircase shifter, plus mixer slots 1–2 and their adder
+    trees folding away with them), and its removal took the margin from
+    +0.034 → +0.309. **No STA chase was needed at any point**, which is
+    unusual for this design and is down to every stage being one carry chain
+    deep and every pad driven from a flop.
+    ⚠️ **The +0.034 ns intermediate is the lesson, not the +0.309.** Between
+    the +0.260 and +0.034 builds the *only* RTL delta was the one-constant
+    `STEP_B` fix (+1 LE) — **placement fragility, not an audio-path cost**,
+    the same shape as the +19 LE that once took an untouched module
+    +0.481 → −0.414. The worst path in every one of these builds is the same
+    chronic cone: `mem_mapper|rom7_en → cpu_sdram_dp|wdata_o[*]`, with
+    `model_bk11` and `mon_en` right behind it into the same `wdata_o`/`addr_o`
+    endpoints. **Budget for an STA chase on the next increment, and do not
+    chase margin by changing SEED 3** (see `ocbk.qsf`'s header and the
+    SDC-exception rule).
 - Cartridge-slot Q-bus is a **forward seam**: `src/bus/qbus_slot.sv`, default
   `SLOT_ENABLE=0` (drives nothing, slot pins stay reserved-tristated). The full
   slot pin map lives commented in `ocbk_common.qsf`. Real BK hardware needs an
@@ -2057,7 +2064,7 @@ Ordered, because the steps constrain each other. The rule this encodes:
    scope on the jack rather than another recording. That is not a Phase-10
    blocker — the out-of-band bound stands — so it moves to the analog-stage
    bullet rather than holding this checklist.
-3. **Retire the tone from the shipped build: set `TONE_ENABLE = 0`** on the
+3. ✅ **DONE 2026-07-31 — the tone is retired: `TONE_ENABLE = 0`** on the
    `bk_audio` instance in `ocbk_top`. **Do NOT delete `audio_tone.sv`.** The
    parameter already gates the whole generator in a generate block
    (`bk_audio.sv:60`), tying `dbg_tone`/`tone_live` to 0 — so this removes the
@@ -2073,13 +2080,15 @@ Ordered, because the steps constrain each other. The rule this encodes:
    flags): they are NOT debug — README documents them as user-facing, and the
    gain budget is genuinely unsolved until a sound device lands. Retire only
    `pLed[3]`, which goes with DIP 5.
-4. **Update the user-facing docs in the same commit**: README's "Audio
-   self-test" section and its DIP-5 table row both describe the tone as a
-   feature.
-5. **Rebuild, re-run STA, and boot-test.** Mandatory, not a formality: removing
-   ~130 LE re-places the fitter, and this design is placement-fragile (the
-   shipped bitstream's sys_clk margin is +0.034 ns — see the audio cost/timing
-   bullet). Slack can move either way.
+4. ✅ **DONE 2026-07-31 — user-facing docs updated in the same commit**:
+   README's "Audio self-test" section and its DIP-5 and LED-3 table rows are
+   gone; `ocbk_top`'s header, DIP port comment and LED map no longer document
+   DIP 5 or `pLed[3]` as features.
+5. **Rebuild + STA ✅ DONE (7,002 LE, sys_clk +0.309 ns, TNS 0, 0 errors) —
+   THE BOOT TEST IS THE ONE THING LEFT.** It is mandatory, not a formality:
+   removing the tone dropped 355 LE and re-placed a demonstrably
+   placement-fragile fitter. Slack moved the good way this time (+0.034 →
+   +0.309), but only a board can confirm the bitstream runs.
 6. **Then merge the branch to `main`** and flip the phase table row to ✅.
 
 **Fidelity, measurable**
