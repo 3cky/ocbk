@@ -145,6 +145,15 @@ module qbus_mem #(
     // ---- tape motor: bit 7 of the last 177716 write (1 = motor STOPPED) ---
     output logic        mot_bit,
 
+    // ---- 177714 (nSEL2) parallel-port write capture (sclk domain) ---------
+    // The seam the BK sound expansions hang off: Covox, 2x YM2149 and
+    // Menestrel all decode this one address and differ only in how they read
+    // the data. Never runtime-reset (see the capture block below).
+    output logic        port_wr,       // 1 sclk per bus write to 177714/15
+    output logic [15:0] port_data,     // BK-true value, byte lanes merged
+    output logic        port_word,     // 1 = word write, 0 = byte write
+    output logic [1:0]  port_be,       // which byte lane(s) this write carried
+
     // ---- BK-0011M 177662 video register taps (sclk domain) ----------------
     output logic        vid_page,      // bit 15: displayed screen (0 = RAM page 1, 1 = page 7)
     output logic        vid_irq2_mask, // bit 14: frame-IRQ2 mask (1 = masked)
@@ -358,6 +367,17 @@ module qbus_mem #(
     // mot_bit (bit 7, tape motor relay) has the identical contract.
     initial spk_bit = 1'b0;
     initial mot_bit = 1'b0;
+
+    // 177714 parallel-port capture state. Same never-runtime-reset contract as
+    // spk_bit/mot_bit above (a real Covox is a passive DAC on the port latch
+    // with no reset pin) - power-on values only. port_seen is the
+    // one-strobe-per-write qualifier; see the capture block below.
+    logic port_seen;
+    initial port_seen = 1'b0;
+    initial port_wr   = 1'b0;
+    initial port_word = 1'b0;
+    initial port_be   = 2'b00;
+    initial port_data = 16'o000000;
 
     // nSEL1 selects the register for BOTH its bytes, so a byte read of 177717
     // gets the full word too (the CPU extracts the byte; BkEmu semantics) -
@@ -810,6 +830,69 @@ module qbus_mem #(
         if (!sync_n && !dout_n && !sel1_n && !addr[0] && !bank_wr) begin
             spk_bit <= ~ad_n[6];
             mot_bit <= ~ad_n[7];
+        end
+    end
+
+    // ---- 177714 (nSEL2) parallel-port write capture -----------------------
+    // The programmable parallel port. ALL THREE BK sound expansions decode this
+    // ONE address (BkEmu REG_SEL2 = 0177714) and are told apart only by the
+    // data pattern - Covox by the high byte, the AY by word-vs-byte, Menestrel
+    // by its pin field - so the bus side is shared and belongs here, in one
+    // real module, rather than replicated in each device.
+    //
+    // Same shape as the spk_bit capture above and for the same reason: the vm1
+    // self-replies for the whole 177700-177717 block, so the wait FSM stands
+    // down before its reply point and never observes the write. Sample the DOUT
+    // window on sclk, independent of any reply. This block is a PURE OBSERVER -
+    // 177714 already gets its reply from sel_io (the nSEL2 leg), and nothing
+    // here feeds `selected`, `wcnt`, the reply, io_word, rd_romio, ad_oe or
+    // mem_ready. That is what makes it timing-inert against every golden.
+    //
+    // WTBT IS DUAL-PURPOSE: "write cycle" at SYNC time, "BYTE op" at DOUT time.
+    // port_word needs the DOUT-time meaning, so wtbt_n is sampled LIVE at the
+    // write point and NEVER from the SYNC latch (the qbus_sdram lesson). The
+    // cycle-count oracles cannot see write data, so a SYNC-latched version
+    // would slip through sim silently unless the tb spells both WTBT profiles -
+    // spk_capture_tb does, and that is the discriminating case.
+    //
+    // ONE STROBE PER BUS WRITE. The DOUT window is many sclk long, and unlike
+    // the idempotent spk level latch these devices are EDGE sensitive (the AY
+    // distinguishes a register select from a data write; Menestrel edge-detects
+    // its own nWR across successive writes). port_seen qualifies the first sclk
+    // of the window and clears when DOUT releases.
+    //
+    // POLARITY: port_data holds the BK-TRUE value the program wrote (~ad_n),
+    // like spk_bit. BkEmu's device models each do their own `v = ~value` for
+    // the physical port inversion - that belongs to the DEVICE, so keeping it
+    // out of here lets those models transcribe 1:1 and keeps waveforms legible.
+    //
+    // NEVER RUNTIME-RESET - the spk/mot class, not a new nINIT exception. A real
+    // Covox is a passive resistor DAC hanging off the port latch with no reset
+    // pin at all. Device-internal state (AY registers, the 3 s stereo and
+    // TurboSound timeouts) keys to init_n inside the DEVICE, per the standard BK
+    // peripheral-reset rule.
+    //
+    // No bank_wr gate is needed (bank_wr requires !sel1_n, so it can never
+    // assert on a 177714 write) and no smk_en gate either (under SMK SYS a
+    // 177714 write also broadcast-posts to SMK RAM; the device seeing it too is
+    // BkEmu's memory-then-device order).
+    //
+    // The READ side is deliberately NOT merged here: Covox is write-only and
+    // nothing yet establishes that an AY read is needed, while a read merge
+    // would reach into the reply/OE cone that this write capture carefully
+    // avoids. If a device ever needs it, follow the ide_rdata pattern exactly.
+    wire port_dout = !sync_n && !dout_n && !sel2_n;
+    always_ff @(posedge sclk) begin
+        port_wr <= 1'b0;
+        if (!port_dout) port_seen <= 1'b0;
+        else if (!port_seen) begin
+            port_seen <= 1'b1;
+            port_wr   <= 1'b1;
+            port_word <= wtbt_n;                              // LIVE at DOUT
+            port_be   <= wtbt_n ? 2'b11 : (addr[0] ? 2'b10 : 2'b01);
+            if (wtbt_n)       port_data       <= ~ad_n;        // word
+            else if (addr[0]) port_data[15:8] <= ~ad_n[7:0];   // 177715: value<<8
+            else              port_data[7:0]  <= ~ad_n[7:0];   // 177714
         end
     end
 

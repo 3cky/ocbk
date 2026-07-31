@@ -20,7 +20,11 @@ Everything below is confirmed running on the board.
   Both colour-256 and mono-512 modes.
 - **Keyboard** - a PS/2 keyboard behaves as the BK's own, including the
   Russian/Latin and case triggers, СУ/АР2/НР modifiers and СТОП.
-- **Sound** - the 1-bit speaker, through the board's audio jacks.
+- **Sound** - the 1-bit speaker, in **stereo**, through the board's audio jacks.
+  Several sound sources can be mixed, and the output is noise-shaped so the
+  6-bit ladders resolve far finer than six bits in the audio band - the
+  groundwork for the BK's sound expansions (Covox, AY, Menestrel), none of
+  which are built yet.
 - **Tape** - the right audio jack doubles as the cassette port. Load real BK
   tape recordings from a PC, and save back to one.
 - **SMK512** - the 512 KB RAM extension, its BIOS, and an IDE drive backed by
@@ -70,6 +74,8 @@ only on power-off.
 | **7** | SMK512 drive access - blinks while the drive is busy, one short flash for a single access |
 | **6** | tape mode is on |
 | **5** | turbo is on |
+| **2** | the audio output overloaded (stays lit; should never light) |
+| **1** | the audio mixer overloaded (stays lit; should never light) |
 | **0** | speaker activity |
 
 ## Using it

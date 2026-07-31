@@ -51,7 +51,12 @@ set_global_assignment -name SYSTEMVERILOG_FILE src/video/fb_readout.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/video/fb_linebuf.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/video/vga_timing.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/video/vga_out.sv
-set_global_assignment -name SYSTEMVERILOG_FILE src/peripheral/bk_audio.sv
+# Audio subsystem (leaves first: ns6 <- mixer/tone <- out <- bk_audio)
+set_global_assignment -name SYSTEMVERILOG_FILE src/audio/audio_ns6.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/audio/audio_mixer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/audio/audio_tone.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/audio/audio_out.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/audio/bk_audio.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/sys/cpu_clkgen.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/sys/turbo_ctl.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/ocbk_top.sv
