@@ -2038,12 +2038,16 @@ Ordered, because the steps constrain each other. The rule this encodes:
    matters most: it is a regression check on an ALREADY-SHIPPED feature, and
    Phase 10 changed what the left ladder does in CMT mode (it now carries the
    L+R mono fold where it used to sit at a quasi-static level).
-2. **Do the sweep, acceptance item (2)** — and note it needs a **temporary
-   bring-up build**: DIP 5 plays a FIXED 440 Hz, so a 100 Hz → 100 kHz sweep
-   means modifying `audio_tone`'s voice A. Do it while the tone infrastructure
-   is still live and easy to change. It measures the analog RC corner (the one
-   thing that would justify moving `RATE_DIV` off 16) AND resolves the
-   voice-A excess-3rd-harmonic anomaly recorded in the analog-stage bullet.
+2. ✅ **Sweep, acceptance item (2) — DONE 2026-07-31** on the
+   `bringup-audio-sweep` build (that branch exists because DIP 5 plays a FIXED
+   440 Hz, so the sweep needed its own firmware). **In-band answered: flat
+   100 Hz → 21 kHz, no RC corner, `RATE_DIV` stays 16**; the voice-A harmonic
+   anomaly is resolved as ladder mid-scale DNL. See the analog-stage bullet.
+   **Still open from it:** the capture's own anti-alias filter brick-walls at
+   ~21 kHz, so the board ABOVE the audio band remains unmeasured and needs a
+   scope on the jack rather than another recording. That is not a Phase-10
+   blocker — the out-of-band bound stands — so it moves to the analog-stage
+   bullet rather than holding this checklist.
 3. **Retire the tone from the shipped build: set `TONE_ENABLE = 0`** on the
    `bk_audio` instance in `ocbk_top`. **Do NOT delete `audio_tone.sv`.** The
    parameter already gates the whole generator in a generate block
@@ -2090,25 +2094,49 @@ Ordered, because the steps constrain each other. The rule this encodes:
   harmonic anomaly in the next bullet; (3) record silence to confirm the shaper
   really is inactive there; (4) re-check CMT through the right jack. Keep the
   recordings in `test/` per the existing `.wav` convention.
-- **The board's analog stage after the sound ladder is unmeasured** (RC corner,
-  amp behaviour above the audio band). Everything said about out-of-band shaped
-  noise is a BOUND, not a measurement — the bound being that the shaped code
-  never deviates from the plain-truncated code by more than ±1 LSB6, which is
-  strictly milder HF content than the 63-code full-swing pad edges this board
-  already survives on every BK beep. Settled by recording (2) above.
-  **The 2026-07-31 recording gave this bullet its first real datum, and it is a
-  puzzle: voice A comes back with ~8.5 dB MORE 3rd harmonic than a triangle
-  has.** It is definitively not the digital path — a bit-exact transcription of
-  `audio_ns6` fed the real DDS triangles reproduces the ideal series to 0.00 dB
-  (3rd −19.08, 5th −27.96, 7th −33.80, evens >100 dB down, fundamental gain
-  0.000) at 440 Hz, at 1567 Hz and at amplitude 128. And it is
-  frequency-selective, not a plain nonlinearity: 1320 Hz up 8.5 dB but 2200 Hz
-  **down** 4.7 dB, small even harmonics present, and the 440 Hz component in the
-  right channel expanding 1.54 dB when voice B is loud — while voice B's own 3rd
-  harmonic measures ideal at every step. Two tones cannot separate response from
-  nonlinearity; the sweep is what does. **It does not touch the resolution
-  claim**, which is a ratio at ONE frequency and therefore immune to any fixed
-  response.
+- **The board's analog stage: the AUDIO BAND is now measured, above it is not.**
+  The 2026-07-31 sweep (`bringup-audio-sweep`, 192 kHz capture, four cycles,
+  `sim/audio/sweep_analyze.py`) gives **0.00 dB response from 100 Hz to 21 kHz**
+  on both channels, ±0.9 dB at the very top. **So there is no RC corner in the
+  audio band and no rolloff argument for moving `RATE_DIV` off 16.** The
+  reference step landed at −13.56 dBFS against the staircase take's −13.57 for
+  the same tone — two independent recordings agreeing to 0.01 dB, which is what
+  makes the rest of the numbers trustworthy.
+  **Out of band is still a BOUND, not a measurement**, and that sweep could not
+  fix it: the capture brick-walls at ~21 kHz (full level at 21.0 kHz, −128 dB by
+  26.3 kHz — far too steep for a passive RC, so it is the interface's
+  anti-alias filter, not the board). Measuring the board above 21 kHz needs a
+  SCOPE ON THE JACK, not a sound card. The standing bound is that the shaped
+  code never deviates from the plain-truncated code by more than ±1 LSB6, which
+  is strictly milder HF content than the 63-code full-swing pad edges this board
+  already survives on every BK beep.
+  **The voice-A excess-3rd-harmonic anomaly is RESOLVED: it is the R-2R
+  ladder's mid-scale (major-carry) DNL, on the BOARD.** The sweep shows the
+  distortion is **frequency-INDEPENDENT** — a flat −10.6 dB 3rd and −28.2 dB
+  2nd at every step from 100 Hz to 7 kHz — which kills the frequency-selective
+  reading the two-tone staircase suggested. Phase-folding a dwell (68 periods
+  averaged) shows the mechanism directly: a clean triangle carrying a
+  repeatable disturbance **localised at the ZERO CROSSINGS**, 12.8 % rms
+  against an ideal triangle. Mixer zero is ladder code 32, where all six bits
+  change at once, and `audio_ns6`'s exact zero fixed point parks the output
+  right there. Phase-locked to the crossing ⇒ energy on odd harmonics of
+  whatever tone plays. **The discriminator against a capture-chain cause is
+  that L and R differ consistently** (3rd −10.59 vs −11.17 at EVERY frequency):
+  one shared nonlinearity in the interface would read identical in both
+  channels, two physically separate resistor networks do not. It is also
+  definitively not digital — a bit-exact transcription of `audio_ns6` fed the
+  real DDS triangles reproduces the ideal series to 0.00 dB (3rd −19.08, 5th
+  −27.96, 7th −33.80, evens >100 dB down, fundamental gain 0.000) at 440 Hz, at
+  1567 Hz and at amplitude 128.
+  This also explains the staircase reading that looked contradictory: voice A's
+  glitch energy lands on harmonics of 440 Hz, while voice B's 3rd harmonic was
+  measured at 3×1567 Hz where none of it falls — hence voice A read +8.5 dB
+  excess and voice B read textbook-ideal **in the same channel of the same
+  recording**.
+  **It does not touch the resolution claim**, which is a ratio at ONE frequency
+  taken from voice B's FUNDAMENTAL amplitude: a static mid-scale code error is
+  a distortion mechanism, not a gain error, and the staircase slope held to
+  0.19 dB max residual across 42 dB.
 - **The BK-0010 `/32` prediction is unmeasured.** The 037 grant-rule fit moves
   the bk10 path +0.20 % on `SOB` but **+15.0 % on `MOV #imm`**, and nothing in
   the tree measures it — there is no BK-0010 tone recording, and
