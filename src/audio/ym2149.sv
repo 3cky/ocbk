@@ -1,12 +1,12 @@
 // ============================================================================
 //  ym2149 - YM2149 / AY-3-8910 PSG core (VENDORED)
 // ----------------------------------------------------------------------------
-//  Upstream: ~/projects/other/fpga/BK0011M_MiSTer/rtl/ym2149.sv
+//  Upstream: https://github.com/MiSTer-devel/BK0011M_MiSTer/blob/master/rtl/ym2149.sv
 //            (c) MikeJ 2005, (c) Sorgelig 2016-2019. Licence header below,
 //            unmodified. Re-sync from upstream is fine, but re-apply the
 //            marked local hooks and re-run sim/ts/run.sh afterwards.
 //
-//  Instantiated twice by bk_turbosound.sv (the BK Turbosound = 2x YM2149 on
+//  Instantiated twice by bk_turbosound.sv (the BK TurboSound = 2x YM2149 on
 //  port 0177714). Per-channel unsigned 8-bit output, which is why this core
 //  was chosen over esemsx3's psg_wave.vhd - that one time-multiplexes A/B/C
 //  into one summed mono value, and the BK mix needs them apart to pan ACB.
@@ -93,7 +93,7 @@ module ym2149
 
 	input        SEL,
 	input        MODE,
-	
+
 	output [5:0] ACTIVE,
 
 	input  [7:0] IOA_in,
@@ -183,7 +183,7 @@ always @(posedge CLK) begin
 		if(!cnt_div) begin
 			cnt_div <= {SEL, 3'b111};
 			ena_div <= 1;
-            
+
 			noise_div <= (~noise_div);
 			if (noise_div) ena_div_noise <= 1;
 		end else begin
