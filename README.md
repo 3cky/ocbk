@@ -20,7 +20,11 @@ Everything below is confirmed running on the board.
   Both colour-256 and mono-512 modes.
 - **Keyboard** - a PS/2 keyboard behaves as the BK's own, including the
   Russian/Latin and case triggers, СУ/АР2/НР modifiers and СТОП.
-- **Sound** - the 1-bit speaker, through the board's audio jacks.
+- **Sound** - the 1-bit speaker, in **stereo**, through the board's audio jacks.
+  Several sound sources can be mixed, and the output is noise-shaped so the
+  6-bit ladders resolve far finer than six bits in the audio band - the
+  groundwork for the BK's sound expansions (Covox, AY, Menestrel), none of
+  which are built yet.
 - **Tape** - the right audio jack doubles as the cassette port. Load real BK
   tape recordings from a PC, and save back to one.
 - **SMK512** - the 512 KB RAM extension, its BIOS, and an IDE drive backed by
@@ -38,6 +42,7 @@ Everything below is confirmed running on the board.
 |--------|----------|
 | **1** | **Model**: OFF = BK-0010, ON = BK-0011M. Needs reset when switched |
 | **4** | **Tape mode**: ON = the right audio jack is the cassette port |
+| **5** | **Audio self-test**: ON = play a test tone instead of the BK's sound |
 | **8** | **SMK512**: ON = the storage controller is present. Needs reset when switched |
 
 ### Special keys and buttons
@@ -70,6 +75,9 @@ only on power-off.
 | **7** | SMK512 drive access - blinks while the drive is busy, one short flash for a single access |
 | **6** | tape mode is on |
 | **5** | turbo is on |
+| **3** | the audio self-test tone is playing |
+| **2** | the audio output overloaded (stays lit; should never light) |
+| **1** | the audio mixer overloaded (stays lit; should never light) |
 | **0** | speaker activity |
 
 ## Using it
@@ -79,6 +87,28 @@ only on power-off.
 Switch **DIP 4** on (LED 6 lights). Play a BK tape recording - e.g. a WAV
 rendered from a `.BIN` - into the **right** audio channel, then load it the
 normal way. Switch DIP 4 off when you're done - that jack is the right audio channel otherwise.
+
+### Audio self-test
+
+Switch **DIP 5** on (LED 3 lights) and you get a test tone instead of the BK's
+sound: a steady 440 Hz reference on **both** channels, plus a higher 1567 Hz
+tone on the **right channel only** whose volume steps down every ~0.7 s through
+eight levels and then starts over.
+
+It is there to check the audio path without needing any BK software, and it
+shows off the two things the sound rework added:
+
+- **stereo** - the two tones are obviously different in the two channels;
+- **resolution** - the last three steps of the staircase are quieter than one
+  step of the 6-bit converter the board actually has. On plainer firmware they
+  would simply be silence. Hearing all eight steps, evenly spaced, is the point.
+
+Flip **DIP 4** while it plays and you can hear the tape-mode fold: both tones
+collapse onto the left channel while the right becomes the cassette port.
+
+The BK's own speaker is muted while the self-test runs, so switch DIP 5 back off
+for normal use. LEDs 1 and 2 should stay dark; if either lights, the audio path
+overloaded and that is a bug worth reporting.
 
 ### SD card (SMK512)
 

@@ -68,7 +68,8 @@
 // 177662, EVNT/IRQ2, BOS boot), latched while DCLO is held (power-on and warm
 // reset). DIP 8 = SMK512 enable, same DCLO-hold latch - in BOTH models (the SMK
 // is an МПИ expansion board), and DIP-8-ON boots the SMK BIOS either way.
-// DIP 4 = CMT tape-in mode (read LIVE, no reset needed). DIP 2 is unused.
+// DIP 4 = CMT tape-in mode and DIP 5 = the audio self-test tone (both read
+// LIVE, no reset needed - neither touches the CPU). DIP 2 is unused.
 //
 // screen_mode (mono-512 vs colour-256) models the physical monitor-cable switch
 // of a real BK-0010, toggled by the PS/2 Print Screen key (each press
@@ -84,7 +85,10 @@
 //                    cassette port).
 //   pLed[5]        : TURBO mode (PS/2 F12; lit = 6.04 MHz CPU with the 037's
 //                    cycle-stealing disabled).
-//   pLed[4:1]      : unused (0).
+//   pLed[3]        : audio self-test tone live (DIP 5).
+//   pLed[2]        : a DAC quantizer clipped (sticky; should never light).
+//   pLed[1]        : the audio mixer saturated (sticky; should never light).
+//   pLed[4]        : unused (0).
 module ocbk_top (
     input  logic        pClk21m,   // 21.47727 MHz crystal (PIN_28)
     output logic [7:0]  pLed,      // green LEDs   (1 = on)
@@ -93,8 +97,9 @@ module ocbk_top (
                                    //   [0] = model select (OFF = BK-0010,
                                    //         ON = BK-0011M)
                                    //   [3] = CMT tape-in mode (read live)
+                                   //   [4] = audio self-test tone (read live)
                                    //   [7] = SMK512 enable
-                                   //   [1], [2], [4:6] = unused
+                                   //   [1], [2], [5], [6] = unused
     input  logic        pSltRst_n, // reset button (slot RESET net; low = pressed)
 
     // ---- PS/2 keyboard (receive-only; pins pulled up, driven Z) ----------
@@ -116,11 +121,13 @@ module ocbk_top (
     output logic [5:0]  pDac_VG,
     output logic [5:0]  pDac_VB,
 
-    // ---- Sound (6-bit R-2R DAC per channel; BK 1-bit speaker) -----------
-    // Right channel doubles as the CMT (cassette) jack while CMT mode is on
-    // (DIP 4): pDac_SR[5] = tape input, [3:1] the ladder
-    // Schmitt-feedback network, [0] = tape out - esemsx3's CmtScro scheme
-    // (see bk_audio.sv). Audio (push-pull mono) otherwise.
+    // ---- Sound (6-bit R-2R DAC per channel) ------------------------------
+    // TRUE STEREO: the two ladders are independent channels, carrying the
+    // noise-shaped output of the audio mixer (see src/audio/). The right
+    // channel doubles as the CMT (cassette) jack while CMT mode is on
+    // (DIP 4): pDac_SR[5] = tape input, [3:1] the ladder Schmitt-feedback
+    // network, [0] = tape out (the RAW speaker bit, never audio) - esemsx3's
+    // CmtScro scheme; the LEFT ladder then carries the L+R mono fold.
     output logic [5:0]  pDac_SL,
     inout  wire  [5:0]  pDac_SR,
 
@@ -292,6 +299,21 @@ module ocbk_top (
     logic [1:0] cmt_sr;
     always_ff @(posedge sys_clk) cmt_sr <= {cmt_sr[0], ~pDip[3]};
     wire cmt_mode = cmt_sr[1];
+
+    // --- tone_en: DIP 5 (ON = low = the audio self-test tone). Same live
+    //     2-FF resync as DIP 4 and for the same reason - it never touches the
+    //     CPU, so flipping it needs no reset. A DIAGNOSTIC, not a user
+    //     feature: it plays a 440 Hz reference on both channels plus a
+    //     1567 Hz right-only tone whose level steps down 6 dB every ~0.7 s
+    //     through levels BELOW one ladder step, which is the by-ear
+    //     demonstration that the noise-shaped DAC resolves finer than its six
+    //     physical bits (and, with the two different pans, that stereo works).
+    //     It MUTES the BK speaker while it runs - the speaker is a full-scale
+    //     source and would otherwise saturate the mix; see the gain-budget
+    //     note in src/audio/bk_audio.sv. pLed[3] says the mode is on.
+    logic [1:0] tone_sr;
+    always_ff @(posedge sys_clk) tone_sr <= {tone_sr[0], ~pDip[4]};
+    wire tone_en = tone_sr[1];
 
     // --- turbo: toggled by the PS/2 F12 key, power-on default OFF.
     //     Same quasi-static cpu_clk toggle + 2-FF resync as screen_mode above,
@@ -708,6 +730,12 @@ module ocbk_top (
     wire [15:0] bus_addr;
     wire        fetch_stb;
     wire        spk_bit;       // BK speaker level (bit 6 of last 177716 write)
+    // The 177714 (nSEL2) parallel-port capture - the seam the future sound
+    // devices attach to. Deliberately unconsumed in this build.
+    wire        snd_port_wr;
+    wire [15:0] snd_port_data;
+    wire        snd_port_word;
+    wire [1:0]  snd_port_be;
     wire        tape_lvl;      // CMT comparator level (sys_clk, from bk_audio)
     wire        vid_page;      // 177662 bit 15 (bk11): displayed screen page
     wire [3:0]  vid_pal;       // 177662 bits 11:8 (bk11): palette index
@@ -862,6 +890,19 @@ module ocbk_top (
                                      // it must NOT gate CMT mode (real BK
                                      // software writes bit 7 = 0 outside tape
                                      // ops); cmt_mode comes from DIP 4.
+        // ---- the 177714 sound-device seam (Phase 10) --------------------
+        // Every BK sound expansion - Covox, 2x YM2149, Menestrel - decodes
+        // THIS one address and differs only in how it reads the data, so the
+        // bus side is captured once in qbus_mem and lands here. Nothing
+        // consumes it yet, so the fitter removes the whole capture (it costs
+        // 0 LE today); it is oracle-pinned regardless, by spk_capture_tb
+        // driving the real qbus_mem. A device instantiates in
+        // src/peripheral/, takes these four, and feeds a sample pair into
+        // bk_audio's mixer slots - see the audio bullet in CLAUDE.md.
+        .port_wr  (snd_port_wr),     // 1 sclk per 177714/15 bus write
+        .port_data(snd_port_data),   // BK-true value, byte lanes merged
+        .port_word(snd_port_word),   // 1 = word write (the AY's reg-vs-data)
+        .port_be  (snd_port_be),     // which byte lane(s) this write carried
         .vid_page (vid_page),        // 177662 (bk11): screen page + palette; the
         .vid_pal  (vid_pal),         //   video-side muxes below consume them
         .vid_irq2_mask(vid_irq2_mask),// 177662 bit 14: frame-IRQ2 mask -> the
@@ -870,15 +911,20 @@ module ocbk_top (
                                      // gates the nIRQ1 one-shot launch above
     );
 
-    // ---- Sound + CMT jack: BK 1-bit speaker -> board R-2R sound DAC ------
-    // spk_bit is captured in u_mem on sys_clk (a software-owned latch);
-    // bk_audio drives the balanced R-2R pattern, and while CMT mode is on
-    // (DIP 4, see cmt_mode above) it turns the right channel
-    // into the esemsx3-style CMT comparator (pDac_SR[5] input + ladder
-    // feedback; see bk_audio.sv). Power-on reset only (vid_rst_n) - like the
-    // display, sound survives a warm reset; spk_bit is never cleared by
-    // nINIT (software owns it).
-    wire spk_active;
+    // ---- Sound: sources -> mixer -> noise-shaped 6-bit DAC -> the ladders --
+    // The audio subsystem lives in src/audio/: bk_audio assembles the BK
+    // speaker (spk_bit, captured in u_mem on sys_clk as a software-owned
+    // latch) and the DIP-5 self-test tone into an N-slot stereo mixer, then
+    // noise-shapes each channel down to the 6-bit ladder code at sys_clk/16.
+    // The shaping is what lets a 6-bit ladder resolve far finer than six bits
+    // in the audio band - the seam the Covox / AY / Menestrel increments plug
+    // into. While CMT mode is on (DIP 4, see cmt_mode above) the right channel
+    // becomes the esemsx3-style CMT comparator (pDac_SR[5] input + ladder
+    // feedback, [0] = the RAW speaker bit as tape-out) and the LEFT ladder
+    // carries the mono fold of both channels.
+    // Power-on reset only (vid_rst_n) - like the display, sound survives a
+    // warm reset; spk_bit is never cleared by nINIT (software owns it).
+    wire spk_active, snd_sat, snd_clip, snd_tone;
     wire [5:0] dac_r_o, dac_r_oe;
     bk_audio u_audio (
         .sys_clk    (sys_clk),
@@ -886,11 +932,15 @@ module ocbk_top (
         .spk_bit    (spk_bit),
         .cmt_mode   (cmt_mode),
         .cmt_in_pad (pDac_SR[5]),
+        .tone_en    (tone_en),
         .tape_lvl   (tape_lvl),
         .dac_l      (pDac_SL),
         .dac_r_o    (dac_r_o),
         .dac_r_oe   (dac_r_oe),
-        .active     (spk_active)
+        .active     (spk_active),
+        .dbg_sat    (snd_sat),
+        .dbg_clip   (snd_clip),
+        .dbg_tone   (snd_tone)
     );
     // Per-bit pad tri-states (real I/O-buffer OEs at the pins - NOT the
     // internal single-driver-Z trap; nothing on-chip reads these nets except
@@ -1049,8 +1099,16 @@ module ocbk_top (
     // pLed[7]: SMK IDE drive access (stretched + blinking).  pLed[6]: CMT
     // tape-in mode (DIP 4; lit = right jack is the cassette port).
     // pLed[5]: TURBO mode (PS/2 F12; lit = 6.04 MHz, no 037 cycle-stealing).
+    // pLed[3]: audio self-test tone live (DIP 5).  pLed[2]: a DAC quantizer
+    // clipped (STICKY).  pLed[1]: the audio mixer saturated (STICKY).
     // pLed[0]: BK speaker activity (solid while a tone plays; audio bring-up
-    // tap).  pLed[4:1]: unused.
-    assign pLed    = {ide_led, cmt_mode, turbo_eff, 3'b0, 1'b0, spk_active};
+    // tap).  pLed[4]: unused.
+    // The two sticky audio flags are bring-up observability, the same reasoning
+    // that put spk_active on pLed[0] in Phase 6: they turn "it sounds wrong"
+    // into "the digital side says the level overflowed", which is otherwise
+    // indistinguishable from an analog fault. Neither should ever light in
+    // normal use - the gain budget, not the saturator, is the mixing strategy.
+    assign pLed    = {ide_led, cmt_mode, turbo_eff, 1'b0,
+                      snd_tone, snd_clip, snd_sat, spk_active};
 
 endmodule

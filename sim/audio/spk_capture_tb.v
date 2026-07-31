@@ -36,6 +36,10 @@ module spk_capture_tb;
     wire        spk_bit;
     wire        mot_bit;
     wire        stop_block;
+    wire        port_wr;      // 177714 (nSEL2) parallel-port write capture
+    wire [15:0] port_data;
+    wire        port_word;
+    wire [1:0]  port_be;
     wire        rply_n;
     wire [15:0] bus_addr;
     wire        s_dq_dummy;   // unused SDRAM data bus stays floating
@@ -74,8 +78,19 @@ module spk_capture_tb;
         .bus_addr(bus_addr), .fetch_stb(),
         .spk_bit(spk_bit),
         .mot_bit(mot_bit),
+        .port_wr(port_wr),
+        .port_data(port_data),
+        .port_word(port_word),
+        .port_be(port_be),
         .stop_block(stop_block)
     );
+
+    // Count port_wr strobes: the "exactly one per bus write" contract is the
+    // one these devices actually depend on (the AY tells a register select from
+    // a data write by the write itself, and Menestrel edge-detects its own nWR
+    // across successive writes), and the DOUT window is many sclk long.
+    integer port_strobes = 0;
+    always @(posedge sclk) if (port_wr) port_strobes = port_strobes + 1;
 
     // One DATO (write) bus cycle: SYNC latches `a`, DOUT presents `d`.
     // NOTE: keeps WTBT asserted through the DOUT window - a BYTE-op signature
@@ -138,6 +153,36 @@ module spk_capture_tb;
         end
     endtask
 
+    // DATIO(B): DIN then DOUT under ONE SYNC (INC/BIS/... on memory). CLAUDE.md
+    // requires RMW coverage in any bus-path oracle - the read half must not
+    // produce a port strobe and the write half must produce exactly one.
+    task bus_rmw_word(input [15:0] a, input [15:0] d);
+        begin
+            ad_oe = 1'b1; ad_drive = ~a;
+            sel1_n = !(a[15:1] == (16'o177716 >> 1));
+            sel2_n = !(a[15:1] == (16'o177714 >> 1));
+            wtbt_n = 1'b0;                      // DATIO: write flag at SYNC time
+            #6  sync_n = 1'b0;
+            #4  ad_oe = 1'b0;                   // release the bus for the read
+                din_n  = 1'b0;
+            repeat (2) @(posedge cclk);
+            #2  din_n  = 1'b1;
+            // The vm1 gates dout_start on the read reply's ack having cleared,
+            // so a DATIO always has a BOTH-STROBES-IDLE gap between the halves
+            // (CLAUDE.md's ROM-write-timeout note). Model it - driving the
+            // write data while the slave is still driving the read data makes
+            // the bus X, and the capture then latches X.
+            repeat (2) @(posedge cclk);
+            #4  ad_oe = 1'b1; ad_drive = ~d;    // now drive the write data
+            #4  wtbt_n = 1'b1;                  // released at DOUT = WORD op
+                dout_n = 1'b0;
+            repeat (2) @(posedge cclk);
+            #2 dout_n = 1'b1; #6 sync_n = 1'b1; ad_oe = 1'b0;
+            sel1_n = 1'b1; sel2_n = 1'b1;
+            repeat (2) @(posedge cclk);
+        end
+    endtask
+
     // One DATI (read) bus cycle: SYNC latches `a`, DIN strobes, the DUT's wait
     // FSM replies (N_ROM edges on cclk) and drives the read word; compare it.
     task bus_read(input [15:0] a, input [15:0] e, input [127:0] tag);
@@ -175,6 +220,32 @@ module spk_capture_tb;
         begin
             if (mot_bit !== e) begin
                 $display("AUDIO-ERROR %0s: mot_bit exp=%b got=%b", tag, e, mot_bit);
+                errors = errors + 1;
+            end
+        end
+    endtask
+
+    task expect_port(input [15:0] d, input w, input [1:0] be,
+                     input integer strobes, input [255:0] tag);
+        begin
+            if (port_data !== d) begin
+                $display("AUDIO-ERROR %0s: port_data %o (expected %o)",
+                         tag, port_data, d);
+                errors = errors + 1;
+            end
+            if (port_word !== w) begin
+                $display("AUDIO-ERROR %0s: port_word %b (expected %b)",
+                         tag, port_word, w);
+                errors = errors + 1;
+            end
+            if (port_be !== be) begin
+                $display("AUDIO-ERROR %0s: port_be %b (expected %b)",
+                         tag, port_be, be);
+                errors = errors + 1;
+            end
+            if (port_strobes !== strobes) begin
+                $display("AUDIO-ERROR %0s: %0d port_wr strobes (expected %0d)",
+                         tag, port_strobes, strobes);
                 errors = errors + 1;
             end
         end
@@ -328,6 +399,106 @@ module spk_capture_tb;
         @(negedge cclk) reset = 1'b0;
         repeat (2) @(posedge sclk);
         expect_stop(1'b0, "bk11: DCLO re-enables");
+
+        // ==================================================================
+        //  177714 (nSEL2) parallel-port write capture
+        // ==================================================================
+        // The seam every BK sound expansion hangs off: Covox, 2x YM2149 and
+        // Menestrel all decode THIS ONE address (BkEmu REG_SEL2) and differ
+        // only in how they read the data - Covox by the high byte, the AY by
+        // word-vs-byte, Menestrel by its pin field. So the capture has to give
+        // all three what they need: the full 16-bit BK-true value with byte
+        // lanes merged, the word/byte distinction, which lane was written, and
+        // EXACTLY ONE strobe per bus write.
+        model_bk11 = 1'b0;
+
+        // -- 1. word write: the whole word, port_word set, both lanes, 1 strobe
+        port_strobes = 0;
+        bus_write_word(16'o177714, 16'o125252);
+        expect_port(16'o125252, 1'b1, 2'b11, 1, "177714 word write");
+
+        // -- 2. byte write to the EVEN address: low lane only, high preserved
+        port_strobes = 0;
+        bus_write_byte(16'o177714, 16'o000377);
+        expect_port(16'o125377, 1'b0, 2'b01, 1, "177714 even-byte write");
+
+        // -- 3. byte write to the ODD address: high lane only, low preserved.
+        //    BkEmu's Computer.writeMemory puts an odd-byte value at <<8, which
+        //    is what a device transcribed from it will expect.
+        port_strobes = 0;
+        bus_write_byte(16'o177715, 16'o000252);
+        //    (0o252<<8 | 0o377 = 0o125377; the high lane happens to be
+        //     unchanged here because 0o252 is what it already held, so repeat
+        //     with a different value to actually prove the lane moved.)
+        expect_port(16'o125377, 1'b0, 2'b10, 1, "177715 odd-byte write");
+        port_strobes = 0;
+        bus_write_byte(16'o177715, 16'o000125);
+        expect_port(16'o052777, 1'b0, 2'b10, 1, "177715 odd-byte lands high");
+
+        // -- 4. THE WTBT DISCRIMINATOR, both directions. This is the
+        //    load-bearing case: WTBT means "write cycle" at SYNC time but
+        //    "BYTE op" at DOUT time, so port_word must be sampled LIVE at the
+        //    write point. A SYNC-latched implementation reads "asserted" in
+        //    BOTH profiles and calls every access a byte write - and no
+        //    cycle-count golden anywhere can see the difference.
+        port_strobes = 0;
+        bus_write_word(16'o177714, 16'o007070);   // WTBT released at DOUT
+        expect_port(16'o007070, 1'b1, 2'b11, 1, "WTBT released at DOUT = word");
+        port_strobes = 0;
+        bus_write_byte(16'o177714, 16'o000007);   // WTBT held through DOUT
+        expect_port(16'o007007, 1'b0, 2'b01, 1, "WTBT held at DOUT = byte");
+
+        // -- 5. back-to-back writes: two strobes, the second value wins
+        port_strobes = 0;
+        bus_write_word(16'o177714, 16'o001111);
+        bus_write_word(16'o177714, 16'o002222);
+        expect_port(16'o002222, 1'b1, 2'b11, 2, "back-to-back writes");
+
+        // -- 6. DATIO(B) RMW: the read half must not strobe, the write half
+        //    must strobe exactly once (the CLAUDE.md RMW rule).
+        port_strobes = 0;
+        bus_rmw_word(16'o177714, 16'o017417);
+        expect_port(16'o017417, 1'b1, 2'b11, 1, "DATIO RMW write half");
+
+        // -- 7. everything that must NOT strobe
+        port_strobes = 0;
+        bus_write_word(16'o177716, 16'o000100);   // the OTHER nSEL register
+        if (port_strobes != 0) begin
+            $display("AUDIO-ERROR 177716 write produced a 177714 port strobe");
+            errors = errors + 1;
+        end
+        bus_write_word(16'o177712, 16'o123456);   // CPU-internal: no SEL pin
+        if (port_strobes != 0) begin
+            $display("AUDIO-ERROR 177712 write produced a port strobe");
+            errors = errors + 1;
+        end
+        bus_read(16'o177714, 16'o000000, "177714 DATI reads 0");
+        if (port_strobes != 0) begin
+            $display("AUDIO-ERROR a DATI from 177714 produced a WRITE strobe");
+            errors = errors + 1;
+        end
+        // ...and none of that disturbed the latched value
+        expect_port(16'o017417, 1'b1, 2'b11, 0, "value survives non-writes");
+
+        // -- 8. NEVER runtime-reset: nINIT (the RESET instruction) must leave
+        //    the port latch alone - the spk/mot class, not a new nINIT
+        //    exception. A real Covox is a passive DAC on the latch with no
+        //    reset pin at all.
+        @(negedge cclk) init_n = 1'b0;
+        repeat (3) @(posedge cclk);
+        @(negedge cclk) init_n = 1'b1;
+        repeat (2) @(posedge sclk);
+        port_strobes = 0;
+        expect_port(16'o017417, 1'b1, 2'b11, 0, "nINIT preserves the port latch");
+
+        // -- 9. the capture is model-independent (bank_wr needs !sel1_n, so it
+        //    can never gate a 177714 write - but prove it rather than assert it)
+        model_bk11 = 1'b1;
+        port_strobes = 0;
+        bus_write_word(16'o177714, 16'o004100);   // bit 11 set: a BANKING
+        expect_port(16'o004100, 1'b1, 2'b11, 1,   //   pattern on 177716
+                    "bk11: bit-11 word write still captured on 177714");
+        model_bk11 = 1'b0;
 
         if (errors == 0) $display("COSIM PASS");
         else             $display("COSIM FAIL (%0d errors)", errors);

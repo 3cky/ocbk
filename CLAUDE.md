@@ -29,6 +29,7 @@ phase-by-phase narrative if the history is ever wanted.)
 | **7** BK-0011M mode | DIP 1 model select, /24 CPU clock, 177716 banking mapper, 177662 video register, 50 Hz EVNT/IRQ2, СТОП-block, two-pass EPCS loader, authentic DRAM power-on pattern | ✅ HW 2026-07-16 (BOS boots; reset switches models) |
 | **8** SMK512 (DIP 8) | 512 KB segmented RAM, BIOS ROM + the SYS register-space boot overlay, IDE drive engine + tier-1 prefetch, SD/SPI backend — in **both** models | ✅ HW 2026-07-23 (BIOS boots an OS off SD) |
 | **9** Fidelity & polish | authentic EVNT/IRQ2 instant (`bk_evnt`); `N_EXT` calibrated against a real machine; `N_VREG` closed; palette sample instant; the **037 grant-rule fit** + `bk_rply` (the beam-race skew); **turbo mode** | ✅ HW 2026-07-26 (grant rule: Babylona/PALTST flat), 2026-07-29 (turbo) |
+| **10** Audio subsystem | `src/audio/`: N-slot stereo **mixer** + a noise-shaped 6-bit output stage (>6-bit audio-band resolution on the same ladders), **true stereo** with a CMT mono fold, the DIP-5 self-test tone, and the **177714 capture seam** for the sound devices. **Infra only — no new sound device** | sim ✅ (23 mutations); ✅ HW 2026-07-31 (the staircase measured off the jacks: −6.047 dB/step over 42 dB, max residual 0.19 dB, the three sub-ladder-step levels on the line) |
 
 ## Platform & system map
 
@@ -102,11 +103,16 @@ integer ratios, so the design is internally cycle-exact; the absolute rate is
         │ IRQ/VIRQ     └───────┬───────┘                    ▼
    ┌────┴──────────┐           │ video fetch (port 2)
    │ bk_kbd014,    │           ▼                      ┌──────────────────┐  RGB DAC
-   │ bk_audio,     │   ┌───────────────┐              │ fb_readout →     │─►+ HS/VS
-   │ bk_evnt,      │   │ palette_apply │ FB via SDRAM │ fb_linebuf →     │
-   │ smk_ide/sd    │   │ → fb_video    │─────────────►│ vga_out (1024x   │
-   └───────────────┘   └───────────────┘              │  768@60, x2/x3)  │
+   │ bk_evnt,      │   ┌───────────────┐              │ fb_readout →     │─►+ HS/VS
+   │ smk_ide/sd    │   │ palette_apply │ FB via SDRAM │ fb_linebuf →     │
+   └───────────────┘   │ → fb_video    │─────────────►│ vga_out (1024x   │
+                       └───────────────┘              │  768@60, x2/x3)  │
                                                       └──────────────────┘
+          spk_bit ──┐   ┌──────────────┐             ┌──────────────┐
+   self-test tone ──┼──►│ audio_mixer  │─ L,R ──────►│ audio_out    │──► Sound-L
+   177714 devices ··┘   │ gain/pan/en  │  signed 16  │ 2x audio_ns6 │──► Sound-R
+        (not built)     │  saturating  │ (l+r)>>1 in │ + CMT jack   │  two 6-bit
+                        └──────────────┘  CMT mode   └──────────────┘  R-2R ladders
 ```
 
 The signal that carries cycle accuracy is the 037's **grant / RPLY timing**:
@@ -170,10 +176,15 @@ vga_timing.sv       vendored VESA timing generator (ocb-test, board-proven)
 --- src/peripheral/ ---
 ps2_rx.sv           PS/2 frame receiver           kbd_ps2bk.sv  scan -> BK codes
 bk_kbd014.sv        1801ВП1-014 equivalent (177660-663, VIRQ/IAK)
-bk_audio.sv         speaker DAC + the CMT tape comparator network
 bk_evnt.sv          the real 0011M D28+D3:B EVNT/IRQ2 missing-pulse detector
 smk_ide.sv          SMK512 IDE task file + ATA engine + tier-1 prefetch
 sd_backend.sv       SPI-mode SD host serving the smk_ide sector port
+--- src/audio/ (Phase 10; audio_* = generic, bk_* = BK-specific) ---
+audio_ns6.sv        1st-order noise-shaped 16->6-bit quantizer (ONE channel)
+audio_mixer.sv      N-slot stereo mixer: compile-time gain/pan, runtime enable
+audio_tone.sv       the DIP-5 self-test: 2 DDS voices + the 6 dB staircase
+audio_out.sv        pad stage: DAC rate, 2x ns6, CMT mono fold + the CMT jack
+bk_audio.sv         the assembly: speaker CDC/activity + the SLOT MAP
 --- src/sys/ (clocking / CPU-rate control) ---
 cpu_clkgen.sv       fabric divider: dot/CLKIN enables + the CPU clock (/32,/24,/16)
 turbo_ctl.sv        bus-idle-qualified turbo level (the reply-owner swap guard)
@@ -276,13 +287,28 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   the held-key list, and an E0-prefixed 07 must NOT be F12)**, Scroll Lock now
   emitting no event (CMT tape mode moved to DIP 4), parity-error and
   stale-prefix recovery.
-- `sim/run_audio.sh` — Phase-6 audio + tape unit oracles: `bk_audio_tb`
-  (push-pull DAC pattern, mid-scale reset, activity one-shot, and the CMT-mode
-  right-channel comparator network incl. the `cmt_in_pad` → `tape_lvl`
-  feedback) and `spk_capture_tb` (directed Q-bus cycles into the real
-  `qbus_mem`: bit-6/bit-7 DOUT-window captures, 177716 DATI reads — start
-  vector / write-flag / kbd / tape bit 5 — and nINIT keeping the
-  software-owned spk/mot latches).
+- `sim/run_audio.sh` — the Phase-10 audio oracles, **four legs, mutation-tested
+  ×23**; `sim/audio/README.md` carries the pinned contract and the written
+  justification for the resolution claim (the `sim/evnt/README.md` precedent).
+  **Leg 3 `audio_ns6_tb` is the one that matters**: it proves the DC **identity**
+  `1024·Σcode − M·(32·1024+s) == errp₀ − errp_M ∈ [−1023,1023]` — not a
+  tolerance, it telescopes out of the loop and holds for every M, so the mean
+  emitted code tracks the input to <1/1000 of a ladder step where plain
+  truncation is off by up to 512 units *per sample*. Its sharpest leg (L4b)
+  reconstructs **a signal of amplitude 512 = HALF ONE LADDER STEP** to 10/1024
+  of a code, which a 6-bit truncating path renders as silence or a 1-bit
+  square; plus exact silence, the clamp (an overload must not WRAP), and tick
+  discipline. **Leg 4 `audio_mixer_tb`**: gain against an independently written
+  floor reference, pan, runtime enable, saturation never wrapping, the
+  **`NSRC=1` pass-through invariant** (the `smk_en=0`/`turbo=0` differential
+  idiom — what guarantees the speaker-only shipped path is unperturbed) and the
+  planned `NSRC=10` shape. **Leg 1 `bk_audio_tb`** is the regression guard for
+  the two hardware-confirmed behaviours — the speaker's STATIC rail codes and
+  the whole CMT jack (oe split, comparator network, anti-echo, raw tape-out) —
+  plus true stereo, the CMT mono fold and the staircase. **Leg 2
+  `spk_capture_tb`** keeps the 177716 bit-6/7 captures and gains the **177714
+  (nSEL2) port-write capture**, whose load-bearing case is the WTBT
+  discriminator (see the audio bullet).
 - `sim/run_clkgen.sh` — the Phase-7 `cpu_clkgen` unit oracle: BK-0010 (/32)
   mode **bit-identical** to a replica of the pre-Phase-7 `divc[4]` tap
   (enables included), the /24 BK-0011M rate exact, and a retarget sweep (no
@@ -799,6 +825,16 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   `~pDip[3]` read LIVE — a 2-FF sys_clk sync, NOT DCLO-latched, since CMT
   never touches the CPU — so flipping it needs no reset; `pLed[6]` = mode
   tap; was the PS/2 Scroll Lock key through Phase 8, see the tape bullet).
+  **DIP 5 = the audio self-test tone** (Phase 10; `~pDip[4]`, read LIVE
+  through the same 2-FF sys_clk sync as DIP 4 and for the same reason — it
+  never touches the CPU, so it needs no reset). A DIAGNOSTIC, not a user
+  feature: it plays a 440 Hz reference on BOTH channels plus a 1567 Hz
+  RIGHT-ONLY tone whose level steps down 6 dB every ~0.7 s through eight
+  steps, the last three of which are BELOW one ladder step — the by-ear
+  demonstration that the noise-shaped DAC resolves finer than its six
+  physical bits, and (via the two different pans) that stereo works. It
+  **mutes the BK speaker while it runs**; see the gain-budget note in the
+  audio bullet. `pLed[3]` = mode tap.
   **DIP 2 is unused** — it
   forced the on-chip test ROM, removed 2026-07-10 (ROM is always the loaded
   SDRAM image). **TURBO is NOT a DIP** — it is the PS/2 **F12** key, with
@@ -806,7 +842,14 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   live, power-on-only radial toggle rather than a DCLO-latched config bit, so
   it survives the reset button and needs no reset to take effect. Current LED
   map: `pLed[7]` = SMK drive access, `[6]` = CMT mode, `[5]` = turbo,
-  `[0]` = speaker activity, `[4:1]` unused.
+  `[3]` = audio self-test tone live (DIP 5), `[2]` = a DAC quantizer clipped
+  (STICKY), `[1]` = the audio mixer saturated (STICKY), `[0]` = speaker
+  activity, `[4]` unused. The two sticky audio flags are bring-up
+  observability — the same reasoning that put `spk_active` on `pLed[0]` in
+  Phase 6: they turn "it sounds wrong" into "the digital side says the level
+  overflowed", otherwise indistinguishable from an analog fault. Neither should
+  ever light in normal use; the gain budget, not the saturator, is the mixing
+  strategy.
 - **Authentic DRAM power-on pattern (`src/sdram/ram_init.sv`):** the board SDRAM has
   no defined power-on state, so before this the BK startup screen showed FPGA
   garbage / stale content (worst on a model-switch warm reset, where DIP 1
@@ -896,11 +939,26 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   and wrongly killed the right audio channel** (hardware finding 2026-07-10).
   `mot_bit` is still captured next to `spk_bit` in `qbus_mem` (same
   DOUT-window sys_clk capture, same software-owned NOT-nINIT-reset contract,
-  oracle-pinned) but left unconnected in the top. In CMT mode `bk_audio`
+  oracle-pinned) but left unconnected in the top. In CMT mode `audio_out`
   drives `pDac_SR` as `[5]`=input(Z) `[4]`=Z `[3:2]`={lvl,~lvl} (Schmitt
   feedback through the ladder resistors) `[1]`=0 `[0]`=spk level (BK tape-out
   IS bit 6); the sampled level feeds **177716 read bit 5** (`tape_in`,
-  2-FF onto `cpu_clk_n`). The MONITOR read loop is duration-based and
+  2-FF onto `cpu_clk_n`). **Phase 10 changed what the OTHER ladder does in this
+  mode**: audio is now true stereo, so with CMT on the **left** ladder carries
+  the L+R **mono fold** (an average, not a sum, so a BOTH-panned source is
+  equally loud either way and hard-panned content folds 6 dB down; the average
+  also stays inside the shaper's clip-free window with no extra saturator).
+  The BK speaker is panned BOTH, so `mix_l == mix_r` for it and the CMT-mode
+  left ladder still sits at its rail code — **turning CMT on cannot change how
+  the speaker sounds**. Two Phase-10 rules for this jack, both in
+  `src/audio/audio_out.sv` and both mutation-pinned: **tape-out
+  (`dac_r_o[0]`) stays the RAW speaker bit** — never a mixed sample and never a
+  shaped code, because bit 0 is the ladder's LSB tap and a shaped code rattles
+  it at up to 3 MHz (which would destroy the duration-coded waveform MONITOR
+  writes) and because it would otherwise mix an AY into a tape recording; and
+  **the anti-echo force on `tape_lvl` is now MORE load-bearing** than it was,
+  since with CMT off `pDac_SR[5]` carries that same rattling code bit where it
+  used to carry a quasi-static mono level. The MONITOR read loop is duration-based and
   self-calibrating, so a WAV played into the jack is a valid tape source.
   These pad OEs are the ONE intentional tri-state besides the bus nets — the
   map-report guard grep must not flag them (they drive pins, not internal
@@ -909,6 +967,92 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   ground truth for MONITOR behaviour alongside BkEmu. Tape-out fidelity note:
   a real BK mixes write bits 6+5 into a 3-level record waveform; bit 6 alone
   is shipped (dominant component).
+- **Audio subsystem (Phase 10) — `src/audio/`: mixer + noise-shaped 6-bit
+  output, true stereo. INFRA ONLY, no new sound device.** Naming: `audio_*` is
+  generic infrastructure, `bk_*` is BK-specific; the 177714 devices will live in
+  `src/peripheral/`.
+  * **The mixer** (`audio_mixer.sv`): N slots of signed 16-bit, **full scale
+    ±32767 = exactly BkEmu's short domain** (`AudioOutput.MAX_OUTPUT`) so the AY
+    volume table, the Covox byte map and the Menestrel counter levels transcribe
+    1:1. **Gain (`g/8`) and pan are COMPILE-TIME parameters; the enable is
+    RUNTIME** — there is no volume UI and never will be, so gains fold to
+    shifted adds on a device with no multipliers, while the enable must be live
+    because Covox/Menestrel get key-cycled. **Runtime stereo is not a runtime
+    pan**: a device presents ONE SLOT PER CHANNEL with a static pan and decides
+    itself what to put in each (that seam decision is what keeps the mixer
+    trivial). Saturates at **31744, not 32767** — putting the bound here is what
+    makes the shaper's clip-free proof hold; wrapping is unacceptable (it is a
+    full-scale sign inversion, the loudest artifact this path can emit). Pan
+    masks are compile-time constants, so hard-panned slots fold out of the
+    opposite adder tree — **measured**, 392 vs 527 LE at NSRC=10.
+  * **The output stage** (`audio_ns6.sv`): **first-order error feedback**, one
+    17-bit adder and one 10-bit residue register per channel, at **sys_clk/16 =
+    6.04 MHz** (OSR ≈ 151 against a 20 kHz band ⇒ ~60 dB below the raw 6-bit
+    floor — we are ladder-limited long before the shaper is). The DC gain is
+    exactly 1 by construction, which is what `sim/audio` proves as an identity.
+    **Three fixed points make the whole thing safe**: `s=0`, `+31744` and
+    `−31744` each sit STATIC (codes 32, 63, 1), so **silence produces zero pin
+    activity** and **the BK speaker — which maps to the rails — emits a static
+    63/1 with no shaping activity at all**. The speaker path therefore cannot be
+    regressed by any of this; the only change is 63/**0** → 63/**1**, 0.14 dB,
+    the price of the clip-free window. First order and no dither are both
+    deliberate (see Open / deferred for the computed idle-tone bound).
+  * **Why not full-rate 96.65 MHz**: six pads driving a discrete ladder cannot
+    settle in 10.3 ns (unsettled transitions are code-dependent glitch energy =
+    distortion), and a 17-bit carry chain on the every-cycle path against
+    +0.3 ns of sys_clk slack invites the STA chase. `RATE_DIV` = 8 or 32 are the
+    documented fallbacks if the board dislikes 3 MHz shaped noise or cannot
+    settle in 165 ns. The prescaler is PRIVATE to `audio_out`, not a port:
+    taking the tick from `cpu_clkgen` would force every audio tb to replicate a
+    divider — the replica-drift trap this file records for `cpu_clkgen`.
+  * **Why the full ladder rather than esemsx3's 2-tap 1-bit sigma-delta — and a
+    correction to what this file and the RTL used to say.** esemsx3 drives a
+    1-bit bitstream (`src/sound/dac/esepwm.vhd`, ~21 MHz) onto taps 5 and 0
+    only, and **on its own firmware that works and sounds fine; it is not a
+    broken scheme and NOT silent on this board.** What was silent was *ocbk's*
+    earlier attempt at that pin pattern, because it fed those two taps an
+    audio-rate 1-bit LEVEL instead of a modulated bitstream — two taps have
+    nothing to average. A bug in the reproduction, not a property of the
+    hardware. We use the whole ladder for a POSITIVE reason: the OneChipBook
+    schematic provides a real 6-bit WEIGHTED R-2R network, so a 6-bit quantizer
+    starts ~30 dB ahead of a 1-bit one at equal oversampling and needs 16× less
+    of it.
+  * **The gain budget is the mixing strategy, and it is not yet solved for
+    devices.** The speaker is a full-scale source: by itself it uses the entire
+    headroom, so anything sounding alongside it saturates. Phase 10 sidesteps
+    this by having the self-test tone MUTE the speaker (a diagnostic owns the
+    output, which also keeps the acceptance FFT free of a BK square wave). The
+    first device increment must actually solve it — MiSTer's answer is to drop
+    the speaker to 1/4 when its PSG is live.
+  * **The 177714 (nSEL2) capture seam** in `qbus_mem`, next to the `spk_bit`
+    block: `port_wr` / `port_data[15:0]` / `port_word` / `port_be[1:0]`. All
+    three planned devices decode this ONE address and differ only in how they
+    read the data, so the bus side is shared. **WTBT is sampled LIVE at the
+    write point** (dual-purpose: "write" at SYNC, "BYTE op" at DOUT) — a
+    SYNC-latched build calls every access a byte write and **no cycle-count
+    golden anywhere can see the difference**, only `spk_capture_tb`'s two WTBT
+    profiles. **Exactly one strobe per bus write** (`port_seen`), because unlike
+    the idempotent spk latch these devices are edge-sensitive. Polarity is
+    BK-true (`~ad_n`) so BkEmu's models, which each do their own `v = ~value`,
+    transcribe 1:1. **Never runtime-reset** — the spk/mot class, not a new nINIT
+    exception (a real Covox is a passive DAC on the port latch with no reset
+    pin). It is a PURE OBSERVER with no path into `selected`/`wcnt`/the
+    reply/`io_word`/`ad_oe`/`mem_ready`, which is what makes it timing-inert;
+    177714 already replies via `sel_io`. Read merge deferred (see Open). It is
+    surfaced in `ocbk_top` as `snd_port_*` wires that **nothing consumes yet**,
+    so the fitter removes the entire capture and it costs **0 LE** in this
+    build — it is oracle-pinned regardless, because `spk_capture_tb` drives the
+    real `qbus_mem` directly. Wiring it to named top-level wires rather than
+    omitting the ports is deliberate: it puts the seam where a device
+    implementer looks, and keeps the map report free of four
+    "dangling port" warnings.
+  * **Cost and timing (confirmed):** **6,979 → 7,356 LE (58 % → 61 %)**, +377,
+    all of it mixer + shapers + tone; M4K unchanged at 3/52, pins unchanged at
+    98/173, no new PLL. **sys_clk setup +0.313 → +0.260 ns, TNS 0, zero
+    negative paths — no STA chase was needed**, which is unusual for this design
+    at 61 % LE and is down to every stage being one carry chain deep and every
+    pad being driven from a flop. `TONE_ENABLE = 0` on `bk_audio` reclaims
+    ~130 LE if a later increment needs them.
 - Cartridge-slot Q-bus is a **forward seam**: `src/bus/qbus_slot.sv`, default
   `SLOT_ENABLE=0` (drives nothing, slot pins stay reserved-tristated). The full
   slot pin map lives commented in `ocbk_common.qsf`. Real BK hardware needs an
@@ -1869,6 +2013,45 @@ Nothing here blocks anything; each item has its detail in the bullet named.
 Roughly in order of how much they'd be missed.
 
 **Fidelity, measurable**
+- **The Phase-10 >6-bit audio resolution claim is CONFIRMED ON HARDWARE
+  2026-07-31 — recipe item (1) of four is done; (2), (3), (4) are still open.**
+  The staircase was recorded off the Sound-L/R jacks and measured **−6.047
+  dB/step** (ideal −6.021) over 42 dB, max residual **0.19 dB**, with the three
+  sub-ladder-step levels (½, ¼, ⅛ of one ladder step) on the same straight line
+  as the full-scale ones and 49–58 dB above the noise floor — which a 6-bit
+  truncating path renders as silence or a 1-bit square. Full table, method and
+  caveats in `sim/audio/README.md`; the recording itself is not committed (4 MB),
+  so that table is the record. Two by-products: the recording ran hot, so **step
+  0 alone** sits +0.33 dB off the line (peak −0.47 dBFS, and the only step whose
+  own 3rd harmonic departs from ideal) — re-record 6 dB lower; and the frequency
+  cross-check caught the **`STEP_B` transposition** (69658 → 69637, voice B was
+  0.52 cents sharp), fixed in `audio_tone.sv`, which the recording predates.
+  Still to collect, all from one **DIP 5** session: (2) sweep voice A
+  100 Hz → 100 kHz to **measure the board's analog RC corner**, which is
+  currently undocumented, is the one thing that would justify changing
+  `RATE_DIV` from 16 to 8 or 32, AND is now also the way to resolve the voice-A
+  harmonic anomaly in the next bullet; (3) record silence to confirm the shaper
+  really is inactive there; (4) re-check CMT through the right jack. Keep the
+  recordings in `test/` per the existing `.wav` convention.
+- **The board's analog stage after the sound ladder is unmeasured** (RC corner,
+  amp behaviour above the audio band). Everything said about out-of-band shaped
+  noise is a BOUND, not a measurement — the bound being that the shaped code
+  never deviates from the plain-truncated code by more than ±1 LSB6, which is
+  strictly milder HF content than the 63-code full-swing pad edges this board
+  already survives on every BK beep. Settled by recording (2) above.
+  **The 2026-07-31 recording gave this bullet its first real datum, and it is a
+  puzzle: voice A comes back with ~8.5 dB MORE 3rd harmonic than a triangle
+  has.** It is definitively not the digital path — a bit-exact transcription of
+  `audio_ns6` fed the real DDS triangles reproduces the ideal series to 0.00 dB
+  (3rd −19.08, 5th −27.96, 7th −33.80, evens >100 dB down, fundamental gain
+  0.000) at 440 Hz, at 1567 Hz and at amplitude 128. And it is
+  frequency-selective, not a plain nonlinearity: 1320 Hz up 8.5 dB but 2200 Hz
+  **down** 4.7 dB, small even harmonics present, and the 440 Hz component in the
+  right channel expanding 1.54 dB when voice B is loud — while voice B's own 3rd
+  harmonic measures ideal at every step. Two tones cannot separate response from
+  nonlinearity; the sweep is what does. **It does not touch the resolution
+  claim**, which is a ratio at ONE frequency and therefore immune to any fixed
+  response.
 - **The BK-0010 `/32` prediction is unmeasured.** The 037 grant-rule fit moves
   the bk10 path +0.20 % on `SOB` but **+15.0 % on `MOV #imm`**, and nothing in
   the tree measures it — there is no BK-0010 tone recording, and
@@ -1886,10 +2069,42 @@ Roughly in order of how much they'd be missed.
   512 KB segment is left zero-filled.
 
 **Peripherals / features not built**
-- **Covox** (the parallel-port DAC) — nothing in the design.
+- **The 177714 sound devices — Covox, 2× YM2149 (AY) and Menestrel — are NOT
+  built; Phase 10 built the seams they plug into.** All three decode the SAME
+  address (BkEmu `REG_SEL2` = 0177714) and differ only in how they read the
+  data, so `qbus_mem`'s `port_wr`/`port_data`/`port_word`/`port_be` capture and
+  the mixer's slots 3–9 are shared and already exist and are oracle-pinned.
+  Planned arbitration (settled): the **AY is always live**; Covox and Menestrel
+  are cycled by a PS/2 radial-toggle key (the `key_scrmode`/`key_turbo`
+  pattern), landing with the first device. Planned AY core: MiSTer
+  `BK0011M_MiSTer/rtl/ym2149.sv`. Devices belong in `src/peripheral/`
+  (`bk_covox.sv`, `bk_ay.sv`, `bk_menestrel.sv`) — `src/audio/` is
+  mix-and-output infrastructure only. **The first device increment must also
+  re-open the gain budget**: the speaker is a full-scale source, so it uses the
+  entire headroom by itself and anything sounding alongside it saturates —
+  MiSTer's answer is to drop the speaker to 1/4 when its PSG is active
+  (`BK0011M.sv`: `spk_out<<7` alone vs `<<5` with the PSG). Phase 10 sidesteps
+  this only because the self-test tone mutes the speaker.
+- **The 177714 READ merge is not implemented.** The Phase-10 seam captures
+  WRITES only, deliberately: a write capture is provably reply-inert (177714
+  already replies via `sel_io`), while a read merge reaches into the reply/OE
+  cone that this change carefully avoids. Covox is write-only and nothing yet
+  establishes that an AY read is needed; if one ever is, follow the
+  `ide_rdata` pattern exactly.
 - **Tape-out is single-bit.** A real BK mixes write bits 6+5 resistively into a
   3-level record waveform; bit 6 alone (the dominant component) is shipped. See
-  the tape bullet.
+  the tape bullet. **Phase 10 deliberately did NOT change this** — tape-out is a
+  DATA signal, not a mixer output (see the audio bullet's hard rule).
+- **No dither on the noise-shaper error path** (`audio_ns6`). Deliberate: the
+  exact-zero fixed point means silence produces zero pin activity, which matters
+  because `pDac_SR[5]` doubles as the CMT input pad and makes "silent at
+  silence" a sharp binary oracle assertion. The cost is bounded and computed —
+  for a DC input with fractional part `p/q` in lowest terms the limit cycle is
+  at `Fs/q` with amplitude `O(1/q)` codes, so any **in-band** idle tone is below
+  ≈ −85 dBFS while the loud short cycles (Fs/2 = 3.02 MHz, Fs/3) are all ≥ 1 MHz.
+  Insertion point if revisited: `accr = s_in + errp + dither`, RPDF from an
+  LFSR; it invalidates exactly one oracle leg (L3, silence), which would have to
+  become a bounded-variance check.
 - **Keyboard reset chord** — `warm_rst_req` has the OR seam, no chord decodes
   into it.
 - **Cartridge slot** (`src/bus/qbus_slot.sv`, `SLOT_ENABLE=0`) drives nothing; the

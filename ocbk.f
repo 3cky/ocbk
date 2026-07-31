@@ -17,6 +17,7 @@
 +incdir+src/sdram
 +incdir+src/video
 +incdir+src/peripheral
++incdir+src/audio
 +incdir+src/sys
 
 // --- package first ---
@@ -52,7 +53,13 @@ src/peripheral/ps2_rx.sv
 src/peripheral/kbd_ps2bk.sv
 src/peripheral/bk_kbd014.sv
 src/peripheral/bk_evnt.sv
-src/peripheral/bk_audio.sv
+
+// --- audio subsystem (src/audio) ---
+src/audio/audio_ns6.sv
+src/audio/audio_mixer.sv
+src/audio/audio_tone.sv
+src/audio/audio_out.sv
+src/audio/bk_audio.sv
 
 // --- video pipeline (src/video) ---
 src/video/palette_apply.sv
