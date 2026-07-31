@@ -34,7 +34,7 @@ phase-by-phase narrative if the history is ever wanted.)
 | **7** BK-0011M mode | DIP 1 model select, /24 CPU clock, 177716 banking mapper, 177662 video register, 50 Hz EVNT/IRQ2, СТОП-block, two-pass EPCS loader, authentic DRAM power-on pattern | ✅ HW 2026-07-16 (BOS boots; reset switches models) |
 | **8** SMK512 (DIP 8) | 512 KB segmented RAM, BIOS ROM + the SYS register-space boot overlay, IDE drive engine + tier-1 prefetch, SD/SPI backend — in **both** models | ✅ HW 2026-07-23 (BIOS boots an OS off SD) |
 | **9** Fidelity & polish | authentic EVNT/IRQ2 instant (`bk_evnt`); `N_EXT` calibrated against a real machine; `N_VREG` closed; palette sample instant; the **037 grant-rule fit** + `bk_rply` (the beam-race skew); **turbo mode** | ✅ HW 2026-07-26 (grant rule: Babylona/PALTST flat), 2026-07-29 (turbo) |
-| **10** Audio subsystem | `src/audio/`: N-slot stereo **mixer** + a noise-shaped 6-bit output stage (>6-bit audio-band resolution on the same ladders), **true stereo** with a CMT mono fold, the DIP-5 self-test tone, and the **177714 capture seam** for the sound devices. **Infra only — no new sound device** | sim ✅ (23 mutations); ✅ HW 2026-07-31 — the resolution claim measured off the jacks (**−6.047 dB/step over 42 dB, max residual 0.19 dB**, the three sub-ladder-step levels on the line), all four acceptance recordings collected, the DIP-5 diagnostic retired, and the shipped bitstream boots. **+23 LE** |
+| **10** Audio subsystem | `src/audio/`: N-slot stereo **mixer** + a noise-shaped 6-bit output stage (>6-bit audio-band resolution on the same ladders), **true stereo** with a CMT mono fold, the DIP-5 self-test tone, and the **177714 capture seam** for the sound devices. **Infra only — no new sound device** | sim ✅ (25 mutations); ✅ HW 2026-07-31 — the resolution claim measured off the jacks (**−6.047 dB/step over 42 dB, max residual 0.19 dB**, the three sub-ladder-step levels on the line), all four acceptance recordings collected, the DIP-5 diagnostic retired, and the shipped bitstream boots. **+23 LE** |
 
 | **11** Turbosound | `src/audio/bk_turbosound.sv` + the vendored `ym2149.sv`: **2x YM2149 on 0177714**, the first consumer of the Phase-10 seam. BkEmu `Ay8910` protocol, ACB pan folded to two mixer slots, the speaker ducked ~11.8 dB to make room | sim ✅ (15 mutations, incl. a cycle-exact diff of the adapted core against the vendored reference); **+1,182 LE (68 %), sys_clk +0.528 ns after an STA chase**; ✅ HW 2026-07-31 (real AY/Turbosound demos play on the board) |
 
@@ -298,7 +298,8 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   emitting no event (CMT tape mode moved to DIP 4), parity-error and
   stale-prefix recovery.
 - `sim/run_audio.sh` — the Phase-10 audio oracles, **four legs, mutation-tested
-  ×23**; `sim/audio/README.md` carries the pinned contract and the written
+  ×25** (23 at Phase 10; Phase 11 added A1/A2 — the Turbosound slot-pack
+  orientation and the SPK_LVL multiple-of-1024 rule); `sim/audio/README.md` carries the pinned contract and the written
   justification for the resolution claim (the `sim/evnt/README.md` precedent).
   **Leg 3 `audio_ns6_tb` is the one that matters**: it proves the DC **identity**
   `1024·Σcode − M·(32·1024+s) == errp₀ − errp_M ∈ [−1023,1023]` — not a
@@ -2228,11 +2229,19 @@ Sim side: both oracles green with 15 mutations killed, all of `make sim` green
 with **every timing golden byte-identical** (`qbus_mem` took a comment edit
 only), and the STA chase closed structurally at +0.528 ns.
 
-**Not separately verified, and cheap to check with `test/sndtestts.mac`**
-(it builds a `.wav`, so it loads over the CMT jack) if any of it is ever in
-doubt: the pan ORIENTATION (A left / B centre / C right — a swap would sound
-fine on a demo, just mirrored), `pLed[4]`/`[3]` tracking activity and 2-chip
-mode, `pLed[1]`/`[2]` staying dark, and a reset press silencing both chips.
+**The pan ORIENTATION is settled without a listen**, by chaining four things
+that are each pinned: `bk_turbosound_tb` proves channel A lands in `ts_l` and
+C in `ts_r`; `bk_audio_tb`'s pan section proves `ts_l` reaches the LEFT ladder
+only and `ts_r` the RIGHT (mutation A1 — this was a genuine hole until Phase 11
+closed it, and a swap there mirrors the stereo image while every other oracle
+still passes); `ocbk_top` assigns `dac_l` straight to `pDac_SL`; and Phase 10
+established physically that `pDac_SL` is the left jack, since the DIP-5
+self-test's RIGHT-ONLY voice B was measured off the jacks as an R−L swing.
+So A is left, B centre, C right, end to end.
+**Still not separately verified, and cheap to check with `test/sndtestts.mac`**
+(it builds a `.wav`, so it loads over the CMT jack): `pLed[4]`/`[3]` tracking
+activity and 2-chip mode, `pLed[1]`/`[2]` staying dark, and a reset press
+silencing both chips.
 **The speaker duck was JUDGED FINE on hardware and is settled**: the BK beep
 is ~11.8 dB quieter than the Phase-10 firmware so the PSGs and the speaker can
 share the headroom, and that trade is accepted. `SPK_LVL = 8192` is therefore

@@ -1,6 +1,6 @@
 # Audio oracles — the pinned contract
 
-`../run_audio.sh` runs four legs; `--mutate` runs 18 mutations, each of which
+`../run_audio.sh` runs four legs; `--mutate` runs 25 mutations, each of which
 must break one of them. This file records *what is pinned and why*, because the
 central claim of the audio subsystem — that a 6-bit R-2R ladder carries far more
 than 6 bits of audio-band resolution — needs a written justification and not

@@ -129,6 +129,12 @@ if [ "$MODE" = "--mutate" ]; then
       if pass "$SP/m.vvp"; then echo "MUT $1: NOT KILLED" >&2; exit 1; fi
       echo "MUT $1: killed (leg 1)"
    }
+   mut_aud() {   # mut_aud <tag> <sed>   (patches bk_audio, runs leg 1)
+      patch "$BA" "$SP/m.sv" "$2"
+      build_sub "$SP/m.vvp" "$N6" "$MX" "$TN" "$OT" "$SP/m.sv"
+      if pass "$SP/m.vvp"; then echo "MUT $1: NOT KILLED" >&2; exit 1; fi
+      echo "MUT $1: killed (leg 1)"
+   }
    mut_mem() {   # mut_mem <tag> <sed>   (patches qbus_mem, runs leg 2)
       patch "$SRC/bus/qbus_mem.sv" "$SP/m.sv" "$2"
       iverilog -g2012 -o "$SP/m.vvp" -s spk_capture_tb \
@@ -181,6 +187,16 @@ if [ "$MODE" = "--mutate" ]; then
    mut_out O3 's|wire signed \[15:0\] mono = msum\[16:1\];|wire signed [15:0] mono = msum[15:0];|'
    # O4 the CMT output-enable split dropped - we would fight the tape input pad
    mut_out O4 's|assign dac_r_oe = cmt_live ? 6.b001111 : 6.b111111;|assign dac_r_oe = 6'"'"'b111111;|'
+
+   # A1: the Turbosound slots swapped in the pack. Nothing else in the tree can
+   # see this - bk_turbosound_tb proves A lands in ts_l and C in ts_r, and
+   # audio_mixer_tb proves slot 3 is L-only and slot 4 R-only, but only
+   # bk_audio_tb's pan section proves ts_l is packed into slot 3. Swapped, the
+   # board plays the stereo image MIRRORED and every other oracle still passes.
+   mut_aud A1 's|slot_src = {ts_r, ts_l, voice_b, voice_a, spk_sample}|slot_src = {ts_l, ts_r, voice_b, voice_a, spk_sample}|'
+   # A2: the speaker rail off a 1024 multiple - it stops being an audio_ns6
+   # fixed point and the ladder codes start rattling on a static input.
+   mut_aud A2 's|SPK_LVL = 16.sd8192;|SPK_LVL = 16'"'"'sd7936;|'
 
    # ---- qbus_mem: the 177714 capture seam --------------------------------
    # Q1 WTBT taken from SYNC time instead of live at DOUT. At SYNC it is

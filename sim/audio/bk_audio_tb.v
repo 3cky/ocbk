@@ -285,6 +285,57 @@ module bk_audio_tb;
             $display("AUDIO-ERROR dbg_tone set with tone_en low"); errors = errors + 1;
         end
 
+        // =================================================================
+        //  THE TURBOSOUND PAN ORIENTATION
+        // =================================================================
+        // ts_l MUST reach the LEFT ladder only and ts_r the RIGHT ladder only.
+        // This is the link in the pan chain that nothing else covers:
+        // bk_turbosound_tb proves channel A lands in ts_l and C in ts_r, and
+        // audio_mixer_tb proves slot 3 is L-only and slot 4 is R-only, but only
+        // THIS check proves bk_audio packs ts_l into slot 3 rather than slot 4.
+        // Swap them and every oracle still passes while the board plays the
+        // stereo image MIRRORED - inaudible as a fault, just wrong.
+        //
+        // The arithmetic is exact and static. The speaker is low (-8192), so
+        // both ladders sit at code 24; adding +16384 to one side gives
+        // -8192 + 16384 = 8192 = 8*1024 -> code 40, still a fixed point, so
+        // the check is a plain compare with no settling window.
+        spk_bit = 1'b0;
+        ts_l = 16'sd0; ts_r = 16'sd0;
+        wait_ticks(6);
+        #1 if (dac_l !== 6'd24 || dac_r_o !== 6'd24) begin
+            $display("AUDIO-ERROR pan: baseline not at the low rail: l=%0d r=%0d",
+                     dac_l, dac_r_o);
+            errors = errors + 1;
+        end
+
+        ts_l = 16'sd16384; ts_r = 16'sd0;
+        wait_ticks(6);
+        #1 if (dac_l !== 6'd40 || dac_r_o !== 6'd24) begin
+            $display("AUDIO-ERROR pan: ts_l did not land LEFT-ONLY (l=%0d r=%0d, expected 40/24)",
+                     dac_l, dac_r_o);
+            errors = errors + 1;
+        end
+
+        ts_l = 16'sd0; ts_r = 16'sd16384;
+        wait_ticks(6);
+        #1 if (dac_l !== 6'd24 || dac_r_o !== 6'd40) begin
+            $display("AUDIO-ERROR pan: ts_r did not land RIGHT-ONLY (l=%0d r=%0d, expected 24/40)",
+                     dac_l, dac_r_o);
+            errors = errors + 1;
+        end
+
+        // both together: the two sides move independently, not as a mono sum
+        ts_l = 16'sd16384; ts_r = 16'sd16384;
+        wait_ticks(6);
+        #1 if (dac_l !== 6'd40 || dac_r_o !== 6'd40) begin
+            $display("AUDIO-ERROR pan: both slots together gave l=%0d r=%0d, expected 40/40",
+                     dac_l, dac_r_o);
+            errors = errors + 1;
+        end
+        ts_l = 16'sd0; ts_r = 16'sd0;
+        wait_ticks(4);
+
         // Tone on: the codes must MOVE, and the two ladders must DIFFER (voice A
         // is panned BOTH, voice B RIGHT-only - so a mono path cannot pass this).
         tone_en = 1'b1;
