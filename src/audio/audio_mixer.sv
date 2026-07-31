@@ -9,12 +9,12 @@
 //  proven functional at NSRC = 10 by audio_mixer_tb but deliberately NOT
 //  synthesized until the devices exist - no dead logic):
 //
-//      0 = BK speaker (BOTH)    3 = Turbosound L (L)  5 = Covox L (L)
-//      1 = self-test tone A     4 = Turbosound R (R)  6 = Covox R (R)
+//      0 = BK speaker (BOTH)    3 = TurboSound L (L)  5 = Covox L (L)
+//      1 = self-test tone A     4 = TurboSound R (R)  6 = Covox R (R)
 //          (BOTH)                                     7 = Menestrel L (L)
 //      2 = self-test tone B (R)                       8 = Menestrel R (R)
 //
-//  Note the two PSGs of the Turbosound take TWO slots between them, not six:
+//  Note the two PSGs of the TurboSound take TWO slots between them, not six:
 //  bk_turbosound does its own ACB pan and chip combine and hands over a
 //  finished stereo pair. That is this module's design law in action - see
 //  "RUNTIME STEREO IS NOT A RUNTIME PAN" below - and it is also what keeps the
@@ -34,7 +34,7 @@
 //  always live.
 //
 //  RUNTIME STEREO IS NOT A RUNTIME PAN. Covox decides mono-vs-stereo from a
-//  write's high byte; the Turbosound has six channels across two chips, and
+//  write's high byte; the TurboSound has six channels across two chips, and
 //  whether the second one is mixed in at all depends on a runtime latch.
 //  All of them present as ONE SLOT PER CHANNEL OF THEIR OWN OUTPUT with a
 //  static pan, and the device's own logic decides what to put in each slot -

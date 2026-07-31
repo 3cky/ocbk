@@ -25,7 +25,7 @@
 //  +/-SPK_LVL, which audio_ns6 turns into a STATIC code (see the next note).
 //
 //  THE SPEAKER IS DUCKED, and this is the one user-audible change the
-//  Turbosound increment makes to an otherwise untouched feature. It used to
+//  TurboSound increment makes to an otherwise untouched feature. It used to
 //  run at full scale (+/-31744, codes 63/1); it now runs at SPK_LVL =
 //  +/-8192, codes 40/24, i.e. ~11.8 dB quieter. The reason is the gain
 //  budget: a full-scale speaker uses the ENTIRE headroom by itself, so
@@ -109,8 +109,8 @@ module bk_audio #(
     //   0 = BK speaker      BOTH   (+/-8192, ducked)
     //   1 = self-test A     BOTH   (440 Hz reference tone)
     //   2 = self-test B     RIGHT  (1567 Hz, the 6 dB staircase)
-    //   3 = Turbosound L    LEFT   (bk_turbosound, 2x YM2149, ACB-folded)
-    //   4 = Turbosound R    RIGHT
+    //   3 = TurboSound L    LEFT   (bk_turbosound, 2x YM2149, ACB-folded)
+    //   4 = TurboSound R    RIGHT
     // Growth path for the remaining devices (audio_mixer_tb proves NSRC=10):
     //   5 = Covox L     L | 6 = Covox R     R
     //   7 = Menestrel L L | 8 = Menestrel R R
@@ -206,7 +206,7 @@ module bk_audio #(
     // closes BY CONSTRUCTION rather than by trusting the saturator:
     //
     //     speaker      +/- 8192
-    //     Turbosound      0 .. 22950   (bk_turbosound's own bound)
+    //     TurboSound      0 .. 22950   (bk_turbosound's own bound)
     //     worst channel   22950 + 8192 = 31142  <=  FS_SAT = 31744
     //
     // so neither the mixer nor the shapers can clip while the speaker and the

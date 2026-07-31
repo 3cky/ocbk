@@ -936,7 +936,7 @@ module ocbk_top (
     wire spk_active, snd_sat, snd_clip, snd_tone;
     wire [5:0] dac_r_o, dac_r_oe;
 
-    // ---- Turbosound: 2x YM2149 on 0177714 ---------------------------------
+    // ---- TurboSound: 2x YM2149 on 0177714 ---------------------------------
     // The first consumer of the Phase-10 177714 capture seam. A sibling like
     // u_ide: it snoops what qbus_mem captured and never touches the bus, so
     // qbus_mem is unchanged by this feature and no timing golden moves. All
@@ -1139,8 +1139,8 @@ module ocbk_top (
     // pLed[7]: SMK IDE drive access (stretched + blinking).  pLed[6]: CMT
     // tape-in mode (DIP 4; lit = right jack is the cassette port).
     // pLed[5]: TURBO mode (PS/2 F12; lit = 6.04 MHz, no 037 cycle-stealing).
-    // pLed[4]: Turbosound PSG activity (a tone or noise channel is enabled
-    // on a live chip).  pLed[3]: Turbosound 2-chip mode engaged (a program
+    // pLed[4]: TurboSound PSG activity (a tone or noise channel is enabled
+    // on a live chip).  pLed[3]: TurboSound 2-chip mode engaged (a program
     // has selected chip 1 with a 0xFE write); [3] previously carried the
     // audio self-test indicator, retired with DIP 5.
     // pLed[2]: a DAC quantizer clipped (STICKY).  pLed[1]: the audio mixer

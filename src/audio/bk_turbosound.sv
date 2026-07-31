@@ -1,12 +1,12 @@
 // ============================================================================
-//  bk_turbosound - the BK Turbosound: 2x YM2149 on the 0177714 parallel port
+//  bk_turbosound - the BK TurboSound: 2x YM2149 on the 0177714 parallel port
 // ----------------------------------------------------------------------------
 //  The first device to hang off the Phase-10 177714 capture seam. It snoops
 //  qbus_mem's port_wr/port_data/port_word/port_be, never touches the bus, and
 //  presents ONE STEREO PAIR to bk_audio's mixer slots.
 //
 //  BkEmu's Ay8910.java IS THE CONTRACT (it is the only one of the two
-//  references that implements Turbosound at all; MiSTer's BK core has a
+//  references that implements TurboSound at all; MiSTer's BK core has a
 //  single PSG). Everything below transcribes it:
 //
 //    * v = ~port_data[7:0]. The port is physically inverted; qbus_mem hands
@@ -36,7 +36,7 @@
 //      3 s => fall back to one chip) and its reset of the secondary at
 //      activation. Both exist because a BkEmu chip OBJECT outlives the
 //      program that programmed it, so the emulator needs a way to notice
-//      that Turbosound is no longer in use and to scrub stale state on the
+//      that TurboSound is no longer in use and to scrub stale state on the
 //      way back in. In hardware nINIT already does that job, and dropping
 //      the timeout makes the reset unreachable: dual_act is cleared ONLY by
 //      the reset that also clears both chips, so a "first 0xFE" can never
@@ -53,7 +53,7 @@
 //  peripheral rule, which qbus_mem's own seam comment names for exactly this
 //  device class ("AY registers ... keys to init_n inside the DEVICE"). So a
 //  RESET instruction silences the PSGs, as it would on a real board, and
-//  clears the Turbosound latch. nINIT crosses from the CPU domain, so it gets
+//  clears the TurboSound latch. nINIT crosses from the CPU domain, so it gets
 //  a 2-FF sync; the CE divider is deliberately NOT reset by it (a real chip's
 //  clock keeps running through nINIT).
 //
@@ -80,11 +80,11 @@
 //      ts_l = 15 * l  == (l << 4) - l                            0 .. 22950
 //
 //  The `dual_act ? sum : 2*chip0` form is BkEmu's "average the two chips when
-//  Turbosound is engaged" (Ay8910.writeSample does l = (l0 + l1)/2) expressed
+//  TurboSound is engaged" (Ay8910.writeSample does l = (l0 + l1)/2) expressed
 //  without a divider: the FULL-SCALE BOUND is 1530 in both modes, which is
 //  what makes the headroom proof below hold whatever the program does. Note
 //  the consequence, which is BkEmu's and is reproduced deliberately: engaging
-//  Turbosound drops each individual chip by 6 dB, so a primary-only tune gets
+//  TurboSound drops each individual chip by 6 dB, so a primary-only tune gets
 //  quieter the moment a program first selects chip 1.
 //
 //  THE OUTPUT IS UNIPOLAR (0 at silence) ON PURPOSE. A real PSG channel is a
@@ -128,7 +128,7 @@ module bk_turbosound #(
 
     // ---- indicators --------------------------------------------------------
     output logic               ts_act,      // a tone/noise channel is enabled
-    output logic               dual_act     // Turbosound 2-chip mode engaged
+    output logic               dual_act     // TurboSound 2-chip mode engaged
 );
 
     // ---- reset -------------------------------------------------------------
@@ -267,7 +267,7 @@ module bk_turbosound #(
             lc0 <= {1'b0, a0, 1'b0} + {2'b00, b0};      // 2*A + B
             rc0 <= {1'b0, c0, 1'b0} + {2'b00, b0};      // 2*C + B
             // No dual_act gate here: lsum/rsum below already drop lc1/rc1
-            // when Turbosound is not engaged, so gating twice would be logic
+            // when TurboSound is not engaged, so gating twice would be logic
             // no mutation could kill.
             lc1 <= {1'b0, a1, 1'b0} + {2'b00, b1};
             rc1 <= {1'b0, c1, 1'b0} + {2'b00, b1};

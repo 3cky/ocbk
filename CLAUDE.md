@@ -36,7 +36,7 @@ phase-by-phase narrative if the history is ever wanted.)
 | **9** Fidelity & polish | authentic EVNT/IRQ2 instant (`bk_evnt`); `N_EXT` calibrated against a real machine; `N_VREG` closed; palette sample instant; the **037 grant-rule fit** + `bk_rply` (the beam-race skew); **turbo mode** | ✅ HW 2026-07-26 (grant rule: Babylona/PALTST flat), 2026-07-29 (turbo) |
 | **10** Audio subsystem | `src/audio/`: N-slot stereo **mixer** + a noise-shaped 6-bit output stage (>6-bit audio-band resolution on the same ladders), **true stereo** with a CMT mono fold, the DIP-5 self-test tone, and the **177714 capture seam** for the sound devices. **Infra only — no new sound device** | sim ✅ (25 mutations); ✅ HW 2026-07-31 — the resolution claim measured off the jacks (**−6.047 dB/step over 42 dB, max residual 0.19 dB**, the three sub-ladder-step levels on the line), all four acceptance recordings collected, the DIP-5 diagnostic retired, and the shipped bitstream boots. **+23 LE** |
 
-| **11** Turbosound | `src/audio/bk_turbosound.sv` + the vendored `ym2149.sv`: **2x YM2149 on 0177714**, the first consumer of the Phase-10 seam. BkEmu `Ay8910` protocol, ACB pan folded to two mixer slots, the speaker ducked ~11.8 dB to make room | sim ✅ (15 mutations, incl. a cycle-exact diff of the adapted core against the vendored reference); **+1,182 LE (68 %), sys_clk +0.528 ns after an STA chase**; ✅ HW 2026-07-31 (real AY/Turbosound demos play on the board) |
+| **11** TurboSound | `src/audio/bk_turbosound.sv` + the vendored `ym2149.sv`: **2x YM2149 on 0177714**, the first consumer of the Phase-10 seam. BkEmu `Ay8910` protocol, ACB pan folded to two mixer slots, the speaker ducked ~11.8 dB to make room | sim ✅ (15 mutations, incl. a cycle-exact diff of the adapted core against the vendored reference); **+1,182 LE (68 %), sys_clk +0.528 ns after an STA chase**; ✅ HW 2026-07-31 (real AY/TurboSound demos play on the board) |
 
 ## Platform & system map
 
@@ -298,7 +298,7 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   emitting no event (CMT tape mode moved to DIP 4), parity-error and
   stale-prefix recovery.
 - `sim/run_audio.sh` — the Phase-10 audio oracles, **four legs, mutation-tested
-  ×25** (23 at Phase 10; Phase 11 added A1/A2 — the Turbosound slot-pack
+  ×25** (23 at Phase 10; Phase 11 added A1/A2 — the TurboSound slot-pack
   orientation and the SPK_LVL multiple-of-1024 rule); `sim/audio/README.md` carries the pinned contract and the written
   justification for the resolution claim (the `sim/evnt/README.md` precedent).
   **Leg 3 `audio_ns6_tb` is the one that matters**: it proves the DC **identity**
@@ -313,7 +313,7 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   floor reference, pan, runtime enable, saturation never wrapping, the
   **`NSRC=1` pass-through invariant** (the `smk_en=0`/`turbo=0` differential
   idiom — what guarantees the speaker-only shipped path is unperturbed), the
-  planned `NSRC=10` shape, and — since Phase 11 — the **Turbosound pan pair**
+  planned `NSRC=10` shape, and — since Phase 11 — the **TurboSound pan pair**
   (slots 3/4 hard-panned opposite ways, the shipped map's only such pair;
   getting it backwards would silently swap the stereo image on the board) plus
   the **shipped worst case 22950 + 8192 = 31142 passing through UNSATURATED**,
@@ -324,7 +324,7 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   `spk_capture_tb`** keeps the 177716 bit-6/7 captures and gains the **177714
   (nSEL2) port-write capture**, whose load-bearing case is the WTBT
   discriminator (see the audio bullet).
-- `sim/ts/run.sh` — the Phase-11 **Turbosound** oracles, two legs,
+- `sim/ts/run.sh` — the Phase-11 **TurboSound** oracles, two legs,
   mutation-tested x15; `sim/ts/README.md` carries the pinned contract.
   **Leg 1 `ym2149_equiv_tb` is the authority and the reason this increment is
   safe**: the vendored reference `sim/ts/ym2149_ref.sv` (upstream MiSTer) and
@@ -349,7 +349,7 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   the /56 PSG clock enable — all checked with tone and noise DISABLED, which
   makes each channel emit its volume as DC so the register file reads out
   directly on `CHANNEL_x` with no waiting. One property is deliberately NOT
-  mutation-covered and the header says so out loud: see the Turbosound bullet.
+  mutation-covered and the header says so out loud: see the TurboSound bullet.
 - `sim/run_clkgen.sh` — the Phase-7 `cpu_clkgen` unit oracle: BK-0010 (/32)
   mode **bit-identical** to a replica of the pre-Phase-7 `divc[4]` tap
   (enables included), the /24 BK-0011M rate exact, and a retarget sweep (no
@@ -883,7 +883,7 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   live, power-on-only radial toggle rather than a DCLO-latched config bit, so
   it survives the reset button and needs no reset to take effect. Current LED
   map: `pLed[7]` = SMK drive access, `[6]` = CMT mode, `[5]` = turbo,
-  `[4]` = **Turbosound PSG activity**, `[3]` = **Turbosound 2-chip mode
+  `[4]` = **TurboSound PSG activity**, `[3]` = **TurboSound 2-chip mode
   engaged** (Phase 11; `[3]` previously carried the DIP-5 self-test tone),
   `[2]` = a DAC quantizer clipped (STICKY), `[1]` = the audio mixer saturated
   (STICKY), `[0]` = speaker activity. The two sticky audio flags are bring-up
@@ -1078,7 +1078,7 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
     i.e. the stock BK beep is **~11.8 dB quieter than the Phase-10
     firmware** — a deliberate, user-audible regression, and the price of
     hearing the PSGs and the speaker together. The budget then closes BY
-    CONSTRUCTION: `22950 (Turbosound) + 8192 (speaker) = 31142 <= FS_SAT =
+    CONSTRUCTION: `22950 (TurboSound) + 8192 (speaker) = 31142 <= FS_SAT =
     31744`, so the mixer cannot saturate and the shapers cannot clip.
     **8192 is not an arbitrary quarter**: it is 8×1024 exactly, which keeps
     the speaker on a STATIC `audio_ns6` code (40/24) with no shaping activity
@@ -1130,9 +1130,9 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
     endpoints. **Budget for an STA chase on the next increment, and do not
     chase margin by changing SEED 3** (see `ocbk.qsf`'s header and the
     SDC-exception rule). **That prediction came true in Phase 11** — the same
-    cone went to −0.271 ns on the first Turbosound build; see the fix in the
-    Turbosound bullet below.
-- **Turbosound (Phase 11) — 2× YM2149 on 0177714, `src/audio/`.** The first
+    cone went to −0.271 ns on the first TurboSound build; see the fix in the
+    TurboSound bullet below.
+- **TurboSound (Phase 11) — 2× YM2149 on 0177714, `src/audio/`.** The first
   device on the Phase-10 seam. **`src/audio/bk_turbosound.sv`** is the device
   and **`src/audio/ym2149.sv`** the vendored PSG core; both live in
   `src/audio/` — **sound devices belong here, `src/peripheral/` is for
@@ -1141,7 +1141,7 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   sibling like `smk_ide`: it snoops what `qbus_mem` captured and never touches
   the bus, so **`qbus_mem` is unchanged and no timing golden moves**.
   * **BkEmu's `Ay8910.java` is the contract** — it is the only one of the two
-    references that implements Turbosound at all (MiSTer's BK core has ONE
+    references that implements TurboSound at all (MiSTer's BK core has ONE
     PSG). `v = ~port_data[7:0]`; a **WORD** write latches a register number
     (masked to `v[3:0]`, broadcast to BOTH chips because BkEmu keeps ONE
     shared `currentRegister`); a **BYTE** write is data into the SELECTED
@@ -1156,7 +1156,7 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
     8 and then ignores the following data write if the high nibble is
     non-zero — BkEmu masks, so we mask.
   * **Two pieces of BkEmu are deliberately NOT reproduced, and they are the
-    same piece of behaviour**: the 3-second Turbosound dead-man timeout and
+    same piece of behaviour**: the 3-second TurboSound dead-man timeout and
     the reset of the secondary at activation. Both exist because a BkEmu chip
     OBJECT outlives the program that programmed it. `nINIT` does that job in
     hardware, and dropping the timeout makes the activation reset
@@ -1177,7 +1177,7 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
     `dual_act` form is BkEmu's "average the two chips" without a divider, so
     the full-scale bound is **1530 → 22950 in both modes** — which is what
     makes the headroom proof hold — at the cost, deliberately reproduced, of
-    each chip dropping **6 dB** when Turbosound engages. Six slots would also
+    each chip dropping **6 dB** when TurboSound engages. Six slots would also
     have pushed `audio_mixer` past the ~6-slot tree depth its header warns
     about; two keeps the shipped map at three live slots.
   * **The output is UNIPOLAR (0 at silence) on purpose.** A PSG channel is a
@@ -1204,9 +1204,9 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   * **Reset is `~init_n`** (2-FF synced) ORed with the power-on reset — the
     standard BK peripheral rule, which `qbus_mem`'s own seam comment names for
     this device class. A RESET instruction silences the PSGs and clears the
-    Turbosound latch, as it would on a real board. The CE divider is NOT reset
+    TurboSound latch, as it would on a real board. The CE divider is NOT reset
     by `nINIT` (a real chip's clock keeps running).
-  * **Cost and timing (confirmed) — Turbosound costs +1,182 LE, and the STA
+  * **Cost and timing (confirmed) — TurboSound costs +1,182 LE, and the STA
     chase Phase 10 told us to budget for HAPPENED, exactly where it said it
     would.** 7,002 → **8,184 LE (58 % → 68 %)**, M4K unchanged at 3/52 (the
     `ymreg` file has many simultaneous combinational readers, so it cannot
@@ -1235,7 +1235,7 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
     `test/sndtestts.mac` is the hardware acceptance program (pdpy11, with a
     `.wav` so it loads over the CMT jack): the A-major chord and each channel
     solo to prove A-left/B-centre/C-right, noise, an envelope sweep, and the
-    Turbosound section. A `DUAL_ENABLE` parameter drops the second chip — a
+    TurboSound section. A `DUAL_ENABLE` parameter drops the second chip — a
     documented fitter escape hatch, not the shipped configuration.
 - Cartridge-slot Q-bus is a **forward seam**: `src/bus/qbus_slot.sv`, default
   `SLOT_ENABLE=0` (drives nothing, slot pins stay reserved-tristated). The full
@@ -2043,7 +2043,7 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   D_WR_REQ with was_read=0, and left only to D_IDLE), leaving
   `rdata_oe = oe_arm && !din_n`. Same rule, one level shorter.
   **Phase 11 found the rule applies to REGISTER-ENABLE cones too, not just
-  pad-OE cones** (2026-07-31): the Turbosound increment's +1,183 LE re-placed
+  pad-OE cones** (2026-07-31): the TurboSound increment's +1,183 LE re-placed
   the fitter and took the same cone to **−0.271 ns**, this time via
   `mem_mapper|rom6_en → cpu_sdram_dp|wdata_o[*]` — because `wdata_o`'s 16-bit
   load was gated on `is_write`, i.e. on `sel_ram|sel_ramw`, i.e. on the whole
@@ -2217,8 +2217,8 @@ every future increment: **a debug feature does not ship**, and the residue of
 one is retired in the same commit that updates the user-facing docs. The
 measurement results are in the audio bullets above and `sim/audio/README.md`.
 
-**Phase 11 (Turbosound) is CONFIRMED ON HARDWARE 2026-07-31 — real
-AY/Turbosound demos play on the board.** That is the acceptance that matters
+**Phase 11 (TurboSound) is CONFIRMED ON HARDWARE 2026-07-31 — real
+AY/TurboSound demos play on the board.** That is the acceptance that matters
 most, and it is a broader test than `test/sndtestts.mac` could be: real
 software exercises the whole BkEmu protocol (the word/byte address-vs-data
 split, the 0xFF/0xFE chip select, the shared register pointer), the
@@ -2249,7 +2249,7 @@ a shipped constant, not a placeholder. If it is ever revisited anyway, two
 things travel with it: keep it a **multiple of 1024** or the speaker stops
 being a static `audio_ns6` code and starts rattling the shaper, and redo the
 budget arithmetic in `bk_audio`'s slot-map comment — at 12288 the sum would be
-35238 and the mixer WOULD saturate, so the Turbosound scale would have to drop
+35238 and the mixer WOULD saturate, so the TurboSound scale would have to drop
 from x15 to x12 to pay for it.
 
 **Fidelity, measurable**
@@ -2359,7 +2359,7 @@ from x15 to x12 to pay for it.
 
 **Peripherals / features not built**
 - **Covox and Menestrel are still NOT built** (the third 177714 device,
-  **Turbosound**, landed in Phase 11 — see its bullet). Both decode the SAME
+  **TurboSound**, landed in Phase 11 — see its bullet). Both decode the SAME
   address (BkEmu `REG_SEL2` = 0177714) and differ only in how they read the
   data, so `qbus_mem`'s `port_wr`/`port_data`/`port_word`/`port_be` capture is
   already there, already oracle-pinned, and already has a consumer to copy.
@@ -2367,7 +2367,7 @@ from x15 to x12 to pay for it.
   `bk_turbosound.sv`. Planned arbitration (settled): the PSGs are always live;
   Covox and Menestrel get cycled by a PS/2 radial-toggle key (the
   `key_scrmode`/`key_turbo` pattern). **They must re-open the gain budget**:
-  Phase 11 spent it on the speaker (ducked to ±8192) and the Turbosound
+  Phase 11 spent it on the speaker (ducked to ±8192) and the TurboSound
   (0..22950), which together already reach 31142 of the 31744 available, so
   there is essentially NO headroom left. Adding a third source means lowering
   one of the two existing gains — a per-device loudness decision, and the

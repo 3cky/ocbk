@@ -869,7 +869,7 @@ module qbus_mem #(
     //
     // NEVER RUNTIME-RESET - the spk/mot class, not a new nINIT exception. A real
     // Covox is a passive resistor DAC hanging off the port latch with no reset
-    // pin at all. Device-internal state (the PSG registers, the Turbosound
+    // pin at all. Device-internal state (the PSG registers, the TurboSound
     // chip-select latch) keys to init_n inside the DEVICE, per the standard BK
     // peripheral-reset rule - see bk_turbosound.sv, which does exactly that.
     //

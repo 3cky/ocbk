@@ -206,7 +206,7 @@ module cpu_sdram_dp #(
     // reason: gating this 16-bit load on is_write put the mem_mapper decode
     // (rom6_en / rom7_en / seg_smk -> kind -> sel_ram|sel_ramw) in the enable
     // cone, and that is the design's chronic worst sys_clk path - it went
-    // NEGATIVE (-0.271 ns) when the Turbosound increment re-placed the fitter,
+    // NEGATIVE (-0.271 ns) when the TurboSound increment re-placed the fitter,
     // in a module that increment never touched.
     //
     // BEHAVIOUR-IDENTICAL, by the same argument as was_read/oe_arm: wdata_o is
