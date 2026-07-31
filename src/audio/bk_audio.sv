@@ -5,31 +5,44 @@
 //  speaker: its CDC, its level-to-sample map and the activity LED one-shot) and
 //  the SLOT MAP, then wires the generic infrastructure together:
 //
-//      spk_bit ---> slot 0 -+
-//      audio_tone -> 1, 2 --+--> audio_mixer --> audio_out --> pDac_SL/SR
-//                                (stereo, sat)     (2x audio_ns6, CMT jack)
+//      spk_bit -------> slot 0 -+
+//      audio_tone ----> 1, 2 ---+--> audio_mixer --> audio_out --> pDac_SL/SR
+//      bk_turbosound -> 3, 4 ---+     (stereo, sat)   (2x audio_ns6, CMT jack)
 //
 //  Naming convention for src/audio/: audio_* is generic infrastructure,
 //  bk_* is BK-machine-specific (the bk_kbd014 / bk_evnt / bk_rply precedent).
-//  Future 177714 sound devices (bk_covox, bk_ay wrapping the vendored
-//  MiSTer ym2149.sv, bk_menestrel) belong in src/peripheral/ - they are bus
-//  peripherals that snoop and emit samples - and arrive here as extra packed
-//  slot inputs, not as logic inside this file.
+//  SOUND DEVICES LIVE IN src/audio/ TOO (bk_turbosound.sv and the ym2149.sv it
+//  vendors; bk_covox and bk_menestrel when they land) - src/peripheral/ is for
+//  NON-audio bus peripherals. They are instantiated as ocbk_top siblings that
+//  snoop the 177714 seam, and arrive HERE as extra packed slot inputs, never as
+//  logic inside this file.
 //
 //  THE SPEAKER. The BK-0010 built-in speaker is a single output bit (bit 6 of
 //  register 177716, captured in qbus_mem as spk_bit); software toggles it at
 //  audio rates. It is produced in the CPU-clock domain and is quasi-static
 //  relative to sys_clk, so a plain 2-FF synchronizer suffices - the same
-//  pattern as key_scrmode -> screen_mode. It enters the mixer as a full-scale
-//  square (+/-31744), which audio_ns6 turns into a STATIC code 63 or 1.
+//  pattern as key_scrmode -> screen_mode. It enters the mixer as a square at
+//  +/-SPK_LVL, which audio_ns6 turns into a STATIC code (see the next note).
 //
-//  NOTE THE ONE-CODE TRIM: before the rework the speaker drove codes 63/0; it
-//  now drives 63/1, because the mixer saturates at 31744 rather than 32767 to
-//  keep audio_ns6 provably clip-free. That is 0.14 dB, it is deliberate, and it
-//  is the ONLY change to how the speaker sounds - the code is still static, with
-//  no shaping activity, so the one audio feature that is confirmed working on
-//  hardware cannot be regressed by any of this. bk_audio_tb pins 63/1 and pins
-//  that they are static.
+//  THE SPEAKER IS DUCKED, and this is the one user-audible change the
+//  Turbosound increment makes to an otherwise untouched feature. It used to
+//  run at full scale (+/-31744, codes 63/1); it now runs at SPK_LVL =
+//  +/-8192, codes 40/24, i.e. ~11.8 dB quieter. The reason is the gain
+//  budget: a full-scale speaker uses the ENTIRE headroom by itself, so
+//  anything sounding alongside it saturates. MiSTer hits the same wall and
+//  answers the same way (BK0011M.sv: spk_out<<7 alone, but spk_out<<5 with
+//  the PSG live). We duck unconditionally rather than gating on "a PSG
+//  channel is enabled", so the speaker's loudness never jumps mid-program.
+//
+//  8192 IS NOT AN ARBITRARY QUARTER. It is 8*1024 EXACTLY, which is what
+//  keeps the speaker on a STATIC audio_ns6 code with no shaping activity -
+//  the structural property that makes the one hardware-confirmed audio
+//  feature immune to everything else in this path. Work it through
+//  audio_ns6: errp resets to 512, accr = 8192 + 512, q = 8, code = 40, and
+//  errn = 512 again, so it is a fixed point. A literal quarter of 31744
+//  would be 7936 = 7.75*1024, which is NOT a fixed point and would make the
+//  shaper rattle between codes on a signal that used to be silent between
+//  edges. bk_audio_tb pins 40/24 and pins that they are static.
 //
 //  Bit 6 only is the BkEmu Speaker contract for a BK-0010 (MiSTer's extra
 //  spk_out bits are its tape-monitor mixing, not register semantics) - that
@@ -74,6 +87,8 @@ module bk_audio #(
     input  logic       cmt_mode,    // 1 = CMT mode (DIP 4): right channel is the jack
     input  logic       cmt_in_pad,  // raw pDac_SR[5] pad value (async)
     input  logic       tone_en,     // 1 = audio self-test tone (DIP 5, live)
+    input  logic signed [15:0] ts_l,   // bk_turbosound, already ACB-folded
+    input  logic signed [15:0] ts_r,   //   (unipolar 0..22950)
     output logic       tape_lvl,    // registered CMT comparator level (sys_clk)
     output logic [5:0] dac_l,       // pDac_SL  (Sound-L)
     output logic [5:0] dac_r_o,     // pDac_SR data (right channel / CMT network)
@@ -86,17 +101,29 @@ module bk_audio #(
     // Full scale = the mixer's saturation bound = audio_ns6's clip-free limit.
     localparam signed [15:0] FS_SAT = 16'sd31744;
 
+    // The ducked speaker rail. 8*1024 exactly - see the header for why that
+    // matters and why a literal FS_SAT/4 would not do.
+    localparam signed [15:0] SPK_LVL = 16'sd8192;
+
     // ---- slot map -----------------------------------------------------------
-    //   0 = BK speaker      BOTH
+    //   0 = BK speaker      BOTH   (+/-8192, ducked)
     //   1 = self-test A     BOTH   (440 Hz reference tone)
     //   2 = self-test B     RIGHT  (1567 Hz, the 6 dB staircase)
-    // Growth path for the device increments (audio_mixer_tb proves NSRC=10):
-    //   3 = AY chan A  L | 4 = AY chan B BOTH | 5 = AY chan C R
-    //   6 = Covox L    L | 7 = Covox R    R
-    //   8 = Menestrel L L | 9 = Menestrel R R
-    localparam int NSRC = 3;
-    localparam [NSRC*4-1:0] SLOT_GAIN = 12'h888;         // all at 8/8
-    localparam [NSRC*2-1:0] SLOT_PAN  = 6'b01_11_11;     // BOTH, BOTH, R-only
+    //   3 = Turbosound L    LEFT   (bk_turbosound, 2x YM2149, ACB-folded)
+    //   4 = Turbosound R    RIGHT
+    // Growth path for the remaining devices (audio_mixer_tb proves NSRC=10):
+    //   5 = Covox L     L | 6 = Covox R     R
+    //   7 = Menestrel L L | 8 = Menestrel R R
+    //
+    // At the shipped TONE_ENABLE = 0 slots 1 and 2 are constant zero with a
+    // constant-zero enable, so they and their adder terms fold away entirely
+    // - they cost nothing and keep a diagnostic firmware buildable. That
+    // leaves THREE live slots, so the mixer's stage-1 sum stays at tree depth
+    // 2, inside the "fine to ~6 slots at 96.65 MHz" note in its header.
+    localparam int NSRC = 5;
+    localparam [NSRC*4-1:0] SLOT_GAIN = 20'h88888;             // all at 8/8
+    //                                   4  3  2  1  0
+    localparam [NSRC*2-1:0] SLOT_PAN  = 10'b01_10_01_11_11;
 
     // ---- speaker: 2-FF resync (+1 delay for the activity edge detect) -------
     logic spk_meta, spk_sync, spk_sync_d;
@@ -112,7 +139,7 @@ module bk_audio #(
         end
     end
 
-    wire signed [15:0] spk_sample = spk_sync ? FS_SAT : -FS_SAT;
+    wire signed [15:0] spk_sample = spk_sync ? SPK_LVL : -SPK_LVL;
 
     // ---- speaker-activity indicator -----------------------------------------
     // Any spk edge reloads a ~11 ms one-shot, so pLed[0] sits solid while a tone
@@ -150,7 +177,7 @@ module bk_audio #(
     // ---- mix ----------------------------------------------------------------
     wire tone_live = tone_en & TONE_ENABLE;
 
-    wire [NSRC*16-1:0] slot_src = {voice_b, voice_a, spk_sample};
+    wire [NSRC*16-1:0] slot_src = {ts_r, ts_l, voice_b, voice_a, spk_sample};
 
     // THE GAIN BUDGET, and why the self-test MUTES the speaker.
     //
@@ -173,13 +200,24 @@ module bk_audio #(
     // sum is 24576 < 31744 and neither the mixer nor the shapers can clip.
     // bk_audio_tb asserts dbg_sat and dbg_clip stay clear with the tone running.
     //
-    // WHEN THE REAL DEVICES LAND they arrive here the same way (the AY tied
-    // live, Covox and Menestrel driven by the PS/2 radial-toggle select) - and
-    // they will need this same conversation: the speaker's 8/8 gain has to come
-    // down (MiSTer's answer is 1/4) so a device and the speaker can sound
-    // together. That is a per-device loudness decision, so it belongs in the
-    // increment that adds the first device, not here.
-    wire [NSRC-1:0]    slot_en  = {tone_live, tone_live, ~tone_live};
+    // THE TURBOSOUND INCREMENT SETTLED THAT CONVERSATION for the speaker: it
+    // is ducked to SPK_LVL unconditionally (see the header), which is what
+    // buys the headroom for a device to sound alongside it. The budget now
+    // closes BY CONSTRUCTION rather than by trusting the saturator:
+    //
+    //     speaker      +/- 8192
+    //     Turbosound      0 .. 22950   (bk_turbosound's own bound)
+    //     worst channel   22950 + 8192 = 31142  <=  FS_SAT = 31744
+    //
+    // so neither the mixer nor the shapers can clip while the speaker and the
+    // PSGs play together. Covox and Menestrel will have to re-open this and
+    // find their own share of what is left.
+    //
+    // The self-test still OWNS the output when DIP 5 is on: it mutes the
+    // speaker AND the PSGs, so the acceptance FFT stays free of both a BK
+    // square wave and whatever the PSGs were doing.
+    wire [NSRC-1:0]    slot_en  = {~tone_live, ~tone_live,
+                                   tone_live, tone_live, ~tone_live};
 
     logic signed [15:0] mix_l, mix_r;
 

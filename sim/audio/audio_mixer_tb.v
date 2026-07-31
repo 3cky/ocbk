@@ -4,7 +4,8 @@
 // ----------------------------------------------------------------------------
 //  Four instances, each pinning a different part of the contract:
 //
-//    dut3   NSRC=3, the SHIPPED config (spk BOTH, tone A BOTH, tone B R-only)
+//    dut3   NSRC=5, the SHIPPED config (spk BOTH, tone A BOTH, tone B R-only,
+//           Turbosound L L-only, Turbosound R R-only)
 //           -> enable, pan, saturation, dbg_sat, exact latency
 //    dutg   NSRC=6, gains {8,4,6,3,1,7} all BOTH
 //           -> the g/8 gain law against an INDEPENDENTLY WRITTEN reference
@@ -67,28 +68,51 @@ module audio_mixer_tb;
     endtask
 
     // ========================================================================
-    //  dut3 - the shipped 3-slot config
+    //  dut3 - the shipped config. MUST TRACK bk_audio.sv's SLOT_GAIN/SLOT_PAN:
+    //  slot 0 speaker BOTH, 1 tone A BOTH, 2 tone B R-only, 3 Turbosound L
+    //  L-only, 4 Turbosound R R-only.
     // ========================================================================
-    logic [47:0] src3;
-    logic [2:0]  en3;
+    logic [79:0] src3;
+    logic [4:0]  en3;
     logic signed [15:0] l3, r3;
     logic sat3;
 
     audio_mixer #(
-        .NSRC (3), .SW (16), .FS_SAT (FS),
-        .GAIN8 (12'h888),            // all slots at 8/8
-        .PAN   (6'b01_11_11)         // slot0 BOTH, slot1 BOTH, slot2 R-only
+        .NSRC (5), .SW (16), .FS_SAT (FS),
+        .GAIN8 (20'h88888),          // all slots at 8/8
+        //      slot   4  3  2  1  0
+        .PAN   (10'b01_10_01_11_11)
     ) dut3 (
         .sys_clk (sys_clk), .rst_n (rst_n),
         .src (src3), .src_en (en3),
         .mix_l (l3), .mix_r (r3), .dbg_sat (sat3)
     );
 
+    // The 3-slot helper: drives the speaker and tone slots and holds the two
+    // Turbosound slots at zero AND disabled, so every check written against
+    // the pre-Turbosound slot map still means exactly what it did.
     task set3(input integer s0, input integer s1, input integer s2, input [2:0] en);
         begin
             src3[15:0]  = s0[15:0];
             src3[31:16] = s1[15:0];
             src3[47:32] = s2[15:0];
+            src3[63:48] = 16'sd0;
+            src3[79:64] = 16'sd0;
+            en3 = {2'b00, en};
+            repeat (4) @(posedge sys_clk);
+            #1;
+        end
+    endtask
+
+    // The full 5-slot helper, for the Turbosound pan checks.
+    task set5(input integer s0, input integer s1, input integer s2,
+              input integer s3, input integer s4, input [4:0] en);
+        begin
+            src3[15:0]  = s0[15:0];
+            src3[31:16] = s1[15:0];
+            src3[47:32] = s2[15:0];
+            src3[63:48] = s3[15:0];
+            src3[79:64] = s4[15:0];
             en3 = en;
             repeat (4) @(posedge sys_clk);
             #1;
@@ -158,7 +182,7 @@ module audio_mixer_tb;
     initial begin
         gtab[0]=8; gtab[1]=4; gtab[2]=6; gtab[3]=3; gtab[4]=1; gtab[5]=7;
 
-        src3 = 48'h0; en3 = 3'b111;
+        src3 = 80'h0; en3 = 5'b11111;
         srcg = 96'h0; eng = 6'b111111;
         src1 = 16'h0; en1 = 1'b1;
         src10 = 160'h0; en10 = 10'h3FF;
@@ -180,6 +204,28 @@ module audio_mixer_tb;
         set3(0, 2000, 0, 3'b111);  expect2(l3, r3, 2000, 2000, "pan slot1 BOTH");
         set3(100, 200, 400, 3'b111);
         expect2(l3, r3, 300, 700, "pan mixed sum");
+
+        // The Turbosound pair: slot 3 is L-only and slot 4 is R-only, so a
+        // hard-panned PSG mix must NOT leak across. This is the shipped map's
+        // only pair of oppositely-panned slots, and getting it backwards would
+        // silently swap the stereo image on the board.
+        set5(0, 0, 0, 9000, 0, 5'b01000);
+        expect2(l3, r3, 9000, 0, "pan slot3 Turbosound-L is L-only");
+        set5(0, 0, 0, 0, 9000, 5'b10000);
+        expect2(l3, r3, 0, 9000, "pan slot4 Turbosound-R is R-only");
+        set5(0, 0, 0, 4000, 6000, 5'b11000);
+        expect2(l3, r3, 4000, 6000, "pan Turbosound pair, no crosstalk");
+
+        // The shipped worst case, exactly as bk_audio's gain budget computes
+        // it: the ducked speaker at +8192 on BOTH plus the Turbosound bound of
+        // 22950 on one side = 31142, which must pass through UNSATURATED
+        // (FS_SAT is 31744). If this ever saturates, the budget is wrong.
+        set5(8192, 0, 0, 22950, 22950, 5'b11001);
+        expect2(l3, r3, 31142, 31142, "shipped worst case is inside FS_SAT");
+        if (sat3 !== 1'b0) begin
+            $display("AUDIO-ERROR the shipped gain budget saturated the mixer");
+            errors = errors + 1;
+        end
 
         // ================= enable ===========================================
         // A disabled slot must contribute EXACTLY zero - not mid-scale, not

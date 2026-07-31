@@ -902,12 +902,12 @@ module ocbk_top (
         // ---- the 177714 sound-device seam (Phase 10) --------------------
         // Every BK sound expansion - Covox, 2x YM2149, Menestrel - decodes
         // THIS one address and differs only in how it reads the data, so the
-        // bus side is captured once in qbus_mem and lands here. Nothing
-        // consumes it yet, so the fitter removes the whole capture (it costs
-        // 0 LE today); it is oracle-pinned regardless, by spk_capture_tb
-        // driving the real qbus_mem. A device instantiates in
-        // src/peripheral/, takes these four, and feeds a sample pair into
-        // bk_audio's mixer slots - see the audio bullet in CLAUDE.md.
+        // bus side is captured once in qbus_mem and lands here. u_ts
+        // (bk_turbosound) consumes it; Covox and Menestrel will hang off the
+        // same four wires when they land. Devices live in src/audio/ and
+        // arrive at bk_audio as extra mixer slots - see the audio bullet in
+        // CLAUDE.md. The capture is oracle-pinned by spk_capture_tb driving
+        // the real qbus_mem.
         .port_wr  (snd_port_wr),     // 1 sclk per 177714/15 bus write
         .port_data(snd_port_data),   // BK-true value, byte lanes merged
         .port_word(snd_port_word),   // 1 = word write (the AY's reg-vs-data)
@@ -935,6 +935,28 @@ module ocbk_top (
     // warm reset; spk_bit is never cleared by nINIT (software owns it).
     wire spk_active, snd_sat, snd_clip, snd_tone;
     wire [5:0] dac_r_o, dac_r_oe;
+
+    // ---- Turbosound: 2x YM2149 on 0177714 ---------------------------------
+    // The first consumer of the Phase-10 177714 capture seam. A sibling like
+    // u_ide: it snoops what qbus_mem captured and never touches the bus, so
+    // qbus_mem is unchanged by this feature and no timing golden moves. All
+    // sys_clk; nINIT resets it (the standard BK peripheral rule), while
+    // vid_rst_n is the power-on reset the rest of the audio path uses.
+    wire signed [15:0] ts_l, ts_r;
+    wire               ts_act, ts_dual;
+    bk_turbosound u_ts (
+        .sys_clk   (sys_clk),
+        .rst_n     (vid_rst_n),
+        .init_n    (init_n),
+        .port_wr   (snd_port_wr),
+        .port_data (snd_port_data),
+        .port_word (snd_port_word),
+        .port_be   (snd_port_be),
+        .ts_l      (ts_l),
+        .ts_r      (ts_r),
+        .ts_act    (ts_act),
+        .dual_act  (ts_dual)
+    );
     // TONE_ENABLE = 0: the DIP-5 self-test is retired from the shipped build
     // (see the tone_en note above). Set it back to 1'b1 for a diagnostic
     // firmware - that single token is the whole difference, and it costs
@@ -949,6 +971,8 @@ module ocbk_top (
         .cmt_mode   (cmt_mode),
         .cmt_in_pad (pDac_SR[5]),
         .tone_en    (tone_en),
+        .ts_l       (ts_l),
+        .ts_r       (ts_r),
         .tape_lvl   (tape_lvl),
         .dac_l      (pDac_SL),
         .dac_r_o    (dac_r_o),
@@ -1115,17 +1139,19 @@ module ocbk_top (
     // pLed[7]: SMK IDE drive access (stretched + blinking).  pLed[6]: CMT
     // tape-in mode (DIP 4; lit = right jack is the cassette port).
     // pLed[5]: TURBO mode (PS/2 F12; lit = 6.04 MHz, no 037 cycle-stealing).
+    // pLed[4]: Turbosound PSG activity (a tone or noise channel is enabled
+    // on a live chip).  pLed[3]: Turbosound 2-chip mode engaged (a program
+    // has selected chip 1 with a 0xFE write); [3] previously carried the
+    // audio self-test indicator, retired with DIP 5.
     // pLed[2]: a DAC quantizer clipped (STICKY).  pLed[1]: the audio mixer
     // saturated (STICKY).  pLed[0]: BK speaker activity (solid while a tone
-    // plays; audio bring-up tap).  pLed[4], pLed[3]: unused - [3] was the
-    // audio self-test indicator and was retired with DIP 5 (snd_tone is now
-    // constant 0 anyway, since TONE_ENABLE = 0).
+    // plays; audio bring-up tap).
     // The two sticky audio flags are bring-up observability, the same reasoning
     // that put spk_active on pLed[0] in Phase 6: they turn "it sounds wrong"
     // into "the digital side says the level overflowed", which is otherwise
     // indistinguishable from an analog fault. Neither should ever light in
     // normal use - the gain budget, not the saturator, is the mixing strategy.
-    assign pLed    = {ide_led, cmt_mode, turbo_eff, 1'b0,
-                      1'b0, snd_clip, snd_sat, spk_active};
+    assign pLed    = {ide_led, cmt_mode, turbo_eff, ts_act,
+                      ts_dual, snd_clip, snd_sat, spk_active};
 
 endmodule

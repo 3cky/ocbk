@@ -59,6 +59,8 @@ src/audio/audio_ns6.sv
 src/audio/audio_mixer.sv
 src/audio/audio_tone.sv
 src/audio/audio_out.sv
+src/audio/ym2149.sv
+src/audio/bk_turbosound.sv
 src/audio/bk_audio.sv
 
 // --- video pipeline (src/video) ---

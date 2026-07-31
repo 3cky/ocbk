@@ -20,11 +20,13 @@ Everything below is confirmed running on the board.
   Both colour-256 and mono-512 modes.
 - **Keyboard** - a PS/2 keyboard behaves as the BK's own, including the
   Russian/Latin and case triggers, СУ/АР2/НР modifiers and СТОП.
-- **Sound** - the 1-bit speaker, in **stereo**, through the board's audio jacks.
-  Several sound sources can be mixed, and the output is noise-shaped so the
-  6-bit ladders resolve far finer than six bits in the audio band - the
-  groundwork for the BK's sound expansions (Covox, AY, Menestrel), none of
-  which are built yet.
+- **Sound** - the 1-bit speaker plus **Turbosound**, the BK's 2x YM2149 music
+  expansion, in **stereo** through the board's audio jacks. The three PSG
+  channels are panned left / centre / right, both chips are supported, and the
+  output is noise-shaped so the 6-bit ladders resolve far finer than six bits
+  in the audio band. The other two sound expansions (Covox, Menestrel) are not
+  built yet. Note the built-in speaker is deliberately quieter than it was
+  before Turbosound landed, so the two can play together without clipping.
 - **Tape** - the right audio jack doubles as the cassette port. Load real BK
   tape recordings from a PC, and save back to one.
 - **SMK512** - the 512 KB RAM extension, its BIOS, and an IDE drive backed by

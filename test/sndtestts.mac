@@ -1,0 +1,235 @@
+; ---------------------------------------------------------------------------
+; sndtestts - the Turbosound (2x YM2149) hardware acceptance program
+;
+; Unlike the rest of test/sndtest*.mac this is NOT a timing measurement - there
+; is no cycle count to read off it. It is the by-ear / by-recording acceptance
+; for src/audio/bk_turbosound.sv: does the device sound at all, is the stereo
+; image the right way round, do the envelope and noise generators work, and
+; does the second chip appear only after a Turbosound select.
+;
+; THE BUS PROTOCOL (BkEmu Ay8910.java; see src/audio/bk_turbosound.sv)
+;   Everything goes to 0177714, and the port INVERTS, so the program always
+;   writes the complement of the value the PSG should see.
+;
+;     MOV  - a WORD write  = latch a register number (masked to 4 bits)
+;     MOVB - a BYTE write  = data into the latched register of the SELECTED chip
+;
+;   Two register numbers are escapes rather than registers:
+;     0377 selects the primary chip, 0376 selects the secondary (and the first
+;     0376 ever seen is what ACTIVATES 2-chip mode). Complemented for the bus
+;     those become a word write of 0 and 1 respectively - which is why the chip
+;     selects below look like `MOV #0` and `MOV #1`.
+;
+; TONE PERIODS
+;   The PSG clock is sys_clk/56 = 1.72585 MHz and a tone's full period is
+;   16*N PSG clocks, so N = 1725850 / (16*f).
+;
+;     A4  440.0 Hz -> N = 245 = 365
+;     C#5 554.4 Hz -> N = 195 = 303
+;     E5  659.3 Hz -> N = 164 = 244
+;     A5  880.0 Hz -> N = 123 = 173
+;     E6 1318.5 Hz -> N =  82 = 122
+;
+;   (Octal. The board runs +0.674 % fast like everything else here, so the
+;   chord lands a hair sharp of A major - inaudible, and deliberate: the whole
+;   design preserves that ratio rather than correcting it.)
+;
+; WHAT TO LISTEN FOR
+;   1. the A-major chord, then each channel SOLO: A must be LEFT, B must be
+;      CENTRE, C must be RIGHT. Getting the pan backwards is the single most
+;      likely wiring mistake and is obvious here.
+;   2. a noise burst, then an envelope sweep (the envelope must fall audibly,
+;      not just click).
+;   3. the Turbosound section: the second chip joins an octave up. Note that
+;      the FIRST chip gets 6 dB quieter the moment 2-chip mode engages - that
+;      is BkEmu's averaging, reproduced deliberately, not a fault.
+;   4. pLed[4] should light while anything is playing, pLed[3] from the
+;      Turbosound section onwards. pLed[1] and pLed[2] (mixer saturated / DAC
+;      clipped) must stay DARK throughout - the gain budget says they cannot
+;      light, so if they do the arithmetic is wrong.
+;
+;   Then press the reset button: nINIT must silence both chips at once.
+; ---------------------------------------------------------------------------
+
+    make_bin
+    make_wav
+
+    .LINK 1000
+
+PORT  = 177714
+
+START:
+        MOV     #1000, SP
+
+; The coarse tone-period bytes (r1, r3, r5) are never written: they are 0 out
+; of reset and every note here fits in the fine byte. Nothing else on this
+; machine touches 0177714, so they stay 0.
+;
+; ---- 1. the chord on the primary, then each channel solo ------------------
+LOOP:
+        MOV     #0, @#PORT              ; select the primary chip
+        JSR     PC, SILENC
+
+        MOV     #0, R1                  ; A period
+        MOV     #365, R2
+        JSR     PC, AYSET
+        MOV     #2, R1                  ; B period
+        MOV     #303, R2
+        JSR     PC, AYSET
+        MOV     #4, R1                  ; C period
+        MOV     #244, R2
+        JSR     PC, AYSET
+
+        MOV     #7, R1                  ; mixer: 3 tones on, noise off
+        MOV     #70, R2
+        JSR     PC, AYSET
+
+        MOV     #10, R1                 ; all three at full volume
+        MOV     #17, R2
+        JSR     PC, AYSET
+        MOV     #11, R1
+        MOV     #17, R2
+        JSR     PC, AYSET
+        MOV     #12, R1
+        MOV     #17, R2
+        JSR     PC, AYSET
+
+        JSR     PC, WAIT                ; the chord
+
+        MOV     #11, R1                 ; solo A  -> must be LEFT
+        MOV     #0, R2
+        JSR     PC, AYSET
+        MOV     #12, R1
+        MOV     #0, R2
+        JSR     PC, AYSET
+        JSR     PC, WAIT
+
+        MOV     #10, R1                 ; solo B  -> must be CENTRE
+        MOV     #0, R2
+        JSR     PC, AYSET
+        MOV     #11, R1
+        MOV     #17, R2
+        JSR     PC, AYSET
+        JSR     PC, WAIT
+
+        MOV     #11, R1                 ; solo C  -> must be RIGHT
+        MOV     #0, R2
+        JSR     PC, AYSET
+        MOV     #12, R1
+        MOV     #17, R2
+        JSR     PC, AYSET
+        JSR     PC, WAIT
+
+; ---- 2. noise, then an envelope sweep -------------------------------------
+        JSR     PC, SILENC
+        MOV     #6, R1                  ; noise period
+        MOV     #10, R2
+        JSR     PC, AYSET
+        MOV     #7, R1                  ; noise on all three, tones off
+        MOV     #7, R2
+        JSR     PC, AYSET
+        MOV     #10, R1
+        MOV     #17, R2
+        JSR     PC, AYSET
+        MOV     #12, R1
+        MOV     #17, R2
+        JSR     PC, AYSET
+        JSR     PC, WAIT
+
+        JSR     PC, SILENC
+        MOV     #0, R1                  ; a tone to shape
+        MOV     #365, R2
+        JSR     PC, AYSET
+        MOV     #7, R1
+        MOV     #70, R2
+        JSR     PC, AYSET
+        MOV     #13, R1                 ; envelope period, fine  (r11)
+        MOV     #52, R2                 ;   {coarse,fine} = 015052 = 3370
+        JSR     PC, AYSET               ;   -> a 32-step ramp in ~0.5 s
+        MOV     #14, R1                 ; envelope period, coarse (r12)
+        MOV     #15, R2
+        JSR     PC, AYSET
+        MOV     #10, R1                 ; channel A takes the envelope
+        MOV     #20, R2                 ;   (bit 4 = use the envelope)
+        JSR     PC, AYSET
+        MOV     #15, R1                 ; r13 = shape. 010 octal = CONT set,
+        MOV     #10, R2                 ;   the repeating falling sawtooth
+        JSR     PC, AYSET
+        JSR     PC, WAIT
+
+; ---- 3. Turbosound: bring in the second chip ------------------------------
+        JSR     PC, SILENC
+        MOV     #0, R1                  ; primary keeps the A4 tone
+        MOV     #365, R2
+        JSR     PC, AYSET
+        MOV     #7, R1
+        MOV     #70, R2
+        JSR     PC, AYSET
+        MOV     #10, R1
+        MOV     #17, R2
+        JSR     PC, AYSET
+        JSR     PC, WAIT                ; ... alone first, for the level compare
+
+        MOV     #1, @#PORT              ; ACTIVATE Turbosound (select 0376)
+        JSR     PC, SILENC
+        MOV     #4, R1                  ; secondary plays E6 on channel C
+        MOV     #122, R2
+        JSR     PC, AYSET
+        MOV     #7, R1
+        MOV     #70, R2
+        JSR     PC, AYSET
+        MOV     #12, R1
+        MOV     #17, R2
+        JSR     PC, AYSET
+        JSR     PC, WAIT
+        JSR     PC, WAIT
+
+        MOV     #1, @#PORT              ; silence the secondary again
+        JSR     PC, SILENC
+        MOV     #0, @#PORT
+        JSR     PC, SILENC
+        JSR     PC, WAIT
+
+        JMP     LOOP
+
+; ---- AYSET: write PSG register R1 with value R2 ---------------------------
+; Both halves complement through R0, because the port inverts.
+AYSET:
+        MOV     R1, R0
+        COM     R0
+        MOV     R0, @#PORT              ; word write  = latch the register
+        MOV     R2, R0
+        COM     R0
+        MOVB    R0, @#PORT              ; byte write  = the data
+        RTS     PC
+
+; ---- SILENC: mixer off and all three volumes to zero ----------------------
+; Volumes first, THEN the mixer: with tone and noise disabled a channel sits
+; at DC on its programmed volume, so muting the mixer first would leave a
+; brief step at the old level.
+SILENC:
+        MOV     #10, R1
+        CLR     R2
+        JSR     PC, AYSET
+        MOV     #11, R1
+        CLR     R2
+        JSR     PC, AYSET
+        MOV     #12, R1
+        CLR     R2
+        JSR     PC, AYSET
+        MOV     #7, R1
+        MOV     #77, R2
+        JSR     PC, AYSET
+        RTS     PC
+
+; ---- WAIT: roughly a second and a half at 3-4 MHz -------------------------
+WAIT:
+        MOV     #60, R3
+WAIT1:
+        MOV     #0, R4
+WAIT2:
+        SOB     R4, WAIT2
+        SOB     R3, WAIT1
+        RTS     PC
+
+        .END

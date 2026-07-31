@@ -36,6 +36,8 @@ phase-by-phase narrative if the history is ever wanted.)
 | **9** Fidelity & polish | authentic EVNT/IRQ2 instant (`bk_evnt`); `N_EXT` calibrated against a real machine; `N_VREG` closed; palette sample instant; the **037 grant-rule fit** + `bk_rply` (the beam-race skew); **turbo mode** | ✅ HW 2026-07-26 (grant rule: Babylona/PALTST flat), 2026-07-29 (turbo) |
 | **10** Audio subsystem | `src/audio/`: N-slot stereo **mixer** + a noise-shaped 6-bit output stage (>6-bit audio-band resolution on the same ladders), **true stereo** with a CMT mono fold, the DIP-5 self-test tone, and the **177714 capture seam** for the sound devices. **Infra only — no new sound device** | sim ✅ (23 mutations); ✅ HW 2026-07-31 — the resolution claim measured off the jacks (**−6.047 dB/step over 42 dB, max residual 0.19 dB**, the three sub-ladder-step levels on the line), all four acceptance recordings collected, the DIP-5 diagnostic retired, and the shipped bitstream boots. **+23 LE** |
 
+| **11** Turbosound | `src/audio/bk_turbosound.sv` + the vendored `ym2149.sv`: **2x YM2149 on 0177714**, the first consumer of the Phase-10 seam. BkEmu `Ay8910` protocol, ACB pan folded to two mixer slots, the speaker ducked ~11.8 dB to make room | sim ✅ (15 mutations, incl. a cycle-exact diff of the adapted core against the vendored reference); **+1,182 LE (68 %), sys_clk +0.528 ns after an STA chase**; HW ⏳ |
+
 ## Platform & system map
 
 The hardware envelope and the whole-system picture. The per-module rules live
@@ -114,9 +116,9 @@ integer ratios, so the design is internally cycle-exact; the absolute rate is
                        └───────────────┘              │  768@60, x2/x3)  │
                                                       └──────────────────┘
           spk_bit ──┐   ┌──────────────┐             ┌──────────────┐
-   self-test tone ──┼──►│ audio_mixer  │─ L,R ──────►│ audio_out    │──► Sound-L
-   177714 devices ··┘   │ gain/pan/en  │  signed 16  │ 2x audio_ns6 │──► Sound-R
-        (not built)     │  saturating  │ (l+r)>>1 in │ + CMT jack   │  two 6-bit
+   bk_turbosound ──┼──►│ audio_mixer  │─ L,R ──────►│ audio_out    │──► Sound-L
+    (2x YM2149) ───┤   │ gain/pan/en  │  signed 16  │ 2x audio_ns6 │──► Sound-R
+   Covox/Menestrel ┘   │  saturating  │ (l+r)>>1 in │ + CMT jack   │  two 6-bit
                         └──────────────┘  CMT mode   └──────────────┘  R-2R ladders
 ```
 
@@ -184,12 +186,15 @@ bk_kbd014.sv        1801ВП1-014 equivalent (177660-663, VIRQ/IAK)
 bk_evnt.sv          the real 0011M D28+D3:B EVNT/IRQ2 missing-pulse detector
 smk_ide.sv          SMK512 IDE task file + ATA engine + tier-1 prefetch
 sd_backend.sv       SPI-mode SD host serving the smk_ide sector port
---- src/audio/ (Phase 10; audio_* = generic, bk_* = BK-specific) ---
+--- src/audio/ (audio_* = generic infra, bk_* = BK-specific; SOUND
+    DEVICES LIVE HERE TOO - src/peripheral/ is for non-audio peripherals) ---
 audio_ns6.sv        1st-order noise-shaped 16->6-bit quantizer (ONE channel)
 audio_mixer.sv      N-slot stereo mixer: compile-time gain/pan, runtime enable
 audio_tone.sv       the DIP-5 self-test: 2 DDS voices + the 6 dB staircase
 audio_out.sv        pad stage: DAC rate, 2x ns6, CMT mono fold + the CMT jack
 bk_audio.sv         the assembly: speaker CDC/activity + the SLOT MAP
+ym2149.sv           vendored MiSTer PSG core, adapted for Quartus 11.0
+bk_turbosound.sv    Phase 11: 2x ym2149 on 0177714 (BkEmu Ay8910 protocol)
 --- src/sys/ (clocking / CPU-rate control) ---
 cpu_clkgen.sv       fabric divider: dot/CLKIN enables + the CPU clock (/32,/24,/16)
 turbo_ctl.sv        bus-idle-qualified turbo level (the reply-owner swap guard)
@@ -306,14 +311,44 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   discipline. **Leg 4 `audio_mixer_tb`**: gain against an independently written
   floor reference, pan, runtime enable, saturation never wrapping, the
   **`NSRC=1` pass-through invariant** (the `smk_en=0`/`turbo=0` differential
-  idiom — what guarantees the speaker-only shipped path is unperturbed) and the
-  planned `NSRC=10` shape. **Leg 1 `bk_audio_tb`** is the regression guard for
+  idiom — what guarantees the speaker-only shipped path is unperturbed), the
+  planned `NSRC=10` shape, and — since Phase 11 — the **Turbosound pan pair**
+  (slots 3/4 hard-panned opposite ways, the shipped map's only such pair;
+  getting it backwards would silently swap the stereo image on the board) plus
+  the **shipped worst case 22950 + 8192 = 31142 passing through UNSATURATED**,
+  i.e. the gain budget written down as an assertion. **Leg 1 `bk_audio_tb`** is the regression guard for
   the two hardware-confirmed behaviours — the speaker's STATIC rail codes and
   the whole CMT jack (oe split, comparator network, anti-echo, raw tape-out) —
   plus true stereo, the CMT mono fold and the staircase. **Leg 2
   `spk_capture_tb`** keeps the 177716 bit-6/7 captures and gains the **177714
   (nSEL2) port-write capture**, whose load-bearing case is the WTBT
   discriminator (see the audio bullet).
+- `sim/ts/run.sh` — the Phase-11 **Turbosound** oracles, two legs,
+  mutation-tested x15; `sim/ts/README.md` carries the pinned contract.
+  **Leg 1 `ym2149_equiv_tb` is the authority and the reason this increment is
+  safe**: the vendored reference `sim/ts/ym2149_ref.sv` (upstream MiSTer) and
+  the shipped `src/audio/ym2149.sv` are elaborated side by side, driven with
+  identical stimulus and diffed on `CHANNEL_A/B/C`, `ACTIVE` and `DO` **every
+  clock** — because the shipped copy had to retype a 64-entry volume table,
+  unroll a loop and hoist eight registers for Quartus 11.0, and nothing else
+  in this tree can see any of that. **The reference wins every dispute and is
+  never regenerated from the shipped copy** (the `sim/ref014` rule). `CE` runs
+  at **/7**, coprime with the core's own /8 and /16, so a mis-gated enable
+  cannot hide; anti-vacuity is checked (two silent cores compare equal
+  forever); and during authoring the leg was run against **all 64 single-bit
+  volume-table mutations — all 64 killed**. Two lessons are recorded in
+  `sim/ts/README.md`: the upper 32 table entries are reachable ONLY through
+  the envelope, so a `MODE=1` window too short for `env_vol` to sweep leaves
+  most of the AY8910 half untested (a mutation survived exactly that way);
+  and the core simulates as **all-X forever** without power-up initialisers,
+  because `poly17`'s re-seed term is `!poly17`. **Leg 2 `bk_turbosound_tb`**
+  is the device contract on the 177714 seam — the BkEmu protocol (word =
+  address, byte = data, inverted, the odd lane's 0xFF, the 4-bit latch mask),
+  the 0xFF/0xFE chip select, the ACB fold and its headroom bound, `nINIT`, and
+  the /56 PSG clock enable — all checked with tone and noise DISABLED, which
+  makes each channel emit its volume as DC so the register file reads out
+  directly on `CHANNEL_x` with no waiting. One property is deliberately NOT
+  mutation-covered and the header says so out loud: see the Turbosound bullet.
 - `sim/run_clkgen.sh` — the Phase-7 `cpu_clkgen` unit oracle: BK-0010 (/32)
   mode **bit-identical** to a replica of the pre-Phase-7 `divc[4]` tap
   (enables included), the /24 BK-0011M rate exact, and a retarget sweep (no
@@ -847,9 +882,10 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   live, power-on-only radial toggle rather than a DCLO-latched config bit, so
   it survives the reset button and needs no reset to take effect. Current LED
   map: `pLed[7]` = SMK drive access, `[6]` = CMT mode, `[5]` = turbo,
-  `[3]` = audio self-test tone live (DIP 5), `[2]` = a DAC quantizer clipped
-  (STICKY), `[1]` = the audio mixer saturated (STICKY), `[0]` = speaker
-  activity, `[4]` unused. The two sticky audio flags are bring-up
+  `[4]` = **Turbosound PSG activity**, `[3]` = **Turbosound 2-chip mode
+  engaged** (Phase 11; `[3]` previously carried the DIP-5 self-test tone),
+  `[2]` = a DAC quantizer clipped (STICKY), `[1]` = the audio mixer saturated
+  (STICKY), `[0]` = speaker activity. The two sticky audio flags are bring-up
   observability — the same reasoning that put `spk_active` on `pLed[0]` in
   Phase 6: they turn "it sounds wrong" into "the digital side says the level
   overflowed", otherwise indistinguishable from an analog fault. Neither should
@@ -1030,13 +1066,25 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
     schematic provides a real 6-bit WEIGHTED R-2R network, so a 6-bit quantizer
     starts ~30 dB ahead of a 1-bit one at equal oversampling and needs 16× less
     of it.
-  * **The gain budget is the mixing strategy, and it is not yet solved for
-    devices.** The speaker is a full-scale source: by itself it uses the entire
-    headroom, so anything sounding alongside it saturates. Phase 10 sidesteps
-    this by having the self-test tone MUTE the speaker (a diagnostic owns the
-    output, which also keeps the acceptance FFT free of a BK square wave). The
-    first device increment must actually solve it — MiSTer's answer is to drop
-    the speaker to 1/4 when its PSG is live.
+  * **The gain budget is the mixing strategy, and Phase 11 SOLVED it — by
+    ducking the speaker.** The speaker used to be a full-scale source, so by
+    itself it used the entire headroom and anything sounding alongside it
+    saturated. Phase 10 sidestepped that by having the self-test tone MUTE the
+    speaker; Phase 11 had to actually fix it, and did so the way MiSTer does
+    (`BK0011M.sv`: `spk_out<<7` alone but `spk_out<<5` with the PSG live) —
+    except **unconditionally**, so the speaker's loudness never jumps
+    mid-program. `bk_audio`'s `SPK_LVL` is now **±8192** instead of ±31744,
+    i.e. the stock BK beep is **~11.8 dB quieter than the Phase-10
+    firmware** — a deliberate, user-audible regression, and the price of
+    hearing the PSGs and the speaker together. The budget then closes BY
+    CONSTRUCTION: `22950 (Turbosound) + 8192 (speaker) = 31142 <= FS_SAT =
+    31744`, so the mixer cannot saturate and the shapers cannot clip.
+    **8192 is not an arbitrary quarter**: it is 8×1024 exactly, which keeps
+    the speaker on a STATIC `audio_ns6` code (40/24) with no shaping activity
+    — the structural property the hardware-confirmed speaker path depends on.
+    A literal ¼ of 31744 would be 7936 = 7.75×1024, NOT a fixed point, and
+    would leave the codes rattling. Covox and Menestrel must re-open this and
+    find their share of what is left.
   * **The 177714 (nSEL2) capture seam** in `qbus_mem`, next to the `spk_bit`
     block: `port_wr` / `port_data[15:0]` / `port_word` / `port_be[1:0]`. All
     three planned devices decode this ONE address and differ only in how they
@@ -1051,14 +1099,11 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
     exception (a real Covox is a passive DAC on the port latch with no reset
     pin). It is a PURE OBSERVER with no path into `selected`/`wcnt`/the
     reply/`io_word`/`ad_oe`/`mem_ready`, which is what makes it timing-inert;
-    177714 already replies via `sel_io`. Read merge deferred (see Open). It is
-    surfaced in `ocbk_top` as `snd_port_*` wires that **nothing consumes yet**,
-    so the fitter removes the entire capture and it costs **0 LE** in this
-    build — it is oracle-pinned regardless, because `spk_capture_tb` drives the
-    real `qbus_mem` directly. Wiring it to named top-level wires rather than
-    omitting the ports is deliberate: it puts the seam where a device
-    implementer looks, and keeps the map report free of four
-    "dangling port" warnings.
+    177714 already replies via `sel_io`. Read merge deferred (see Open).
+    **Since Phase 11 `bk_turbosound` consumes it** (it was dangling and free
+    through Phase 10); Covox and Menestrel will hang off the same four wires.
+    The seam itself is oracle-pinned by `spk_capture_tb` driving the real
+    `qbus_mem`, independently of any device.
   * **Cost and timing (confirmed) — the SHIPPED audio subsystem costs
     +23 LE.** 6,979 → **7,002 LE (58 % → 58 %)** with the self-test retired
     (`TONE_ENABLE = 0`), M4K unchanged at 3/52, pins unchanged at 98/173, no
@@ -1083,7 +1128,114 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
     `model_bk11` and `mon_en` right behind it into the same `wdata_o`/`addr_o`
     endpoints. **Budget for an STA chase on the next increment, and do not
     chase margin by changing SEED 3** (see `ocbk.qsf`'s header and the
-    SDC-exception rule).
+    SDC-exception rule). **That prediction came true in Phase 11** — the same
+    cone went to −0.271 ns on the first Turbosound build; see the fix in the
+    Turbosound bullet below.
+- **Turbosound (Phase 11) — 2× YM2149 on 0177714, `src/audio/`.** The first
+  device on the Phase-10 seam. **`src/audio/bk_turbosound.sv`** is the device
+  and **`src/audio/ym2149.sv`** the vendored PSG core; both live in
+  `src/audio/` — **sound devices belong here, `src/peripheral/` is for
+  non-audio bus peripherals** (this supersedes the Phase-10 note that said
+  otherwise, which predated any actual device). Instantiated as an `ocbk_top`
+  sibling like `smk_ide`: it snoops what `qbus_mem` captured and never touches
+  the bus, so **`qbus_mem` is unchanged and no timing golden moves**.
+  * **BkEmu's `Ay8910.java` is the contract** — it is the only one of the two
+    references that implements Turbosound at all (MiSTer's BK core has ONE
+    PSG). `v = ~port_data[7:0]`; a **WORD** write latches a register number
+    (masked to `v[3:0]`, broadcast to BOTH chips because BkEmu keeps ONE
+    shared `currentRegister`); a **BYTE** write is data into the SELECTED
+    chip. An **odd-byte (0177715) write is a data write of `0xFF`**, because
+    BkEmu's `Computer.writeMemory` passes `value<<8` whose low byte is 0.
+    `0xFF`/`0xFE` in the latch select primary/secondary, and the first `0xFE`
+    ever seen activates 2-chip mode.
+  * **Two documented divergences.** From **MiSTer**: it wires
+    `BC = bus_wtbt[1]`, so an odd-byte write is an ADDRESS latch there and a
+    DATA write here — BkEmu wins, the standing rule for BK register semantics.
+    From **silicon**: the latch is masked to 4 bits, where a real chip latches
+    8 and then ignores the following data write if the high nibble is
+    non-zero — BkEmu masks, so we mask.
+  * **Two pieces of BkEmu are deliberately NOT reproduced, and they are the
+    same piece of behaviour**: the 3-second Turbosound dead-man timeout and
+    the reset of the secondary at activation. Both exist because a BkEmu chip
+    OBJECT outlives the program that programmed it. `nINIT` does that job in
+    hardware, and dropping the timeout makes the activation reset
+    **unreachable** — `dual_act` is cleared only by the reset that also clears
+    both chips, so a "first 0xFE" can never find a dirty secondary.
+    Implementing it would be dead logic no oracle could kill. **If the timeout
+    is ever added back, the activation reset has to come with it.**
+  * **Clock: `sys_clk`/56 = 1.72585 MHz** against a real BK AY's 12 MHz/7 =
+    1.714286 — **+0.674 %, the design's uniform offset**, with **CPU:PSG =
+    56:24 = 7:3 exactly** as on real hardware, so the PSGs cannot drift
+    against CPU-timed code. The divider is PRIVATE to the module, not a port
+    (the `cpu_clkgen` replica-drift lesson, same as `audio_out`'s prescaler).
+    `SEL=0`, `MODE=0` — MiSTer's BK settings.
+  * **The ACB fold happens IN THE DEVICE, not in the mixer**, and it is two
+    slots rather than six: `lc = 2A + B` per chip, then
+    `l = dual_act ? (lc0+lc1) : 2*lc0`, then `×15` as `(l<<4) - l` (no
+    multiplier). A left, C right, B centre is what BOTH references do. The
+    `dual_act` form is BkEmu's "average the two chips" without a divider, so
+    the full-scale bound is **1530 → 22950 in both modes** — which is what
+    makes the headroom proof hold — at the cost, deliberately reproduced, of
+    each chip dropping **6 dB** when Turbosound engages. Six slots would also
+    have pushed `audio_mixer` past the ~6-slot tree depth its header warns
+    about; two keeps the shipped map at three live slots.
+  * **The output is UNIPOLAR (0 at silence) on purpose.** A PSG channel is a
+    gated DC level, so its rest value is genuinely zero; subtracting a
+    mid-scale offset to "centre" it would put permanent DC on the ladder and
+    destroy `audio_ns6`'s exact-zero fixed point — the property that makes
+    silence produce no pin activity, measured on hardware. The DC a PLAYING
+    PSG carries is real and harmless (`audio_ns6` has DC gain exactly 1, and
+    the analog stage measured flat from 100 Hz).
+  * **The vendored core needed a Quartus-11.0 adaptation, and that is the
+    increment's real risk.** Upstream uses `reg [7:0] ymreg[16]`,
+    `'{default:0}`, `'1`, an unpacked array of wires with an assignment
+    pattern for the 64-entry `volTable`, `wire [11:0] tone_gen_freq[1:3]`, and
+    block-local `reg`s inside `always` blocks. **Icarus rejects it too**, so
+    even the sim reference is not byte-pristine — `sim/ts/ym2149_ref.sv` has
+    46 changed lines in three enumerated groups. The shipped copy additionally
+    turns the table into a `function` + `case`, splits the freq array,
+    unrolls the tone loop and hoists the block-local state. **`sim/ts` leg 1
+    is what makes all of that safe** (see the oracle bullet).
+    ⚠️ **The un-reset state needs `= 0` initialisers or the core simulates as
+    all-X forever**: `poly17`'s re-seed term is `!poly17`, which never
+    recovers from X. That is also what the hardware does (Cyclone FFs power up
+    to 0), so it is faithful, not a sim hack.
+  * **Reset is `~init_n`** (2-FF synced) ORed with the power-on reset — the
+    standard BK peripheral rule, which `qbus_mem`'s own seam comment names for
+    this device class. A RESET instruction silences the PSGs and clears the
+    Turbosound latch, as it would on a real board. The CE divider is NOT reset
+    by `nINIT` (a real chip's clock keeps running).
+  * **Cost and timing (confirmed) — Turbosound costs +1,182 LE, and the STA
+    chase Phase 10 told us to budget for HAPPENED, exactly where it said it
+    would.** 7,002 → **8,184 LE (58 % → 68 %)**, M4K unchanged at 3/52 (the
+    `ymreg` file has many simultaneous combinational readers, so it cannot
+    infer RAM), pins unchanged at 98/173, no new PLL. Two YM2149s are ~250 FF
+    each before any logic — `ymreg` alone is 128 — plus three 12-bit tone
+    compares, a 16-bit envelope compare, the 17-bit LFSR and three 32-entry
+    volume LUTs per chip.
+    **The first build came in at sys_clk −0.271 ns, TNS −1.146**, on the
+    chronic cone this file already names: `mem_mapper|rom6_en →
+    cpu_sdram_dp|wdata_o[*]` — a module the increment never touched. Pure
+    placement fragility from +1,183 LE, the same shape as the +19 LE that once
+    took an untouched module +0.481 → −0.414.
+    **Cured structurally, in the established idiom** (never an SDC exception,
+    never a SEED change): `cpu_sdram_dp`'s `wdata_o` no longer gates its load
+    on `is_write`, which had put the whole mapper decode
+    (`rom6_en`/`rom7_en`/`seg_smk` → `kind` → `sel_ram|sel_ramw`) inside a
+    16-bit register's ENABLE cone. It now loads on any DOUT while the FSM is
+    idle. Behaviour-identical by the `was_read`/`oe_arm` argument: `wdata_o` is
+    only ever consumed while `req` is high with `we` set, and `req` only rises
+    on a transition OUT of D_IDLE — so every extra load is either the real
+    write on that same edge from the same `ad_true`, or dead data nobody can
+    read. **Result: −0.271 → +0.528 ns, TNS 0, and −1 LE** — better margin
+    than the Phase-10 baseline of +0.309. Same rule as `rdata_oe` before it:
+    **keep translate outputs out of a register's enable cone.**
+  * `pLed[4]` = PSG activity, `pLed[3]` = 2-chip mode engaged.
+    `test/sndtestts.mac` is the hardware acceptance program (pdpy11, with a
+    `.wav` so it loads over the CMT jack): the A-major chord and each channel
+    solo to prove A-left/B-centre/C-right, noise, an envelope sweep, and the
+    Turbosound section. A `DUAL_ENABLE` parameter drops the second chip — a
+    documented fitter escape hatch, not the shipped configuration.
 - Cartridge-slot Q-bus is a **forward seam**: `src/bus/qbus_slot.sv`, default
   `SLOT_ENABLE=0` (drives nothing, slot pins stay reserved-tristated). The full
   slot pin map lives commented in `ocbk_common.qsf`. Real BK hardware needs an
@@ -1889,6 +2041,18 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
   construction: D_DONE is entered from D_RD_WAIT with was_read=1, from
   D_WR_REQ with was_read=0, and left only to D_IDLE), leaving
   `rdata_oe = oe_arm && !din_n`. Same rule, one level shorter.
+  **Phase 11 found the rule applies to REGISTER-ENABLE cones too, not just
+  pad-OE cones** (2026-07-31): the Turbosound increment's +1,183 LE re-placed
+  the fitter and took the same cone to **−0.271 ns**, this time via
+  `mem_mapper|rom6_en → cpu_sdram_dp|wdata_o[*]` — because `wdata_o`'s 16-bit
+  load was gated on `is_write`, i.e. on `sel_ram|sel_ramw`, i.e. on the whole
+  mapper decode. Cure: load `wdata_o` on **any DOUT while the FSM is idle**
+  and let the FSM alone decide whether a request is issued. Behaviour-identical
+  (`wdata_o` is read only while `req & we`, and `req` rises only on a
+  transition out of D_IDLE), **−0.271 → +0.528 ns, −1 LE**. Generalised rule:
+  **a translate output may decide WHAT to do, but must not be in the cone that
+  decides whether a wide register LOADS** — register the decision or widen the
+  enable to something structurally free.
 - **A quasi-static signal with big fanout still costs real setup time**
   (Phase 8, fixed 2026-07-22). `model_bk11` (DIP 1, latched during a DCLO
   hold, frozen while the CPU runs) fans out across the mapper, clkgen,
@@ -2052,6 +2216,27 @@ every future increment: **a debug feature does not ship**, and the residue of
 one is retired in the same commit that updates the user-facing docs. The
 measurement results are in the audio bullets above and `sim/audio/README.md`.
 
+**Phase 11 (Turbosound) is DONE IN SIM and NOT YET HARDWARE-CONFIRMED.**
+Everything else is finished: both oracles green with 15 mutations killed, all
+of `make sim` green with **every timing golden byte-identical** (`qbus_mem`
+took a comment edit only), the STA chase closed structurally at +0.528 ns, and
+the docs updated. What remains is the board, using `test/sndtestts.mac` (it
+builds a `.wav`, so it loads over the CMT jack):
+1. the A-major chord and each channel solo — **A must be LEFT, B CENTRE, C
+   RIGHT**. A swapped pan is the most likely wiring mistake and is obvious.
+2. noise, then the envelope sweep (it must fall audibly, not click).
+3. the Turbosound section — both chips together, and the primary audibly
+   dropping 6 dB when 2-chip mode engages (BkEmu's averaging, expected).
+4. **the speaker regression**: the BK beep must still work and still be clean
+   (static codes, so no shaping hiss), now ~11.8 dB quieter. This is the one
+   item that could send the gain budget back for revision — it is a deliberate
+   trade, but only a listen decides whether it was the right one.
+5. `pLed[1]`/`pLed[2]` (mixer saturated / DAC clipped) must stay DARK: the
+   budget says they cannot light, so if they do the arithmetic is wrong.
+6. a reset press must silence both chips at once (the nINIT path).
+Also still open: no real BK AY music has been played through it, and the
+directed program cannot exercise a real player's write patterns.
+
 **Fidelity, measurable**
 - **The Phase-10 >6-bit audio resolution claim is CONFIRMED ON HARDWARE
   2026-07-31 — recipe item (1) of four is done; (2), (3), (4) are still open.**
@@ -2158,28 +2343,27 @@ measurement results are in the audio bullets above and `sim/audio/README.md`.
   512 KB segment is left zero-filled.
 
 **Peripherals / features not built**
-- **The 177714 sound devices — Covox, 2× YM2149 (AY) and Menestrel — are NOT
-  built; Phase 10 built the seams they plug into.** All three decode the SAME
+- **Covox and Menestrel are still NOT built** (the third 177714 device,
+  **Turbosound**, landed in Phase 11 — see its bullet). Both decode the SAME
   address (BkEmu `REG_SEL2` = 0177714) and differ only in how they read the
-  data, so `qbus_mem`'s `port_wr`/`port_data`/`port_word`/`port_be` capture and
-  the mixer's slots 3–9 are shared and already exist and are oracle-pinned.
-  Planned arbitration (settled): the **AY is always live**; Covox and Menestrel
-  are cycled by a PS/2 radial-toggle key (the `key_scrmode`/`key_turbo`
-  pattern), landing with the first device. Planned AY core: MiSTer
-  `BK0011M_MiSTer/rtl/ym2149.sv`. Devices belong in `src/peripheral/`
-  (`bk_covox.sv`, `bk_ay.sv`, `bk_menestrel.sv`) — `src/audio/` is
-  mix-and-output infrastructure only. **The first device increment must also
-  re-open the gain budget**: the speaker is a full-scale source, so it uses the
-  entire headroom by itself and anything sounding alongside it saturates —
-  MiSTer's answer is to drop the speaker to 1/4 when its PSG is active
-  (`BK0011M.sv`: `spk_out<<7` alone vs `<<5` with the PSG). Phase 10 sidesteps
-  this only because the self-test tone mutes the speaker.
+  data, so `qbus_mem`'s `port_wr`/`port_data`/`port_word`/`port_be` capture is
+  already there, already oracle-pinned, and already has a consumer to copy.
+  They belong in **`src/audio/`** (`bk_covox.sv`, `bk_menestrel.sv`) next to
+  `bk_turbosound.sv`. Planned arbitration (settled): the PSGs are always live;
+  Covox and Menestrel get cycled by a PS/2 radial-toggle key (the
+  `key_scrmode`/`key_turbo` pattern). **They must re-open the gain budget**:
+  Phase 11 spent it on the speaker (ducked to ±8192) and the Turbosound
+  (0..22950), which together already reach 31142 of the 31744 available, so
+  there is essentially NO headroom left. Adding a third source means lowering
+  one of the two existing gains — a per-device loudness decision, and the
+  arithmetic in `bk_audio`'s slot-map comment has to be redone with it.
 - **The 177714 READ merge is not implemented.** The Phase-10 seam captures
   WRITES only, deliberately: a write capture is provably reply-inert (177714
   already replies via `sel_io`), while a read merge reaches into the reply/OE
-  cone that this change carefully avoids. Covox is write-only and nothing yet
-  establishes that an AY read is needed; if one ever is, follow the
-  `ide_rdata` pattern exactly.
+  cone that this change carefully avoids. Covox is write-only, and BkEmu's
+  `Ay8910` does not override `read` either (it returns 0), so Phase 11 did not
+  need one — `bk_turbosound` leaves the core's `DO` unconnected. If a read is
+  ever wanted, follow the `ide_rdata` pattern exactly.
 - **Tape-out is single-bit.** A real BK mixes write bits 6+5 resistively into a
   3-level record waveform; bit 6 alone (the dominant component) is shipped. See
   the tape bullet. **Phase 10 deliberately did NOT change this** — tape-out is a
