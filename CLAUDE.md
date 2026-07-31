@@ -2233,12 +2233,15 @@ only), and the STA chase closed structurally at +0.528 ns.
 doubt: the pan ORIENTATION (A left / B centre / C right — a swap would sound
 fine on a demo, just mirrored), `pLed[4]`/`[3]` tracking activity and 2-chip
 mode, `pLed[1]`/`[2]` staying dark, and a reset press silencing both chips.
-**The speaker duck is the one open judgement**, not a correctness question:
-the BK beep is now ~11.8 dB quieter so the PSGs and the speaker can share the
-headroom, and whether that trade feels right in practice is a listening call.
-If it does not, the fix is `bk_audio`'s `SPK_LVL` — but keep it a multiple of
-1024 or the speaker stops being a static `audio_ns6` code, and redo the
-budget arithmetic in the slot-map comment with it.
+**The speaker duck was JUDGED FINE on hardware and is settled**: the BK beep
+is ~11.8 dB quieter than the Phase-10 firmware so the PSGs and the speaker can
+share the headroom, and that trade is accepted. `SPK_LVL = 8192` is therefore
+a shipped constant, not a placeholder. If it is ever revisited anyway, two
+things travel with it: keep it a **multiple of 1024** or the speaker stops
+being a static `audio_ns6` code and starts rattling the shaper, and redo the
+budget arithmetic in `bk_audio`'s slot-map comment — at 12288 the sum would be
+35238 and the mixer WOULD saturate, so the Turbosound scale would have to drop
+from x15 to x12 to pay for it.
 
 **Fidelity, measurable**
 - **The Phase-10 >6-bit audio resolution claim is CONFIRMED ON HARDWARE
