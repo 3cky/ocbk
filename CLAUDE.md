@@ -9,12 +9,13 @@ alternative firmware on the 1chipMSX / OneChipBook board (Altera Cyclone I
 **EP1C12Q240C8**, Quartus II 11.0). The headline goal is **cycle-accurate** CPU
 behaviour.
 
-**Phases 0–9 are done and confirmed on hardware; Phase 10 is functionally
-complete and hardware-confirmed but NOT yet marked done** — it still carries a
-debug feature (the DIP-5 self-test tone) that must be retired from the shipped
-build, and three of its four hardware acceptance recordings are uncollected. The
-completion checklist is under Open / deferred. See README.md for the current
-result. This file is now the authoritative document: the per-topic
+**Every phase is done and confirmed on hardware** — see README.md for the
+current result. Phase 10 was held open past its hardware confirmation until
+its debug feature was retired from the shipped build and all four acceptance
+recordings were collected; **that is the standing rule — a debug feature does
+not ship, and since the repo went public 2026-07-31, features develop on
+branches and `main` only takes what is shippable.** This file is now the
+authoritative document: the per-topic
 bullets below carry each finding in its most current form, and they, not this
 table, are the detail. (ROADMAP.md held the forward-looking plan and was folded
 in here once the last phase landed; `git show e85efbf:ROADMAP.md` has the full
@@ -33,7 +34,7 @@ phase-by-phase narrative if the history is ever wanted.)
 | **7** BK-0011M mode | DIP 1 model select, /24 CPU clock, 177716 banking mapper, 177662 video register, 50 Hz EVNT/IRQ2, СТОП-block, two-pass EPCS loader, authentic DRAM power-on pattern | ✅ HW 2026-07-16 (BOS boots; reset switches models) |
 | **8** SMK512 (DIP 8) | 512 KB segmented RAM, BIOS ROM + the SYS register-space boot overlay, IDE drive engine + tier-1 prefetch, SD/SPI backend — in **both** models | ✅ HW 2026-07-23 (BIOS boots an OS off SD) |
 | **9** Fidelity & polish | authentic EVNT/IRQ2 instant (`bk_evnt`); `N_EXT` calibrated against a real machine; `N_VREG` closed; palette sample instant; the **037 grant-rule fit** + `bk_rply` (the beam-race skew); **turbo mode** | ✅ HW 2026-07-26 (grant rule: Babylona/PALTST flat), 2026-07-29 (turbo) |
-| **10** Audio subsystem | `src/audio/`: N-slot stereo **mixer** + a noise-shaped 6-bit output stage (>6-bit audio-band resolution on the same ladders), **true stereo** with a CMT mono fold, the DIP-5 self-test tone, and the **177714 capture seam** for the sound devices. **Infra only — no new sound device** | 🚧 **IN PROGRESS** — sim ✅ (23 mutations); the resolution claim is ✅ HW 2026-07-31 (staircase off the jacks: −6.047 dB/step over 42 dB, max residual 0.19 dB, the three sub-ladder-step levels on the line) and the shipped bitstream boots, but the phase is **not done until the DIP-5 debug tone is out of the shipped build and the remaining acceptance recordings are collected** — checklist under Open / deferred |
+| **10** Audio subsystem | `src/audio/`: N-slot stereo **mixer** + a noise-shaped 6-bit output stage (>6-bit audio-band resolution on the same ladders), **true stereo** with a CMT mono fold, the DIP-5 self-test tone, and the **177714 capture seam** for the sound devices. **Infra only — no new sound device** | sim ✅ (23 mutations); ✅ HW 2026-07-31 — the resolution claim measured off the jacks (**−6.047 dB/step over 42 dB, max residual 0.19 dB**, the three sub-ladder-step levels on the line), all four acceptance recordings collected, the DIP-5 diagnostic retired, and the shipped bitstream boots. **+23 LE** |
 
 ## Platform & system map
 
@@ -2042,54 +2043,14 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
 Nothing here blocks anything; each item has its detail in the bullet named.
 Roughly in order of how much they'd be missed.
 
-**Phase 10 completion checklist (the phase stays 🚧 until all of it is done)**
-
-Ordered, because the steps constrain each other. The rule this encodes:
-**a debug feature does not ship to end users**, and — since the repo went public
-2026-07-31 — `main` only takes a feature when it is shippable.
-
-1. ✅ **DONE 2026-07-31 — (3) silence and (4) CMT both collected.** (4) was the
-   one that mattered most (a regression check on an ALREADY-SHIPPED feature,
-   since Phase 10 changed what the left ladder does in CMT mode): save + load
-   round trip good, DIP-4-ON/OFF speaker levels EQUAL, and a load with DIP 4
-   OFF sees nothing. See the tape bullet. **All four acceptance recordings are
-   now in — the measurement side of Phase 10 is closed.**
-2. ✅ **Sweep, acceptance item (2) — DONE 2026-07-31** on the
-   `bringup-audio-sweep` build (that branch exists because DIP 5 plays a FIXED
-   440 Hz, so the sweep needed its own firmware). **In-band answered: flat
-   100 Hz → 21 kHz, no RC corner, `RATE_DIV` stays 16**; the voice-A harmonic
-   anomaly is resolved as ladder mid-scale DNL. See the analog-stage bullet.
-   **Still open from it:** the capture's own anti-alias filter brick-walls at
-   ~21 kHz, so the board ABOVE the audio band remains unmeasured and needs a
-   scope on the jack rather than another recording. That is not a Phase-10
-   blocker — the out-of-band bound stands — so it moves to the analog-stage
-   bullet rather than holding this checklist.
-3. ✅ **DONE 2026-07-31 — the tone is retired: `TONE_ENABLE = 0`** on the
-   `bk_audio` instance in `ocbk_top`. **Do NOT delete `audio_tone.sv`.** The
-   parameter already gates the whole generator in a generate block
-   (`bk_audio.sv:60`), tying `dbg_tone`/`tone_live` to 0 — so this removes the
-   user-visible behaviour, frees DIP 5, and reclaims ~130 LE while keeping the
-   module, its oracle leg and the ability to rebuild a diagnostic firmware.
-   That ability is load-bearing and permanent: **the BK speaker maps to the
-   rails and emits a STATIC code with no shaping activity**, so the tone is the
-   only stimulus that can exercise this feature on hardware at all — there is
-   nothing else to test with when the first 177714 device lands, or after a
-   fitter re-place moves timing. Deleting the module buys nothing and is the
-   irreversible version.
-   **Keep `pLed[1]`/`[2]`** (the sticky mixer-saturated / quantizer-clipped
-   flags): they are NOT debug — README documents them as user-facing, and the
-   gain budget is genuinely unsolved until a sound device lands. Retire only
-   `pLed[3]`, which goes with DIP 5.
-4. ✅ **DONE 2026-07-31 — user-facing docs updated in the same commit**:
-   README's "Audio self-test" section and its DIP-5 and LED-3 table rows are
-   gone; `ocbk_top`'s header, DIP port comment and LED map no longer document
-   DIP 5 or `pLed[3]` as features.
-5. **Rebuild + STA ✅ DONE (7,002 LE, sys_clk +0.309 ns, TNS 0, 0 errors) —
-   THE BOOT TEST IS THE ONE THING LEFT.** It is mandatory, not a formality:
-   removing the tone dropped 355 LE and re-placed a demonstrably
-   placement-fragile fitter. Slack moved the good way this time (+0.034 →
-   +0.309), but only a board can confirm the bitstream runs.
-6. **Then merge the branch to `main`** and flip the phase table row to ✅.
+**Phase 10 is CLOSED (2026-07-31).** Its completion checklist lived here and
+is done: all four acceptance recordings collected, the DIP-5 diagnostic
+retired from the shipped build (`TONE_ENABLE = 0`, `audio_tone.sv` KEPT — see
+the instantiation note in `ocbk_top.sv`), user-facing docs updated, rebuilt,
+STA clean and boot-confirmed. What survives it is the rule, which applies to
+every future increment: **a debug feature does not ship**, and the residue of
+one is retired in the same commit that updates the user-facing docs. The
+measurement results are in the audio bullets above and `sim/audio/README.md`.
 
 **Fidelity, measurable**
 - **The Phase-10 >6-bit audio resolution claim is CONFIRMED ON HARDWARE
