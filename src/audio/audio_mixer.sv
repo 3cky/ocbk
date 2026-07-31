@@ -5,14 +5,20 @@
 //  compile-time gain and pan and a per-slot RUNTIME enable, saturating at the
 //  bound audio_ns6 needs to stay provably clip-free.
 //
-//  SLOT MAP (this increment ships NSRC = 3; the rest is the documented growth
-//  path, proven functional at NSRC = 10 by audio_mixer_tb but deliberately NOT
+//  SLOT MAP (bk_audio ships NSRC = 5; the rest is the documented growth path,
+//  proven functional at NSRC = 10 by audio_mixer_tb but deliberately NOT
 //  synthesized until the devices exist - no dead logic):
 //
-//      0 = BK speaker (BOTH)    3 = AY chan A (L)     6 = Covox L (L)
-//      1 = self-test tone A     4 = AY chan B (BOTH)  7 = Covox R (R)
-//          (BOTH)               5 = AY chan C (R)     8 = Menestrel L (L)
-//      2 = self-test tone B (R)                       9 = Menestrel R (R)
+//      0 = BK speaker (BOTH)    3 = TurboSound L (L)  5 = Covox L (L)
+//      1 = self-test tone A     4 = TurboSound R (R)  6 = Covox R (R)
+//          (BOTH)                                     7 = Menestrel L (L)
+//      2 = self-test tone B (R)                       8 = Menestrel R (R)
+//
+//  Note the two PSGs of the TurboSound take TWO slots between them, not six:
+//  bk_turbosound does its own ACB pan and chip combine and hands over a
+//  finished stereo pair. That is this module's design law in action - see
+//  "RUNTIME STEREO IS NOT A RUNTIME PAN" below - and it is also what keeps the
+//  stage-1 tree shallow enough to meet timing.
 //
 //  SAMPLE SCALE: signed, full scale +/-32767, i.e. exactly BkEmu's short
 //  domain (AudioOutput.MAX_OUTPUT = Short.MAX_VALUE). That is deliberate - it
@@ -28,10 +34,13 @@
 //  always live.
 //
 //  RUNTIME STEREO IS NOT A RUNTIME PAN. Covox decides mono-vs-stereo from a
-//  write's high byte; the AY has three channels; Menestrel has two chips. All
-//  of them present as ONE SLOT PER CHANNEL with a static pan, and the device's
-//  own logic decides what to put in each slot. That is the seam decision that
-//  keeps this module trivial - do not add a runtime pan.
+//  write's high byte; the TurboSound has six channels across two chips, and
+//  whether the second one is mixed in at all depends on a runtime latch.
+//  All of them present as ONE SLOT PER CHANNEL OF THEIR OWN OUTPUT with a
+//  static pan, and the device's own logic decides what to put in each slot -
+//  bk_turbosound is the worked example: it folds A/B/C of both chips into one
+//  L and one R sample itself and takes two slots. That is the seam decision
+//  that keeps this module trivial - do not add a runtime pan.
 //
 //  SATURATING, NEVER WRAPPING. A wrap is a full-scale sign inversion, i.e. the
 //  loudest artifact this path can emit. BkEmu saturates too

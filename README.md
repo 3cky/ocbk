@@ -20,11 +20,7 @@ Everything below is confirmed running on the board.
   Both colour-256 and mono-512 modes.
 - **Keyboard** - a PS/2 keyboard behaves as the BK's own, including the
   Russian/Latin and case triggers, СУ/АР2/НР modifiers and СТОП.
-- **Sound** - the 1-bit speaker, in **stereo**, through the board's audio jacks.
-  Several sound sources can be mixed, and the output is noise-shaped so the
-  6-bit ladders resolve far finer than six bits in the audio band - the
-  groundwork for the BK's sound expansions (Covox, AY, Menestrel), none of
-  which are built yet.
+- **Sound** - the 1-bit speaker plus **TurboSound** (2x YM2149).
 - **Tape** - the right audio jack doubles as the cassette port. Load real BK
   tape recordings from a PC, and save back to one.
 - **SMK512** - the 512 KB RAM extension, its BIOS, and an IDE drive backed by
@@ -70,19 +66,21 @@ only on power-off.
 
 | LED | Meaning |
 |-----|---------|
-| **Red power LED** | solid = running. **Blinking = the firmware image in flash failed its checksum** and the CPU is held in reset. Dark only for the first ~200 µs at power-on. |
-| **7** | SMK512 drive access - blinks while the drive is busy, one short flash for a single access |
-| **6** | tape mode is on |
-| **5** | turbo is on |
-| **2** | the audio output overloaded (stays lit; should never light) |
-| **1** | the audio mixer overloaded (stays lit; should never light) |
-| **0** | speaker activity |
+| **9** | solid = running. **Blinking = the firmware image in flash failed its checksum** and the CPU is held in reset. |
+| **8** | SMK512 drive access - blinks while the drive is busy, one short flash for a single access |
+| **7** | tape mode is on |
+| **6** | turbo is on |
+| **5** | PSG is active |
+| **4** | PSG TurboSound mode is active |
+| **3** | the audio output overloaded (for diagnostic purposes; should never light) |
+| **2** | the audio mixer overloaded (for diagnostic purposes; should never light) |
+| **1** | speaker activity |
 
 ## Using it
 
 ### Tape
 
-Switch **DIP 4** on (LED 6 lights). Play a BK tape recording - e.g. a WAV
+Switch **DIP 4** on (LED 7 lights). Play a BK tape recording - e.g. a WAV
 rendered from a `.BIN` - into the **right** audio channel, then load it the
 normal way. Switch DIP 4 off when you're done - that jack is the right audio channel otherwise.
 
@@ -122,7 +120,7 @@ something broken.
 
 ## Under the hood
 
-It fits in **6,979 of 12,060 logic elements (58 %)**, 3 memory blocks and the
+It fits in **8,184 of 12,060 logic elements (68 %)**, 3 memory blocks and the
 board's single PLL.
 
 Developer documentation - the architecture, the platform constraints, the

@@ -148,7 +148,8 @@ module qbus_mem #(
     // ---- 177714 (nSEL2) parallel-port write capture (sclk domain) ---------
     // The seam the BK sound expansions hang off: Covox, 2x YM2149 and
     // Menestrel all decode this one address and differ only in how they read
-    // the data. Never runtime-reset (see the capture block below).
+    // the data. src/audio/bk_turbosound.sv is the first consumer. Never
+    // runtime-reset (see the capture block below).
     output logic        port_wr,       // 1 sclk per bus write to 177714/15
     output logic [15:0] port_data,     // BK-true value, byte lanes merged
     output logic        port_word,     // 1 = word write, 0 = byte write
@@ -868,9 +869,9 @@ module qbus_mem #(
     //
     // NEVER RUNTIME-RESET - the spk/mot class, not a new nINIT exception. A real
     // Covox is a passive resistor DAC hanging off the port latch with no reset
-    // pin at all. Device-internal state (AY registers, the 3 s stereo and
-    // TurboSound timeouts) keys to init_n inside the DEVICE, per the standard BK
-    // peripheral-reset rule.
+    // pin at all. Device-internal state (the PSG registers, the TurboSound
+    // chip-select latch) keys to init_n inside the DEVICE, per the standard BK
+    // peripheral-reset rule - see bk_turbosound.sv, which does exactly that.
     //
     // No bank_wr gate is needed (bank_wr requires !sel1_n, so it can never
     // assert on a 177714 write) and no smk_en gate either (under SMK SYS a

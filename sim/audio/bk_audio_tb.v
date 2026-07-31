@@ -8,18 +8,26 @@
 //  regression guard for the two behaviours that are confirmed working on real
 //  hardware and must not be broken by the rework:
 //
-//    THE SPEAKER  - spk_bit=1 must reach a STATIC ladder code 63 and spk_bit=0 a
-//                   STATIC code 1, with no shaping activity in between. (Before
-//                   the rework it was 63/0; the one-code trim is deliberate -
-//                   the mixer saturates at 31744 so audio_ns6 stays provably
-//                   clip-free. 0.14 dB, and the code is still static.)
+//    THE SPEAKER  - spk_bit=1 must reach a STATIC ladder code 40 and spk_bit=0 a
+//                   STATIC code 24, with no shaping activity in between.
+//                   The CODES have moved twice and the STATICNESS never has,
+//                   which is the point: 63/0 before the Phase-10 rework, then
+//                   63/1 when the mixer's saturation bound became 31744, and
+//                   now 40/24 because the Turbosound increment ducks the
+//                   speaker to SPK_LVL = 8192 to make room for the PSGs.
+//                   8192 = 8*1024 exactly, so it is still an audio_ns6 fixed
+//                   point - that is the property under test here, not the
+//                   particular number. A duck to a non-multiple of 1024 would
+//                   leave the codes rattling and this leg would catch it.
 //    THE CMT JACK - the oe split, the comparator network, tape_lvl following the
 //                   pad through the 2-FF sync, the anti-echo force, and
 //                   tape-out staying the RAW speaker bit.
 //
 //  New behaviour it also pins: true stereo (the two ladders must be able to
 //  differ), the CMT mono fold on the left ladder, the tone_en routing, exact
-//  silence at the pads, and DAC-tick discipline.
+//  silence at the pads, and DAC-tick discipline. The Turbosound slots are
+//  driven directly here (ts_l/ts_r are plain inputs to bk_audio) to prove they
+//  reach the mixer with the right pan - bk_turbosound itself is sim/ts's job.
 //
 //  The tone's staircase dwell is shortened via TONE_STEP_BITS so the 8-step
 //  6 dB ladder can actually be walked in simulation (the shipped value is
@@ -44,6 +52,7 @@ module bk_audio_tb;
     logic       cmt_mode = 1'b0;
     logic       tone_en  = 1'b0;
     logic       ext_lvl  = 1'b0;   // "tape recorder" level at the jack
+    logic signed [15:0] ts_l = 16'sd0, ts_r = 16'sd0;
     logic [5:0] dac_l, dac_r_o, dac_r_oe;
     logic       tape_lvl, active, dbg_sat, dbg_clip, dbg_tone;
 
@@ -65,6 +74,8 @@ module bk_audio_tb;
         .cmt_mode   (cmt_mode),
         .cmt_in_pad (pad_sr5),
         .tone_en    (tone_en),
+        .ts_l       (ts_l),
+        .ts_r       (ts_r),
         .tape_lvl   (tape_lvl),
         .dac_l      (dac_l),
         .dac_r_o    (dac_r_o),
@@ -127,7 +138,7 @@ module bk_audio_tb;
         begin
             spk_bit = lvl;
             wait_ticks(6);                       // CDC + mixer latency + a tick
-            exp  = lvl ? 6'd63 : 6'd1;
+            exp  = lvl ? 6'd40 : 6'd24;
             #1 seen = dac_l;
             if (seen !== exp) begin
                 $display("AUDIO-ERROR speaker level %b -> dac_l %0d (expected %0d)",
@@ -261,10 +272,11 @@ module bk_audio_tb;
         // =================================================================
         //  tone_en routing + TRUE STEREO
         // =================================================================
-        // Tone off, speaker idle: both ladders static at the -FS rail (code 1).
+        // Tone off, speaker idle: both ladders static at the speaker's LOW
+        // rail (code 24 = mid-scale 32 minus SPK_LVL/1024 = 8).
         tone_en = 1'b0;
         wait_ticks(8);
-        #1 if (dac_l !== 6'd1 || dac_r_o !== 6'd1) begin
+        #1 if (dac_l !== 6'd24 || dac_r_o !== 6'd24) begin
             $display("AUDIO-ERROR tone off: ladders not at the idle rail: l=%0d r=%0d",
                      dac_l, dac_r_o);
             errors = errors + 1;
@@ -272,6 +284,57 @@ module bk_audio_tb;
         if (dbg_tone !== 1'b0) begin
             $display("AUDIO-ERROR dbg_tone set with tone_en low"); errors = errors + 1;
         end
+
+        // =================================================================
+        //  THE TURBOSOUND PAN ORIENTATION
+        // =================================================================
+        // ts_l MUST reach the LEFT ladder only and ts_r the RIGHT ladder only.
+        // This is the link in the pan chain that nothing else covers:
+        // bk_turbosound_tb proves channel A lands in ts_l and C in ts_r, and
+        // audio_mixer_tb proves slot 3 is L-only and slot 4 is R-only, but only
+        // THIS check proves bk_audio packs ts_l into slot 3 rather than slot 4.
+        // Swap them and every oracle still passes while the board plays the
+        // stereo image MIRRORED - inaudible as a fault, just wrong.
+        //
+        // The arithmetic is exact and static. The speaker is low (-8192), so
+        // both ladders sit at code 24; adding +16384 to one side gives
+        // -8192 + 16384 = 8192 = 8*1024 -> code 40, still a fixed point, so
+        // the check is a plain compare with no settling window.
+        spk_bit = 1'b0;
+        ts_l = 16'sd0; ts_r = 16'sd0;
+        wait_ticks(6);
+        #1 if (dac_l !== 6'd24 || dac_r_o !== 6'd24) begin
+            $display("AUDIO-ERROR pan: baseline not at the low rail: l=%0d r=%0d",
+                     dac_l, dac_r_o);
+            errors = errors + 1;
+        end
+
+        ts_l = 16'sd16384; ts_r = 16'sd0;
+        wait_ticks(6);
+        #1 if (dac_l !== 6'd40 || dac_r_o !== 6'd24) begin
+            $display("AUDIO-ERROR pan: ts_l did not land LEFT-ONLY (l=%0d r=%0d, expected 40/24)",
+                     dac_l, dac_r_o);
+            errors = errors + 1;
+        end
+
+        ts_l = 16'sd0; ts_r = 16'sd16384;
+        wait_ticks(6);
+        #1 if (dac_l !== 6'd24 || dac_r_o !== 6'd40) begin
+            $display("AUDIO-ERROR pan: ts_r did not land RIGHT-ONLY (l=%0d r=%0d, expected 24/40)",
+                     dac_l, dac_r_o);
+            errors = errors + 1;
+        end
+
+        // both together: the two sides move independently, not as a mono sum
+        ts_l = 16'sd16384; ts_r = 16'sd16384;
+        wait_ticks(6);
+        #1 if (dac_l !== 6'd40 || dac_r_o !== 6'd40) begin
+            $display("AUDIO-ERROR pan: both slots together gave l=%0d r=%0d, expected 40/40",
+                     dac_l, dac_r_o);
+            errors = errors + 1;
+        end
+        ts_l = 16'sd0; ts_r = 16'sd0;
+        wait_ticks(4);
 
         // Tone on: the codes must MOVE, and the two ladders must DIFFER (voice A
         // is panned BOTH, voice B RIGHT-only - so a mono path cannot pass this).
@@ -362,7 +425,7 @@ module bk_audio_tb;
         // the left ladder still carries audio in CMT mode - now the MONO FOLD.
         // The speaker is panned BOTH, so mix_l == mix_r and the fold is a no-op
         // for it: the left ladder must still sit at the speaker's rail.
-        #1 if (dac_l !== 6'd63) begin
+        #1 if (dac_l !== 6'd40) begin
             $display("AUDIO-ERROR CMT-mode left ladder lost the speaker: %0d", dac_l);
             errors = errors + 1;
         end
@@ -395,9 +458,9 @@ module bk_audio_tb;
         tone_en = 1'b0;
 
         // the CMT-mode left ladder is the MONO FOLD of both channels: with the
-        // tone off and the speaker low it is the idle rail again
+        // tone off and the speaker low it is the speaker's low rail again
         wait_ticks(8);
-        #1 if (dac_l !== 6'd1) begin
+        #1 if (dac_l !== 6'd24) begin
             $display("AUDIO-ERROR CMT mono fold wrong at idle: %0d", dac_l);
             errors = errors + 1;
         end

@@ -199,13 +199,35 @@ module cpu_sdram_dp #(
         end
     end
 
+    // ---- the write-data capture, deliberately OUTSIDE the FSM ---------------
+    // wdata_o loads on ANY DOUT while idle, NOT only on a decoded write. That
+    // is the "keep translate outputs out of a register's enable cone" rule
+    // this file already applies to rdata_oe, and it is here for the same
+    // reason: gating this 16-bit load on is_write put the mem_mapper decode
+    // (rom6_en / rom7_en / seg_smk -> kind -> sel_ram|sel_ramw) in the enable
+    // cone, and that is the design's chronic worst sys_clk path - it went
+    // NEGATIVE (-0.271 ns) when the TurboSound increment re-placed the fitter,
+    // in a module that increment never touched.
+    //
+    // BEHAVIOUR-IDENTICAL, by the same argument as was_read/oe_arm: wdata_o is
+    // only ever consumed by the arbiter while `req` is high with `we` set, and
+    // `req` is only ever raised on a state transition OUT of D_IDLE. So on
+    // every cycle this new enable is true, either the FSM issues the write on
+    // that same edge from the same ad_true (identical), or no request exists
+    // and the captured value is dead until the next real write overwrites it.
+    // A ROM write, an un-decoded write and a DATIO read half now all leave a
+    // stale word here - and none of them can be read by anyone.
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n)                              wdata_o <= '0;
+        else if (state == D_IDLE && !dout_n)     wdata_o <= ad_true;
+    end
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state    <= D_IDLE;
             req      <= 1'b0;
             we       <= 1'b0;
             addr_o   <= '0;
-            wdata_o  <= '0;
             be_o     <= 2'b11;
             rd_hold  <= '0;
             was_read <= 1'b0;
@@ -224,10 +246,9 @@ module cpu_sdram_dp #(
                         was_drive <= !rd_noe;
                         oe_arm   <= 1'b0;
                         state    <= D_RD_REQ;
-                    end else if (is_write) begin        // capture + issue the write
+                    end else if (is_write) begin        // issue the write
                         we       <= 1'b1;
                         addr_o   <= phys;
-                        wdata_o  <= ad_true;
                         be_o     <= byte_op ? (addr[0] ? 2'b10 : 2'b01) : 2'b11;
                         req      <= 1'b1;
                         was_read <= 1'b0;
