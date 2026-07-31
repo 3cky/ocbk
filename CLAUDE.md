@@ -36,7 +36,7 @@ phase-by-phase narrative if the history is ever wanted.)
 | **9** Fidelity & polish | authentic EVNT/IRQ2 instant (`bk_evnt`); `N_EXT` calibrated against a real machine; `N_VREG` closed; palette sample instant; the **037 grant-rule fit** + `bk_rply` (the beam-race skew); **turbo mode** | ✅ HW 2026-07-26 (grant rule: Babylona/PALTST flat), 2026-07-29 (turbo) |
 | **10** Audio subsystem | `src/audio/`: N-slot stereo **mixer** + a noise-shaped 6-bit output stage (>6-bit audio-band resolution on the same ladders), **true stereo** with a CMT mono fold, the DIP-5 self-test tone, and the **177714 capture seam** for the sound devices. **Infra only — no new sound device** | sim ✅ (23 mutations); ✅ HW 2026-07-31 — the resolution claim measured off the jacks (**−6.047 dB/step over 42 dB, max residual 0.19 dB**, the three sub-ladder-step levels on the line), all four acceptance recordings collected, the DIP-5 diagnostic retired, and the shipped bitstream boots. **+23 LE** |
 
-| **11** Turbosound | `src/audio/bk_turbosound.sv` + the vendored `ym2149.sv`: **2x YM2149 on 0177714**, the first consumer of the Phase-10 seam. BkEmu `Ay8910` protocol, ACB pan folded to two mixer slots, the speaker ducked ~11.8 dB to make room | sim ✅ (15 mutations, incl. a cycle-exact diff of the adapted core against the vendored reference); **+1,182 LE (68 %), sys_clk +0.528 ns after an STA chase**; HW ⏳ |
+| **11** Turbosound | `src/audio/bk_turbosound.sv` + the vendored `ym2149.sv`: **2x YM2149 on 0177714**, the first consumer of the Phase-10 seam. BkEmu `Ay8910` protocol, ACB pan folded to two mixer slots, the speaker ducked ~11.8 dB to make room | sim ✅ (15 mutations, incl. a cycle-exact diff of the adapted core against the vendored reference); **+1,182 LE (68 %), sys_clk +0.528 ns after an STA chase**; ✅ HW 2026-07-31 (real AY/Turbosound demos play on the board) |
 
 ## Platform & system map
 
@@ -2216,26 +2216,29 @@ every future increment: **a debug feature does not ship**, and the residue of
 one is retired in the same commit that updates the user-facing docs. The
 measurement results are in the audio bullets above and `sim/audio/README.md`.
 
-**Phase 11 (Turbosound) is DONE IN SIM and NOT YET HARDWARE-CONFIRMED.**
-Everything else is finished: both oracles green with 15 mutations killed, all
-of `make sim` green with **every timing golden byte-identical** (`qbus_mem`
-took a comment edit only), the STA chase closed structurally at +0.528 ns, and
-the docs updated. What remains is the board, using `test/sndtestts.mac` (it
-builds a `.wav`, so it loads over the CMT jack):
-1. the A-major chord and each channel solo — **A must be LEFT, B CENTRE, C
-   RIGHT**. A swapped pan is the most likely wiring mistake and is obvious.
-2. noise, then the envelope sweep (it must fall audibly, not click).
-3. the Turbosound section — both chips together, and the primary audibly
-   dropping 6 dB when 2-chip mode engages (BkEmu's averaging, expected).
-4. **the speaker regression**: the BK beep must still work and still be clean
-   (static codes, so no shaping hiss), now ~11.8 dB quieter. This is the one
-   item that could send the gain budget back for revision — it is a deliberate
-   trade, but only a listen decides whether it was the right one.
-5. `pLed[1]`/`pLed[2]` (mixer saturated / DAC clipped) must stay DARK: the
-   budget says they cannot light, so if they do the arithmetic is wrong.
-6. a reset press must silence both chips at once (the nINIT path).
-Also still open: no real BK AY music has been played through it, and the
-directed program cannot exercise a real player's write patterns.
+**Phase 11 (Turbosound) is CONFIRMED ON HARDWARE 2026-07-31 — real
+AY/Turbosound demos play on the board.** That is the acceptance that matters
+most, and it is a broader test than `test/sndtestts.mac` could be: real
+software exercises the whole BkEmu protocol (the word/byte address-vs-data
+split, the 0xFF/0xFE chip select, the shared register pointer), the
+envelope and noise generators, and the /56 clock rate all at once — any of
+which being wrong would be immediately audible as wrong notes, wrong tempo or
+silence. So the protocol, the chip select, the clock and the mix are all good.
+Sim side: both oracles green with 15 mutations killed, all of `make sim` green
+with **every timing golden byte-identical** (`qbus_mem` took a comment edit
+only), and the STA chase closed structurally at +0.528 ns.
+
+**Not separately verified, and cheap to check with `test/sndtestts.mac`**
+(it builds a `.wav`, so it loads over the CMT jack) if any of it is ever in
+doubt: the pan ORIENTATION (A left / B centre / C right — a swap would sound
+fine on a demo, just mirrored), `pLed[4]`/`[3]` tracking activity and 2-chip
+mode, `pLed[1]`/`[2]` staying dark, and a reset press silencing both chips.
+**The speaker duck is the one open judgement**, not a correctness question:
+the BK beep is now ~11.8 dB quieter so the PSGs and the speaker can share the
+headroom, and whether that trade feels right in practice is a listening call.
+If it does not, the fix is `bk_audio`'s `SPK_LVL` — but keep it a multiple of
+1024 or the speaker stops being a static `audio_ns6` code, and redo the
+budget arithmetic in the slot-map comment with it.
 
 **Fidelity, measurable**
 - **The Phase-10 >6-bit audio resolution claim is CONFIRMED ON HARDWARE
