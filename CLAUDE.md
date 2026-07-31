@@ -9,8 +9,12 @@ alternative firmware on the 1chipMSX / OneChipBook board (Altera Cyclone I
 **EP1C12Q240C8**, Quartus II 11.0). The headline goal is **cycle-accurate** CPU
 behaviour.
 
-**Every phase is done and confirmed on hardware** — see README.md for the
-current result. This file is now the authoritative document: the per-topic
+**Phases 0–9 are done and confirmed on hardware; Phase 10 is functionally
+complete and hardware-confirmed but NOT yet marked done** — it still carries a
+debug feature (the DIP-5 self-test tone) that must be retired from the shipped
+build, and three of its four hardware acceptance recordings are uncollected. The
+completion checklist is under Open / deferred. See README.md for the current
+result. This file is now the authoritative document: the per-topic
 bullets below carry each finding in its most current form, and they, not this
 table, are the detail. (ROADMAP.md held the forward-looking plan and was folded
 in here once the last phase landed; `git show e85efbf:ROADMAP.md` has the full
@@ -29,7 +33,7 @@ phase-by-phase narrative if the history is ever wanted.)
 | **7** BK-0011M mode | DIP 1 model select, /24 CPU clock, 177716 banking mapper, 177662 video register, 50 Hz EVNT/IRQ2, СТОП-block, two-pass EPCS loader, authentic DRAM power-on pattern | ✅ HW 2026-07-16 (BOS boots; reset switches models) |
 | **8** SMK512 (DIP 8) | 512 KB segmented RAM, BIOS ROM + the SYS register-space boot overlay, IDE drive engine + tier-1 prefetch, SD/SPI backend — in **both** models | ✅ HW 2026-07-23 (BIOS boots an OS off SD) |
 | **9** Fidelity & polish | authentic EVNT/IRQ2 instant (`bk_evnt`); `N_EXT` calibrated against a real machine; `N_VREG` closed; palette sample instant; the **037 grant-rule fit** + `bk_rply` (the beam-race skew); **turbo mode** | ✅ HW 2026-07-26 (grant rule: Babylona/PALTST flat), 2026-07-29 (turbo) |
-| **10** Audio subsystem | `src/audio/`: N-slot stereo **mixer** + a noise-shaped 6-bit output stage (>6-bit audio-band resolution on the same ladders), **true stereo** with a CMT mono fold, the DIP-5 self-test tone, and the **177714 capture seam** for the sound devices. **Infra only — no new sound device** | sim ✅ (23 mutations); ✅ HW 2026-07-31 (the staircase measured off the jacks: −6.047 dB/step over 42 dB, max residual 0.19 dB, the three sub-ladder-step levels on the line) |
+| **10** Audio subsystem | `src/audio/`: N-slot stereo **mixer** + a noise-shaped 6-bit output stage (>6-bit audio-band resolution on the same ladders), **true stereo** with a CMT mono fold, the DIP-5 self-test tone, and the **177714 capture seam** for the sound devices. **Infra only — no new sound device** | 🚧 **IN PROGRESS** — sim ✅ (23 mutations); the resolution claim is ✅ HW 2026-07-31 (staircase off the jacks: −6.047 dB/step over 42 dB, max residual 0.19 dB, the three sub-ladder-step levels on the line) and the shipped bitstream boots, but the phase is **not done until the DIP-5 debug tone is out of the shipped build and the remaining acceptance recordings are collected** — checklist under Open / deferred |
 
 ## Platform & system map
 
@@ -1046,13 +1050,24 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
     omitting the ports is deliberate: it puts the seam where a device
     implementer looks, and keeps the map report free of four
     "dangling port" warnings.
-  * **Cost and timing (confirmed):** **6,979 → 7,356 LE (58 % → 61 %)**, +377,
+  * **Cost and timing (confirmed):** **6,979 → 7,357 LE (58 % → 61 %)**, +378,
     all of it mixer + shapers + tone; M4K unchanged at 3/52, pins unchanged at
-    98/173, no new PLL. **sys_clk setup +0.313 → +0.260 ns, TNS 0, zero
-    negative paths — no STA chase was needed**, which is unusual for this design
-    at 61 % LE and is down to every stage being one carry chain deep and every
-    pad being driven from a flop. `TONE_ENABLE = 0` on `bk_audio` reclaims
-    ~130 LE if a later increment needs them.
+    98/173, no new PLL. **No STA chase was needed for the audio work itself** —
+    unusual for this design at 61 % LE, and down to every stage being one carry
+    chain deep and every pad being driven from a flop. `TONE_ENABLE = 0` on
+    `bk_audio` reclaims ~130 LE if a later increment needs them.
+    ⚠️ **But the shipped bitstream's sys_clk margin is THIN: +0.034 ns**
+    (TNS 0, zero negative paths; boot-confirmed on hardware 2026-07-31, so it
+    is real margin, not a near-miss). The intermediate build measured +0.260,
+    and the *only* RTL delta between them was the one-constant `STEP_B` fix in
+    `audio_tone` (+1 LE) — i.e. **this is the placement fragility this file
+    documents elsewhere, not an audio-path cost**, the same shape as the +19 LE
+    that once took an untouched module +0.481 → −0.414. The worst path is
+    `mem_mapper|rom7_en → cpu_sdram_dp|wdata_o[11]`, with `model_bk11` and
+    `mon_en` right behind it into the same `wdata_o`/`addr_o` endpoints: the
+    mapper-translate-into-datapath cone, already this design's chronic one.
+    **Budget for an STA chase on the next increment, and do not chase margin by
+    changing SEED 3** (see `ocbk.qsf`'s header and the SDC-exception rule).
 - Cartridge-slot Q-bus is a **forward seam**: `src/bus/qbus_slot.sv`, default
   `SLOT_ENABLE=0` (drives nothing, slot pins stay reserved-tristated). The full
   slot pin map lives commented in `ocbk_common.qsf`. Real BK hardware needs an
@@ -2011,6 +2026,48 @@ golden checks *timing*, not write data — only the SDRAM/video cosims verify va
 
 Nothing here blocks anything; each item has its detail in the bullet named.
 Roughly in order of how much they'd be missed.
+
+**Phase 10 completion checklist (the phase stays 🚧 until all of it is done)**
+
+Ordered, because the steps constrain each other. The rule this encodes:
+**a debug feature does not ship to end users**, and — since the repo went public
+2026-07-31 — `main` only takes a feature when it is shippable.
+
+1. **Collect acceptance recordings (3) silence and (4) CMT** on the CURRENT
+   firmware. Both work with what is already flashed. (4) is the one that
+   matters most: it is a regression check on an ALREADY-SHIPPED feature, and
+   Phase 10 changed what the left ladder does in CMT mode (it now carries the
+   L+R mono fold where it used to sit at a quasi-static level).
+2. **Do the sweep, acceptance item (2)** — and note it needs a **temporary
+   bring-up build**: DIP 5 plays a FIXED 440 Hz, so a 100 Hz → 100 kHz sweep
+   means modifying `audio_tone`'s voice A. Do it while the tone infrastructure
+   is still live and easy to change. It measures the analog RC corner (the one
+   thing that would justify moving `RATE_DIV` off 16) AND resolves the
+   voice-A excess-3rd-harmonic anomaly recorded in the analog-stage bullet.
+3. **Retire the tone from the shipped build: set `TONE_ENABLE = 0`** on the
+   `bk_audio` instance in `ocbk_top`. **Do NOT delete `audio_tone.sv`.** The
+   parameter already gates the whole generator in a generate block
+   (`bk_audio.sv:60`), tying `dbg_tone`/`tone_live` to 0 — so this removes the
+   user-visible behaviour, frees DIP 5, and reclaims ~130 LE while keeping the
+   module, its oracle leg and the ability to rebuild a diagnostic firmware.
+   That ability is load-bearing and permanent: **the BK speaker maps to the
+   rails and emits a STATIC code with no shaping activity**, so the tone is the
+   only stimulus that can exercise this feature on hardware at all — there is
+   nothing else to test with when the first 177714 device lands, or after a
+   fitter re-place moves timing. Deleting the module buys nothing and is the
+   irreversible version.
+   **Keep `pLed[1]`/`[2]`** (the sticky mixer-saturated / quantizer-clipped
+   flags): they are NOT debug — README documents them as user-facing, and the
+   gain budget is genuinely unsolved until a sound device lands. Retire only
+   `pLed[3]`, which goes with DIP 5.
+4. **Update the user-facing docs in the same commit**: README's "Audio
+   self-test" section and its DIP-5 table row both describe the tone as a
+   feature.
+5. **Rebuild, re-run STA, and boot-test.** Mandatory, not a formality: removing
+   ~130 LE re-places the fitter, and this design is placement-fragile (the
+   shipped bitstream's sys_clk margin is +0.034 ns — see the audio cost/timing
+   bullet). Slack can move either way.
+6. **Then merge the branch to `main`** and flip the phase table row to ✅.
 
 **Fidelity, measurable**
 - **The Phase-10 >6-bit audio resolution claim is CONFIRMED ON HARDWARE
