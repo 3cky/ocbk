@@ -4,9 +4,9 @@
 // ----------------------------------------------------------------------------
 //  Four instances, each pinning a different part of the contract:
 //
-//    dut3   NSRC=5, the SHIPPED config (spk BOTH, tone A BOTH, tone B R-only,
-//           Turbosound L L-only, Turbosound R R-only)
-//           -> enable, pan, saturation, dbg_sat, exact latency
+//    dut3   NSRC=7, the SHIPPED config (spk BOTH, tone A BOTH, tone B R-only,
+//           TurboSound L/R hard-panned, Covox L/R hard-panned at 5/8)
+//           -> enable, pan, the non-unity gain, saturation, dbg_sat, latency
 //    dutg   NSRC=6, gains {8,4,6,3,1,7} all BOTH
 //           -> the g/8 gain law against an INDEPENDENTLY WRITTEN reference
 //    dut1   NSRC=1, gain 8, pan BOTH
@@ -70,49 +70,77 @@ module audio_mixer_tb;
     // ========================================================================
     //  dut3 - the shipped config. MUST TRACK bk_audio.sv's SLOT_GAIN/SLOT_PAN:
     //  slot 0 speaker BOTH, 1 tone A BOTH, 2 tone B R-only, 3 Turbosound L
-    //  L-only, 4 Turbosound R R-only.
+    //  L-only, 4 Turbosound R R-only, 5 Covox L L-only, 6 Covox R R-only.
+    //  The Covox pair is the only one that is not at unity gain: it carries
+    //  BkEmu's raw +/-32767 map and 5/8 is what fits it under the speaker.
     // ========================================================================
-    logic [79:0] src3;
-    logic [4:0]  en3;
+    logic [111:0] src3;
+    logic [6:0]   en3;
     logic signed [15:0] l3, r3;
     logic sat3;
 
     audio_mixer #(
-        .NSRC (5), .SW (16), .FS_SAT (FS),
-        .GAIN8 (20'h88888),          // all slots at 8/8
-        //      slot   4  3  2  1  0
-        .PAN   (10'b01_10_01_11_11)
+        .NSRC (7), .SW (16), .FS_SAT (FS),
+        //       slot  6 5 4 3 2 1 0
+        .GAIN8 (28'h5_5_8_8_8_8_8),
+        //      slot   6  5  4  3  2  1  0
+        .PAN   (14'b01_10_01_10_01_11_11)
     ) dut3 (
         .sys_clk (sys_clk), .rst_n (rst_n),
         .src (src3), .src_en (en3),
         .mix_l (l3), .mix_r (r3), .dbg_sat (sat3)
     );
 
-    // The 3-slot helper: drives the speaker and tone slots and holds the two
-    // Turbosound slots at zero AND disabled, so every check written against
-    // the pre-Turbosound slot map still means exactly what it did.
+    // The 3-slot helper: drives the speaker and tone slots and holds the four
+    // device slots at zero AND disabled, so every check written against the
+    // pre-Turbosound slot map still means exactly what it did. Every later
+    // device extends this file the same way - zero-pad and disable, never
+    // rewrite the older expectations.
     task set3(input integer s0, input integer s1, input integer s2, input [2:0] en);
         begin
-            src3[15:0]  = s0[15:0];
-            src3[31:16] = s1[15:0];
-            src3[47:32] = s2[15:0];
-            src3[63:48] = 16'sd0;
-            src3[79:64] = 16'sd0;
+            src3[15:0]   = s0[15:0];
+            src3[31:16]  = s1[15:0];
+            src3[47:32]  = s2[15:0];
+            src3[63:48]  = 16'sd0;
+            src3[79:64]  = 16'sd0;
+            src3[95:80]  = 16'sd0;
+            src3[111:96] = 16'sd0;
+            en3 = {4'b0000, en};
+            repeat (4) @(posedge sys_clk);
+            #1;
+        end
+    endtask
+
+    // The 5-slot helper, for the Turbosound pan checks: the Covox slots stay
+    // zero and disabled.
+    task set5(input integer s0, input integer s1, input integer s2,
+              input integer s3, input integer s4, input [4:0] en);
+        begin
+            src3[15:0]   = s0[15:0];
+            src3[31:16]  = s1[15:0];
+            src3[47:32]  = s2[15:0];
+            src3[63:48]  = s3[15:0];
+            src3[79:64]  = s4[15:0];
+            src3[95:80]  = 16'sd0;
+            src3[111:96] = 16'sd0;
             en3 = {2'b00, en};
             repeat (4) @(posedge sys_clk);
             #1;
         end
     endtask
 
-    // The full 5-slot helper, for the Turbosound pan checks.
-    task set5(input integer s0, input integer s1, input integer s2,
-              input integer s3, input integer s4, input [4:0] en);
+    // The full 7-slot helper, for the Covox pan and gain checks.
+    task set7(input integer s0, input integer s1, input integer s2,
+              input integer s3, input integer s4,
+              input integer s5, input integer s6, input [6:0] en);
         begin
-            src3[15:0]  = s0[15:0];
-            src3[31:16] = s1[15:0];
-            src3[47:32] = s2[15:0];
-            src3[63:48] = s3[15:0];
-            src3[79:64] = s4[15:0];
+            src3[15:0]   = s0[15:0];
+            src3[31:16]  = s1[15:0];
+            src3[47:32]  = s2[15:0];
+            src3[63:48]  = s3[15:0];
+            src3[79:64]  = s4[15:0];
+            src3[95:80]  = s5[15:0];
+            src3[111:96] = s6[15:0];
             en3 = en;
             repeat (4) @(posedge sys_clk);
             #1;
@@ -163,12 +191,16 @@ module audio_mixer_tb;
     logic signed [15:0] l10, r10;
     logic sat10;
 
-    // 0 spk BOTH | 1 toneA BOTH | 2 toneB R | 3 AY-A L | 4 AY-B BOTH
-    // 5 AY-C R   | 6 CovoxL L   | 7 CovoxR R| 8 MenL L | 9 MenR R
+    // The REAL endgame map, not the one this file used to carry: Phase 11
+    // replaced the six-slot AY plan with a two-slot ACB pack folded inside
+    // bk_turbosound, and Phase 12 put the Covox at 5/6.
+    //   0 spk BOTH | 1 toneA BOTH | 2 toneB R  | 3 TS-L L  | 4 TS-R R
+    //   5 CovoxL L | 6 CovoxR R   | 7 MenL L   | 8 MenR R  | 9 spare BOTH
     audio_mixer #(
         .NSRC (10), .SW (16), .FS_SAT (FS),
         .GAIN8 (40'h8888888888),
-        .PAN   (20'b01_10_01_10_01_11_10_01_11_11)
+        //      slot   9  8  7  6  5  4  3  2  1  0
+        .PAN   (20'b11_01_10_01_10_01_10_01_11_11)
     ) dut10 (
         .sys_clk (sys_clk), .rst_n (rst_n),
         .src (src10), .src_en (en10),
@@ -182,7 +214,7 @@ module audio_mixer_tb;
     initial begin
         gtab[0]=8; gtab[1]=4; gtab[2]=6; gtab[3]=3; gtab[4]=1; gtab[5]=7;
 
-        src3 = 80'h0; en3 = 5'b11111;
+        src3 = 112'h0; en3 = 7'b1111111;
         srcg = 96'h0; eng = 6'b111111;
         src1 = 16'h0; en1 = 1'b1;
         src10 = 160'h0; en10 = 10'h3FF;
@@ -216,6 +248,16 @@ module audio_mixer_tb;
         set5(0, 0, 0, 4000, 6000, 5'b11000);
         expect2(l3, r3, 4000, 6000, "pan Turbosound pair, no crosstalk");
 
+        // The Covox pair: slot 5 L-only, slot 6 R-only, AND at 5/8 rather
+        // than unity. 8192*5/8 = 5120 exactly, so the gain is checked as an
+        // exact value here rather than inferred.
+        set7(0, 0, 0, 0, 0, 8192, 0, 7'b0100000);
+        expect2(l3, r3, 5120, 0, "pan slot5 Covox-L is L-only at 5/8");
+        set7(0, 0, 0, 0, 0, 0, 8192, 7'b1000000);
+        expect2(l3, r3, 0, 5120, "pan slot6 Covox-R is R-only at 5/8");
+        set7(0, 0, 0, 0, 0, 16384, 8192, 7'b1100000);
+        expect2(l3, r3, 10240, 5120, "pan Covox pair, no crosstalk");
+
         // The shipped worst case, exactly as bk_audio's gain budget computes
         // it: the ducked speaker at +8192 on BOTH plus the Turbosound bound of
         // 22950 on one side = 31142, which must pass through UNSATURATED
@@ -224,6 +266,23 @@ module audio_mixer_tb;
         expect2(l3, r3, 31142, 31142, "shipped worst case is inside FS_SAT");
         if (sat3 !== 1'b0) begin
             $display("AUDIO-ERROR the shipped gain budget saturated the mixer");
+            errors = errors + 1;
+        end
+
+        // The OTHER shipped worst case, the one the Covox increment added:
+        // the speaker plus the Covox at its own bound. 32767*5/8 = 20479
+        // (the >>>3 truncates), + 8192 = 28671, also inside FS_SAT.
+        //
+        // The third combination - Turbosound AND Covox at once - is NOT
+        // tested because it CANNOT HAPPEN: bk_covox mutes itself whenever
+        // bk_turbosound is emitting a non-zero sample, and that exclusion is
+        // what keeps the budget closed. Saying so here rather than quietly
+        // omitting the case: if the mute is ever removed, this file needs a
+        // saturation test, not a bigger FS_SAT.
+        set7(8192, 0, 0, 0, 0, 32767, 32767, 7'b1100001);
+        expect2(l3, r3, 28671, 28671, "speaker + Covox bound is inside FS_SAT");
+        if (sat3 !== 1'b0) begin
+            $display("AUDIO-ERROR the Covox gain budget saturated the mixer");
             errors = errors + 1;
         end
 
@@ -346,9 +405,9 @@ module audio_mixer_tb;
             en10  = 10'h3FF;
             repeat (4) @(posedge sys_clk); #1;
             case (i)
-                0, 1, 4: begin expl = 1000; expr = 1000; end   // BOTH
-                3, 6, 8: begin expl = 1000; expr =    0; end   // L only
-                default: begin expl =    0; expr = 1000; end   // 2,5,7,9 R only
+                0, 1, 9: begin expl = 1000; expr = 1000; end   // BOTH
+                3, 5, 7: begin expl = 1000; expr =    0; end   // L only
+                default: begin expl =    0; expr = 1000; end   // 2,4,6,8 R only
             endcase
             if (l10 !== expl || r10 !== expr) begin
                 $display("AUDIO-ERROR NSRC=10 slot%0d: got l=%0d r=%0d expected l=%0d r=%0d",
@@ -361,7 +420,7 @@ module audio_mixer_tb;
         repeat (4) @(posedge sys_clk); #1;
         expect2(l10, r10, 6000, 7000, "NSRC=10 all slots live");
         // and a disabled subset still contributes exactly zero
-        en10 = 10'b00_00_01_00_11;   // slots 0,1,4 -> 3 BOTH only
+        en10 = 10'b10_00_00_00_11;   // slots 0,1,9 -> the 3 BOTH slots only
         repeat (4) @(posedge sys_clk); #1;
         expect2(l10, r10, 3000, 3000, "NSRC=10 enable subset");
 

@@ -10,7 +10,10 @@
 #                      confirmed behaviour this rework must not regress), the CMT
 #                      oe split / comparator network / anti-echo force / raw
 #                      tape-out, true stereo, the CMT mono fold, tone routing,
-#                      the 6 dB staircase, and DAC-tick discipline at the pads.
+#                      the 6 dB staircase, DAC-tick discipline at the pads, and
+#                      the device slot maps - the TurboSound and Covox pan
+#                      orientations, the Covox 5/8 gain and its mute enable,
+#                      and the re-opened gain budget.
 #   2  spk_capture_tb  directed Q-bus cycles into the REAL qbus_mem: the
 #                      177716 bit-6/7 speaker+motor captures, the 177716 read
 #                      assembly, and the 177714 (nSEL2) port-write capture.
@@ -29,7 +32,9 @@
 #           --long only tightens the relative demonstration.
 # --mutate  rewrites one property of a COPY of the real RTL (the sim/evnt idiom -
 #           no inline replica to drift) and requires the oracle to break. Each
-#           mutation names the leg that must catch it.
+#           mutation names the leg that must catch it. 28 mutations: N1-N7 on
+#           the shaper, M1-M7 on the mixer, O1-O4 on the output stage, A1-A5
+#           on bk_audio's slot map and Q1-Q5 on the qbus_mem capture seam.
 #
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -193,10 +198,27 @@ if [ "$MODE" = "--mutate" ]; then
    # audio_mixer_tb proves slot 3 is L-only and slot 4 R-only, but only
    # bk_audio_tb's pan section proves ts_l is packed into slot 3. Swapped, the
    # board plays the stereo image MIRRORED and every other oracle still passes.
-   mut_aud A1 's|slot_src = {ts_r, ts_l, voice_b, voice_a, spk_sample}|slot_src = {ts_l, ts_r, voice_b, voice_a, spk_sample}|'
+   mut_aud A1 's|slot_src = {cx_r, cx_l, ts_r, ts_l,|slot_src = {cx_r, cx_l, ts_l, ts_r,|'
    # A2: the speaker rail off a 1024 multiple - it stops being an audio_ns6
    # fixed point and the ladder codes start rattling on a static input.
    mut_aud A2 's|SPK_LVL = 16.sd8192;|SPK_LVL = 16'"'"'sd7936;|'
+
+   # A3: the COVOX pair swapped in the pack - the A1 argument again, one
+   # device later. bk_covox_tb proves the low byte lands in cx_l and
+   # audio_mixer_tb proves slot 5 is L-only, but only bk_audio_tb's covox
+   # section proves cx_l is packed into slot 5. Swapped, the board plays the
+   # Covox stereo image MIRRORED and every other oracle still passes.
+   mut_aud A3 's|slot_src = {cx_r, cx_l, ts_r, ts_l,|slot_src = {cx_l, cx_r, ts_r, ts_l,|'
+   # A4: cx_en ignored in the slot enable. That enable is bk_covox's ONLY mute
+   # mechanism (the device keeps presenting its sample while muted - one gate,
+   # not two), so without it the PSG arbitration silently does nothing at all
+   # and the never-reset 177714 latch reaches the ladders.
+   mut_aud A4 's|slot_en  = {cx_en & ~tone_live, cx_en & ~tone_live,|slot_en  = {~tone_live, ~tone_live,|'
+   # A5: the Covox slot gain raised from 5/8 to 6/8. That is the largest
+   # plausible wrong value and it BREAKS THE HEADROOM PROOF: 32768*6/8 = 24576
+   # and 24576 + 8192 = 32768 > FS_SAT. Caught twice over - the covox pan
+   # section's exact codes and the budget section's dbg_sat.
+   mut_aud A5 's|SLOT_GAIN = 28.h5_5_8_8_8_8_8;|SLOT_GAIN = 28'"'"'h6_6_8_8_8_8_8;|'
 
    # ---- qbus_mem: the 177714 capture seam --------------------------------
    # Q1 WTBT taken from SYNC time instead of live at DOUT. At SYNC it is

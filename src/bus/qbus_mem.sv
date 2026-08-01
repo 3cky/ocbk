@@ -35,7 +35,10 @@
 //   177716 = SYS_START | bit-2 write-flag (set on write, cleared after read;
 //            INIT-keyed, as every BK peripheral register) | bit-6 = any-key-
 //            down from the keyboard translator, ACTIVE LOW (1 = no key held);
-//   177714 = reply, read 0, writes ignored (Covox/joystick/AY not modelled).
+//   177714 = reply, read 0; writes are CAPTURED (see the port_wr seam below)
+//            and consumed by the sound devices - bk_turbosound and bk_covox -
+//            which are ocbk_top siblings, not part of this module. The read
+//            side is still unmodelled: both devices are write-only.
 // nSEL covers BOTH bytes of its register (the CPU decodes addr[3:1]), so odd-
 // byte accesses (177715/177717) are served with the full register word too.
 // Exception: in BK-0011M mode a WRITE to 177662 (video page/palette
@@ -870,16 +873,21 @@ module qbus_mem #(
     // NEVER RUNTIME-RESET - the spk/mot class, not a new nINIT exception. A real
     // Covox is a passive resistor DAC hanging off the port latch with no reset
     // pin at all. Device-internal state (the PSG registers, the TurboSound
-    // chip-select latch) keys to init_n inside the DEVICE, per the standard BK
-    // peripheral-reset rule - see bk_turbosound.sv, which does exactly that.
+    // chip-select latch, the Covox mute one-shots) keys to init_n inside the
+    // DEVICE, per the standard BK peripheral-reset rule - see bk_turbosound.sv
+    // and bk_covox.sv, which both do exactly that. bk_covox depends on this
+    // latch NOT being reset in the other direction too: it is what makes the
+    // power-on value (0, i.e. an inverted 0xFF = full scale) real, and the
+    // reason that device carries an idle one-shot at all.
     //
     // No bank_wr gate is needed (bank_wr requires !sel1_n, so it can never
     // assert on a 177714 write) and no smk_en gate either (under SMK SYS a
     // 177714 write also broadcast-posts to SMK RAM; the device seeing it too is
     // BkEmu's memory-then-device order).
     //
-    // The READ side is deliberately NOT merged here: Covox is write-only and
-    // nothing yet establishes that an AY read is needed, while a read merge
+    // The READ side is deliberately NOT merged here: both shipped devices are
+    // write-only (bk_covox never reads; bk_turbosound leaves the core's DO
+    // unconnected), while a read merge
     // would reach into the reply/OE cone that this write capture carefully
     // avoids. If a device ever needs it, follow the ide_rdata pattern exactly.
     wire port_dout = !sync_n && !dout_n && !sel2_n;

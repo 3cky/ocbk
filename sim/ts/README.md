@@ -176,3 +176,31 @@ BkEmu's actual model (**one** shared `currentRegister` field, not one per
 chip), and the redundancy that makes it unobservable depends on `0xFF` being
 the only way back, which is a fragile thing to rely on. Section 6b pins the
 pointer clobber, which is the observable half of the same behaviour.
+
+---
+
+## `ts_snd` — the Covox arbitration hook (Phase 12)
+
+`bk_covox` decodes the same 0177714 address, so with both present each renders
+the other's traffic as garbage. The PSGs win, and `ts_snd` is what tells the
+Covox to stand down: `|lsum | |rsum`, i.e. "the sample the fold is about to
+present is non-zero".
+
+Two things about it are pinned in leg 2, and both are easy to get wrong:
+
+* **It must LEAD `ts_l`/`ts_r` by exactly one cycle.** It is taken before the
+  ×15 stage on purpose, so the mute is already asserted on the cycle the PSG
+  output first becomes non-zero and the two devices can never both reach the
+  mixer's stage 0. The tb samples `ts_snd` one edge and compares it against
+  `ts_l`/`ts_r` the next — that is the check, not an off-by-one.
+* **It is not `ts_act`.** `ts_act` is `~R7[5:0]`, the channel-*enable* bits. A
+  channel with tone AND noise disabled passes its volume register through as
+  DC (that is how AY "digi" playback works), so `ts_act = 0` does not imply
+  silence; and a player that exits leaving channels enabled at volume 0 would
+  mute the Covox until the next reset. `ts_act` keeps its own job on `pLed[4]`.
+
+The reset edges are excluded from the comparison, and that exclusion is real
+behaviour rather than a fudge: `reset` clears `ts_l` and the fold registers on
+the same edge, so for one cycle the pre-edge `lsum` is still the old non-zero
+value. Asserting the mute one cycle early on the way into a reset is the safe
+direction. Mutation **D13** ties `ts_snd` low.

@@ -45,7 +45,7 @@ module bk_turbosound_tb;
    reg  [1:0]  port_be   = 2'b00;
 
    wire signed [15:0] ts_l, ts_r;
-   wire               ts_act, dual_act;
+   wire               ts_act, dual_act, ts_snd;
 
    integer errors = 0;
 
@@ -62,8 +62,36 @@ module bk_turbosound_tb;
       .ts_l      (ts_l),
       .ts_r      (ts_r),
       .ts_act    (ts_act),
-      .dual_act  (dual_act)
+      .dual_act  (dual_act),
+      .ts_snd    (ts_snd)
    );
+
+   // ---- ts_snd: the Covox arbitration hook --------------------------------
+   // Contract: ts_snd is high exactly when the sample the fold is ABOUT to
+   // present is non-zero, i.e. it leads ts_l/ts_r by one cycle. That lead is
+   // the whole point - it is what stops bk_covox and the PSGs both reaching
+   // the mixer's stage 0 on the same edge - and only this comparison can see
+   // it. Sampling ts_snd one edge and comparing against ts_l/ts_r the next is
+   // therefore the check, not an off-by-one.
+   //
+   // The RESET edges are skipped, and that exclusion is real behaviour rather
+   // than a fudge: `reset` clears ts_l and the fold registers on the SAME
+   // edge, so for exactly one cycle the pre-edge lsum is still the old
+   // non-zero value while ts_l has already gone to 0. Asserting the mute one
+   // cycle early on the way into a reset is harmless - it is the safe
+   // direction - and not worth logic to avoid.
+   reg     snd_d  = 1'b0;
+   reg     rst_q0 = 1'b1, rst_q1 = 1'b1;
+   integer snd_bad = 0, snd_hi = 0;
+   always @(posedge sys_clk) begin
+      if (rst_n && !dut.reset && !rst_q0 && !rst_q1) begin
+         if (snd_d !== ((ts_l != 0) || (ts_r != 0))) snd_bad = snd_bad + 1;
+         if (ts_snd) snd_hi = snd_hi + 1;
+      end
+      snd_d  <= ts_snd;
+      rst_q0 <= dut.reset;
+      rst_q1 <= rst_q0;
+   end
 
    // ---- headroom watchdog: runs for the WHOLE simulation ------------------
    integer peak_l = 0, peak_r = 0;
@@ -377,8 +405,20 @@ module bk_turbosound_tb;
          errors = errors + 1;
       end
 
-      $display("TSDEV: %0d CE pulses at /%0d, peak l/r = %0d/%0d",
-               ce_seen, CE_DIV_EXPECT, peak_l, peak_r);
+      // ================= 10. ts_snd (the Covox mute source) ===============
+      if (snd_bad != 0) begin
+         $display("TS-ERROR ts_snd disagreed with the fold on %0d cycles", snd_bad);
+         errors = errors + 1;
+      end
+      // Anti-vacuity: a tied-low ts_snd would make snd_bad non-zero only while
+      // the chips are actually sounding, so require that they did.
+      if (snd_hi < 100) begin
+         $display("TS-ERROR ts_snd never asserted (%0d cycles high)", snd_hi);
+         errors = errors + 1;
+      end
+
+      $display("TSDEV: %0d CE pulses at /%0d, peak l/r = %0d/%0d, ts_snd high %0d cyc",
+               ce_seen, CE_DIV_EXPECT, peak_l, peak_r, snd_hi);
 
       if (errors == 0) $display("COSIM PASS");
       else             $display("COSIM FAIL (%0d errors)", errors);

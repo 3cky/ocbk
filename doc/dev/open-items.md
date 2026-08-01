@@ -48,6 +48,21 @@ budget arithmetic in `bk_audio`'s slot-map comment — at 12288 the sum would be
 35238 and the mixer WOULD saturate, so the TurboSound scale would have to drop
 from x15 to x12 to pay for it.
 
+**The margin, before anything else**
+- **sys_clk setup is +0.102 ns, TNS 0 — met, but thin**, and that is where
+  Phase 12 left it. The Covox's own STA chase was found and cured structurally
+  (see the audio file), so the new logic is off the critical path entirely;
+  what remains is the chronic pre-existing cone that +268 LE re-placed —
+  `ram_init|filling → sdram_arbiter|cmd_addr[*]` at +0.102, with
+  `mem_mapper|mon_en → cpu_sdram_dp|addr_o[*]` at +0.148 right behind it. Both
+  stood at +0.528 before this increment and neither was touched by it.
+  **The next increment starts here.** The documented cure is to re-register
+  the quasi-static high-fanout selector (`fill_active`) locally — but note it
+  shifts the port-0 handover by a cycle, so it needs `sim/raminit` re-run and
+  a boot check, not a drive-by edit. **Never an SDC exception, never SEED 3**,
+  and re-run a hardware boot: this design has been STA-clean and non-booting
+  once before.
+
 **Fidelity, measurable**
 - **The Phase-10 >6-bit audio resolution claim is CONFIRMED ON HARDWARE
   2026-07-31 — recipe item (1) of four is done; (2), (3), (4) are still open.**
@@ -154,27 +169,47 @@ from x15 to x12 to pay for it.
   512 KB segment is left zero-filled.
 
 **Peripherals / features not built**
-- **Covox and Menestrel are still NOT built** (the third 177714 device,
-  **TurboSound**, landed in Phase 11 — see its bullet). Both decode the SAME
-  address (BkEmu `REG_SEL2` = 0177714) and differ only in how they read the
-  data, so `qbus_mem`'s `port_wr`/`port_data`/`port_word`/`port_be` capture is
-  already there, already oracle-pinned, and already has a consumer to copy.
-  They belong in **`src/audio/`** (`bk_covox.sv`, `bk_menestrel.sv`) next to
-  `bk_turbosound.sv`. Planned arbitration (settled): the PSGs are always live;
-  Covox and Menestrel get cycled by a PS/2 radial-toggle key (the
-  `key_scrmode`/`key_turbo` pattern). **They must re-open the gain budget**:
-  Phase 11 spent it on the speaker (ducked to ±8192) and the TurboSound
-  (0..22950), which together already reach 31142 of the 31744 available, so
-  there is essentially NO headroom left. Adding a third source means lowering
-  one of the two existing gains — a per-device loudness decision, and the
-  arithmetic in `bk_audio`'s slot-map comment has to be redone with it.
+- **Menestrel is still NOT built** (Covox landed in Phase 12, TurboSound in
+  Phase 11 — see their bullets). It decodes the SAME address (BkEmu
+  `REG_SEL2` = 0177714) and differs only in how it reads the data — by its pin
+  field — so `qbus_mem`'s `port_wr`/`port_data`/`port_word`/`port_be` capture
+  is already there, already oracle-pinned, and now has TWO consumers to copy.
+  It belongs in **`src/audio/`** (`bk_menestrel.sv`). **It must re-open the
+  gain budget**, and it cannot expect the free ride Covox got: Phase 11 spent
+  the budget on the speaker (±8192) and the TurboSound (0..22950), and Phase 12
+  added the Covox (±20480) **without cost only because Covox and the PSGs are
+  mutually exclusive** — the Covox mutes itself on `ts_snd`. A third device
+  either does the same (mutes on `ts_snd` *and* on the Covox being live) or
+  forces a real gain reduction somewhere. The arithmetic in `bk_audio`'s
+  slot-map comment has to be redone with it either way.
+  **The arbitration decision recorded here through Phase 11 was REPLACED, not
+  just implemented.** This bullet used to read "the PSGs are always live;
+  Covox and Menestrel get cycled by a PS/2 radial-toggle key". Phase 12 chose
+  an AUTOMATIC mute instead — the Covox stands down whenever the PSGs are
+  emitting a non-zero sample — plus DIP 5 for mono/stereo. A key toggle would
+  have been one more piece of hidden state for a user to get wrong, where the
+  automatic rule needs no explanation and no UI, and the residual case (an AY
+  setup phase, before any channel sounds, rendered as a ~100 µs click) is
+  bounded and documented in the audio file.
+- **A Covox artifact that is accepted rather than fixed**, recorded so it is
+  not rediscovered as a bug: the start of a TurboSound program clicks faintly,
+  because an AY setup writes registers before any channel sounds and the Covox
+  is still live for that window. Every alternative discriminator collides with
+  stereo Covox, which uses word writes exactly as the AY register latch does.
+  If it ever proves audible, the escape hatch is MiSTer's (a hard
+  user-selected mode), never a heuristic. Two more known limits of the same
+  design: a player that exits leaving PSG channels enabled at volume 0 keeps
+  the Covox muted until the next reset instruction or reset press, and a
+  mono-only Covox program run with DIP 5 OFF leaves the right channel on the
+  stale high lane.
 - **The 177714 READ merge is not implemented.** The Phase-10 seam captures
   WRITES only, deliberately: a write capture is provably reply-inert (177714
   already replies via `sel_io`), while a read merge reaches into the reply/OE
   cone that this change carefully avoids. Covox is write-only, and BkEmu's
-  `Ay8910` does not override `read` either (it returns 0), so Phase 11 did not
-  need one — `bk_turbosound` leaves the core's `DO` unconnected. If a read is
-  ever wanted, follow the `ide_rdata` pattern exactly.
+  `Ay8910` does not override `read` either (it returns 0), so neither Phase 11
+  nor Phase 12 needed one — `bk_turbosound` leaves the core's `DO`
+  unconnected and `bk_covox` never reads at all. If a read is ever wanted,
+  follow the `ide_rdata` pattern exactly.
 - **Tape-out is single-bit.** A real BK mixes write bits 6+5 resistively into a
   3-level record waveform; bit 6 alone (the dominant component) is shipped. See
   the tape bullet. **Phase 10 deliberately did NOT change this** — tape-out is a

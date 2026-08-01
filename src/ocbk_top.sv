@@ -69,10 +69,11 @@
 // reset). DIP 8 = SMK512 enable, same DCLO-hold latch - in BOTH models (the SMK
 // is an МПИ expansion board), and DIP-8-ON boots the SMK BIOS either way.
 // DIP 4 = CMT tape-in mode (read LIVE, no reset needed - it never touches the
-// CPU). DIP 2 and DIP 5 are unused; DIP 5 drove the audio self-test tone,
-// retired from the shipped build in 2026-07-31 once the resolution claim it
-// existed to demonstrate had been measured on hardware (a debug feature does
-// not ship). The wiring is still here - see the tone_en note below.
+// CPU). DIP 5 = Covox mono/stereo (OFF = stereo, ON = mono), read live for the
+// same reason; it drove the audio self-test tone until that was retired from
+// the shipped build on 2026-07-31, once the resolution claim it existed to
+// demonstrate had been measured on hardware (a debug feature does not ship) -
+// the tone wiring is still here, see the tone_en note below. DIP 2 is unused.
 //
 // screen_mode (mono-512 vs colour-256) models the physical monitor-cable switch
 // of a real BK-0010, toggled by the PS/2 Print Screen key (each press
@@ -90,8 +91,10 @@
 //                    cycle-stealing disabled).
 //   pLed[2]        : a DAC quantizer clipped (sticky; should never light).
 //   pLed[1]        : the audio mixer saturated (sticky; should never light).
-//   pLed[4], [3]   : unused (0); [3] was the self-test indicator, retired
-//                    with DIP 5.
+//   pLed[4]        : TurboSound PSG activity (a tone or noise channel is
+//                    enabled on a live chip).
+//   pLed[3]        : TurboSound 2-chip mode engaged; it was the self-test
+//                    indicator until DIP 5 was retired and reused.
 module ocbk_top (
     input  logic        pClk21m,   // 21.47727 MHz crystal (PIN_28)
     output logic [7:0]  pLed,      // green LEDs   (1 = on)
@@ -100,9 +103,9 @@ module ocbk_top (
                                    //   [0] = model select (OFF = BK-0010,
                                    //         ON = BK-0011M)
                                    //   [3] = CMT tape-in mode (read live)
+                                   //   [4] = Covox mono (read live; ON = mono)
                                    //   [7] = SMK512 enable
-                                   //   [1], [2], [4], [5], [6] = unused
-                                   //         ([4] drove the retired self-test)
+                                   //   [1], [2], [5], [6] = unused
     input  logic        pSltRst_n, // reset button (slot RESET net; low = pressed)
 
     // ---- PS/2 keyboard (receive-only; pins pulled up, driven Z) ----------
@@ -323,6 +326,33 @@ module ocbk_top (
     logic [1:0] tone_sr;
     always_ff @(posedge sys_clk) tone_sr <= {tone_sr[0], ~pDip[4]};
     wire tone_en = tone_sr[1];
+
+    // --- cx_mono: DIP 5 again, its SHIPPED meaning since Phase 12 - the
+    //     Covox mono/stereo switch (OFF = stereo, ON = mono, i.e. the right
+    //     channel takes the left byte). Same live 2-FF resync and for the same
+    //     reason: the Covox never touches the CPU, so flipping it needs no
+    //     reset.
+    //
+    //     A SEPARATE NAME rather than reusing tone_en, deliberately. The two
+    //     are mutually exclusive by BUILD CONFIGURATION, not by wiring: at the
+    //     shipped TONE_ENABLE = 0 the fitter strips tone_en entirely and this
+    //     pin is the Covox's alone, while a TONE_ENABLE = 1 diagnostic build
+    //     gets the self-test AND forces Covox mono - harmless, because the
+    //     tone mutes the Covox slots anyway (see bk_audio's slot_en). Sharing
+    //     one wire would have hidden that and made the one-token diagnostic
+    //     switch a landmine.
+    //
+    //     WHY A SWITCH AND NOT BkEmu'S AUTODETECT: BkEmu latches stereo on a
+    //     word write whose inverted high byte is neither 0x00 nor 0xFF and
+    //     decays back to mono after 3 s. Both halves exist because a BkEmu
+    //     device object outlives the program that programmed it - the same
+    //     argument that made Phase 11 drop the TurboSound dead-man timeout.
+    //     Consequence, documented in README: a mono-only program writes the
+    //     low lane only, so with DIP 5 OFF the right channel carries whatever
+    //     the high lane holds. That is what the switch is for.
+    logic [1:0] cxm_sr;
+    always_ff @(posedge sys_clk) cxm_sr <= {cxm_sr[0], ~pDip[4]};
+    wire cx_mono = cxm_sr[1];
 
     // --- turbo: toggled by the PS/2 F12 key, power-on default OFF.
     //     Same quasi-static cpu_clk toggle + 2-FF resync as screen_mode above,
@@ -903,8 +933,8 @@ module ocbk_top (
         // Every BK sound expansion - Covox, 2x YM2149, Menestrel - decodes
         // THIS one address and differs only in how it reads the data, so the
         // bus side is captured once in qbus_mem and lands here. u_ts
-        // (bk_turbosound) consumes it; Covox and Menestrel will hang off the
-        // same four wires when they land. Devices live in src/audio/ and
+        // (bk_turbosound) and u_cx (bk_covox) consume it; Menestrel will
+        // hang off the same wires when it lands. Devices live in src/audio/ and
         // arrive at bk_audio as extra mixer slots - see the audio bullet in
         // CLAUDE.md. The capture is oracle-pinned by spk_capture_tb driving
         // the real qbus_mem.
@@ -923,11 +953,10 @@ module ocbk_top (
     // ---- Sound: sources -> mixer -> noise-shaped 6-bit DAC -> the ladders --
     // The audio subsystem lives in src/audio/: bk_audio assembles the BK
     // speaker (spk_bit, captured in u_mem on sys_clk as a software-owned
-    // latch) and the DIP-5 self-test tone into an N-slot stereo mixer, then
+    // latch), the TurboSound and the Covox into an N-slot stereo mixer, then
     // noise-shapes each channel down to the 6-bit ladder code at sys_clk/16.
     // The shaping is what lets a 6-bit ladder resolve far finer than six bits
-    // in the audio band - the seam the Covox / AY / Menestrel increments plug
-    // into. While CMT mode is on (DIP 4, see cmt_mode above) the right channel
+    // in the audio band - the seam the sound devices plug into. While CMT mode is on (DIP 4, see cmt_mode above) the right channel
     // becomes the esemsx3-style CMT comparator (pDac_SR[5] input + ladder
     // feedback, [0] = the RAW speaker bit as tape-out) and the LEFT ladder
     // carries the mono fold of both channels.
@@ -943,7 +972,7 @@ module ocbk_top (
     // sys_clk; nINIT resets it (the standard BK peripheral rule), while
     // vid_rst_n is the power-on reset the rest of the audio path uses.
     wire signed [15:0] ts_l, ts_r;
-    wire               ts_act, ts_dual;
+    wire               ts_act, ts_dual, ts_snd;
     bk_turbosound u_ts (
         .sys_clk   (sys_clk),
         .rst_n     (vid_rst_n),
@@ -955,7 +984,35 @@ module ocbk_top (
         .ts_l      (ts_l),
         .ts_r      (ts_r),
         .ts_act    (ts_act),
-        .dual_act  (ts_dual)
+        .dual_act  (ts_dual),
+        .ts_snd    (ts_snd)
+    );
+
+    // ---- Covox: an 8-bit DAC on the same 0177714 --------------------------
+    // The second consumer of the Phase-10 seam, and another sibling that only
+    // snoops. It needs neither port_word nor port_be: the 177714 latch holds
+    // the lane a byte write did not touch, so the Covox output is a pure
+    // function of port_data (word-vs-byte is the AY's discriminator, not
+    // ours). port_wr is taken for the idle one-shot alone.
+    //
+    // THE TWO DEVICES ARE MUTUALLY EXCLUSIVE, because they decode the same
+    // address and each renders the other's traffic as garbage. The PSGs win:
+    // ts_snd ("a non-zero PSG sample") mutes the Covox, held ~0.7 s so a rest
+    // between notes cannot unmute it. That exclusion is also what keeps
+    // bk_audio's gain budget closed - see its slot map.
+    wire signed [15:0] cx_l, cx_r;
+    wire               cx_en;
+    bk_covox u_cx (
+        .sys_clk   (sys_clk),
+        .rst_n     (vid_rst_n),
+        .init_n    (init_n),
+        .port_wr   (snd_port_wr),
+        .port_data (snd_port_data),
+        .mono      (cx_mono),
+        .psg_act   (ts_snd),
+        .cx_l      (cx_l),
+        .cx_r      (cx_r),
+        .cx_en     (cx_en)
     );
     // TONE_ENABLE = 0: the DIP-5 self-test is retired from the shipped build
     // (see the tone_en note above). Set it back to 1'b1 for a diagnostic
@@ -973,6 +1030,9 @@ module ocbk_top (
         .tone_en    (tone_en),
         .ts_l       (ts_l),
         .ts_r       (ts_r),
+        .cx_l       (cx_l),
+        .cx_r       (cx_r),
+        .cx_en      (cx_en),
         .tape_lvl   (tape_lvl),
         .dac_l      (pDac_SL),
         .dac_r_o    (dac_r_o),

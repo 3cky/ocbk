@@ -61,6 +61,20 @@
   **a translate output may decide WHAT to do, but must not be in the cone that
   decides whether a wide register LOADS** — register the decision or widen the
   enable to something structurally free.
+  **Phase 12 hit the SAME rule a third time, in NEW code, across a module
+  boundary** (2026-08-01): `bk_covox`'s mute-hold counter took its reload
+  enable from `bk_turbosound`'s `ts_snd`, which was a combinational
+  `(|lsum)|(|rsum)` — an OR-reduce of two 11-bit ADDER outputs — routed across
+  the chip into the enable of 26 flops. **−0.639 ns, TNS −12.003**, the worst
+  first-build number this design has produced. Cure, again structural and
+  again free: make `ts_snd` a FLOP, fed by the same predicate taken one stage
+  earlier off the PSG channel outputs. The fold is non-negative and monotone,
+  so the predicate is identical, and the source registers load on the same
+  edge — so the one-cycle LEAD the arbitration depends on is preserved exactly
+  (`bk_turbosound_tb` checks it every cycle; mutation D14 is the late
+  variant). **−0.639 → +0.102 ns, TNS 0.** The lesson to carry: **this applies
+  to a signal you EXPORT, not just to one you consume** — a one-bit output
+  looks free at the source and lands in someone else's enable cone.
 - **A quasi-static signal with big fanout still costs real setup time**
   (Phase 8, fixed 2026-07-22). `model_bk11` (DIP 1, latched during a DCLO
   hold, frozen while the CPU runs) fans out across the mapper, clkgen,

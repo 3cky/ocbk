@@ -42,6 +42,7 @@ phase-by-phase narrative if the history is ever wanted.)
 | **9** Fidelity & polish | authentic EVNT/IRQ2 instant (`bk_evnt`); `N_EXT` calibrated against a real machine; `N_VREG` closed; palette sample instant; the **037 grant-rule fit** + `bk_rply` (the beam-race skew); **turbo mode** | ✅ HW 2026-07-26 (grant rule: Babylona/PALTST flat), 2026-07-29 (turbo) |
 | **10** Audio subsystem | `src/audio/`: N-slot stereo **mixer** + a noise-shaped 6-bit output stage (>6-bit audio-band resolution on the same ladders), **true stereo** with a CMT mono fold, the DIP-5 self-test tone, and the **177714 capture seam** for the sound devices. **Infra only — no new sound device** | sim ✅ (25 mutations); ✅ HW 2026-07-31 — the resolution claim measured off the jacks (**−6.047 dB/step over 42 dB, max residual 0.19 dB**, the three sub-ladder-step levels on the line), all four acceptance recordings collected, the DIP-5 diagnostic retired, and the shipped bitstream boots. **+23 LE** |
 | **11** TurboSound | `src/audio/bk_turbosound.sv` + the vendored `ym2149.sv`: **2x YM2149 on 0177714**, the first consumer of the Phase-10 seam. BkEmu `Ay8910` protocol, ACB pan folded to two mixer slots, the speaker ducked ~11.8 dB to make room | sim ✅ (15 mutations, incl. a cycle-exact diff of the adapted core against the vendored reference); **+1,182 LE (68 %), sys_clk +0.528 ns after an STA chase**; ✅ HW 2026-07-31 (real AY/TurboSound demos play on the board) |
+| **12** Covox | `src/audio/bk_covox.sv`: an **8-bit DAC on 0177714**, the second consumer of the Phase-10 seam. BkEmu `Covox` map transcribed 1:1 (the scale is one `SLOT_GAIN` nibble), per-lane hold instead of BkEmu's zero-fill, **DIP 5 = mono/stereo** instead of its autodetect, and an automatic mute so the PSGs and the Covox — which share the address — never sound together | sim ✅ (13 mutations, + D13–D15 on `sim/ts` and A3/A4/A5 on `sim/run_audio.sh`); **+268 LE (70 %), sys_clk −0.639 → +0.102 ns after an STA chase on the increment's own new path**; HW: PENDING |
 
 ## Platform & system map
 
@@ -120,11 +121,11 @@ integer ratios, so the design is internally cycle-exact; the absolute rate is
    └───────────────┘   │ → fb_video    │─────────────►│ vga_out (1024x   │
                        └───────────────┘              │  768@60, x2/x3)  │
                                                       └──────────────────┘
-          spk_bit ──┐   ┌──────────────┐             ┌──────────────┐
-   bk_turbosound ──┼──►│ audio_mixer  │─ L,R ──────►│ audio_out    │──► Sound-L
-    (2x YM2149) ───┤   │ gain/pan/en  │  signed 16  │ 2x audio_ns6 │──► Sound-R
-   Covox/Menestrel ┘   │  saturating  │ (l+r)>>1 in │ + CMT jack   │  two 6-bit
-                        └──────────────┘  CMT mode   └──────────────┘  R-2R ladders
+         spk_bit ───┐   ┌──────────────┐             ┌──────────────┐
+   bk_turbosound ───┼──►│ audio_mixer  │─ L,R ──────►│ audio_out    │──► Sound-L
+     (2x YM2149)    │   │ gain/pan/en  │  signed 16  │ 2x audio_ns6 │──► Sound-R
+        bk_covox ───┤   │  saturating  │ (l+r)>>1 in │ + CMT jack   │  two 6-bit
+       Menestrel ───┘   └──────────────┘  CMT mode   └──────────────┘  R-2R ladders
 ```
 
 The signal that carries cycle accuracy is the 037's **grant / RPLY timing**:
@@ -195,11 +196,12 @@ sd_backend.sv       SPI-mode SD host serving the smk_ide sector port
     DEVICES LIVE HERE TOO - src/peripheral/ is for non-audio peripherals) ---
 audio_ns6.sv        1st-order noise-shaped 16->6-bit quantizer (ONE channel)
 audio_mixer.sv      N-slot stereo mixer: compile-time gain/pan, runtime enable
-audio_tone.sv       the DIP-5 self-test: 2 DDS voices + the 6 dB staircase
+audio_tone.sv       the retired self-test: 2 DDS voices + the 6 dB staircase
 audio_out.sv        pad stage: DAC rate, 2x ns6, CMT mono fold + the CMT jack
 bk_audio.sv         the assembly: speaker CDC/activity + the SLOT MAP
 ym2149.sv           vendored MiSTer PSG core, adapted for Quartus 11.0
 bk_turbosound.sv    Phase 11: 2x ym2149 on 0177714 (BkEmu Ay8910 protocol)
+bk_covox.sv         Phase 12: 8-bit DAC on 0177714 (BkEmu Covox map, DIP 5)
 --- src/sys/ (clocking / CPU-rate control) ---
 cpu_clkgen.sv       fabric divider: dot/CLKIN enables + the CPU clock (/32,/24,/16)
 turbo_ctl.sv        bus-idle-qualified turbo level (the reply-owner swap guard)

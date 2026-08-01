@@ -1,0 +1,332 @@
+; ---------------------------------------------------------------------------
+; sndtestcx - the Covox (8-bit DAC on 0177714) hardware acceptance program
+;
+; Like sndtestts.mac and unlike the rest of test/sndtest*.mac this is NOT a
+; timing measurement - there is no cycle count to read off it. It is the
+; by-ear / by-recording acceptance for src/audio/bk_covox.sv: does the DAC
+; sound at all, is the byte map linear, is the stereo image the right way
+; round, does DIP 5 fold it to mono, and does the TurboSound really take the
+; port away from it.
+;
+; THE BUS PROTOCOL (BkEmu Covox.java; see src/audio/bk_covox.sv)
+;   Everything goes to 0177714, and THE PORT INVERTS, so the program always
+;   writes the complement of the byte the DAC should see.
+;
+;     low byte  -> LEFT      high byte -> RIGHT
+;
+;   The 177714 latch is byte-lane strobed and HOLDS the lane a byte write did
+;   not touch, so:
+;
+;     MOV  #v, @#PORT   - both channels
+;     MOVB #v, @#PORT   - left only, right holds
+;     MOVB #v, @#PORT+1 - right only, left holds
+;
+;   SILENCE IS 0177, NOT 0200. The DAC's zero is byte 0200 (128), and 0200
+;   complemented is 0177. Getting this wrong parks a large DC on the ladders.
+;
+; WHY THIS PROGRAM USES **WORD** WRITES FOR SAMPLES
+;   The TurboSound decodes the same address, and it reads a WORD write as a
+;   register-number latch and a BYTE write as data. So a word-write sample
+;   stream can only move the AY's register pointer around - it can never
+;   write a register - which is what makes section 5 below meaningful: the
+;   chord keeps playing underneath while the Covox hammers the port. A
+;   byte-write (mono) sample stream would instead pour data into whatever
+;   register was last selected. Section 4's mono leg uses byte writes on
+;   purpose, and only when no PSG is running.
+;
+; PITCH IS CPU-BOUND, AND THAT IS THE POINT
+;   A Covox has no clock of its own: the sample rate is however fast the CPU
+;   writes. So every tone here is a different pitch on a BK-0010 (3.02 MHz),
+;   a BK-0011M (4.03 MHz) and in turbo (6.04 MHz) - about 1x : 1.33x : 2x.
+;   That is authentic, not a fault, and hearing it change with F12 is a
+;   perfectly good check that the DAC really is CPU-timed.
+;
+; The section lengths below are counted in loop iterations, so they are
+; approximate and they too scale with the CPU rate.
+;
+; WHAT TO LISTEN FOR
+;   1. the ladder walk: eight steps from silence out to each rail and back,
+;      each held about a second. Clean level steps, no crackle, and NO
+;      CLIPPING - pLed[1] (mixer saturated) and pLed[2] (DAC clipped) must
+;      stay DARK for the whole run. The gain budget says they cannot light;
+;      if they do, the arithmetic is wrong, not the analog stage.
+;   2. a square wave: crude, loud, obviously a DAC and not the 1-bit speaker.
+;   3. a sine: the real demonstration. It must sound smooth and clean - a
+;      6-bit truncating output path could not produce it.
+;   4. stereo, then mono. The tone alternates hard LEFT and hard RIGHT for
+;      about a second each; LEFT must come first. Then FLIP DIP 5 WHILE IT
+;      PLAYS: the image must collapse to the centre immediately, with no
+;      reset. Flip it back and the panning returns. The last leg writes only
+;      the low byte - the mono-Covox case - which with DIP 5 OFF leaves the
+;      right channel sitting on whatever the high lane holds. That is
+;      expected, and it is exactly what DIP 5 is for.
+;   5. the mute. The sine plays, then a TurboSound chord starts WITHOUT the
+;      sample loop stopping: the sine must vanish at once and the chord must
+;      be CLEAN underneath, with no Covox garbage under it. When the chord
+;      stops, the sine comes back after about 0.7 s - not instantly. This
+;      repeats three times.
+;      A faint tick as the chord STARTS is expected and documented: an AY's
+;      setup writes registers before any channel sounds, so for that window
+;      the Covox is still live and renders them.
+;   6. silence: the loop stops writing for a few seconds. Real silence, no
+;      residual hum and no DC thump - that is the idle one-shot muting the
+;      slot and restoring the exact-zero shaper state.
+;
+;   Then press the reset button: nINIT must silence everything at once.
+; ---------------------------------------------------------------------------
+
+    make_bin
+    make_wav
+
+    .LINK 1000
+
+PORT  = 177714
+SILNC = 177                     ; the WRITTEN value for DAC zero (byte 0200)
+
+START:
+        MOV     #1000, SP
+
+LOOP:
+; ---- 1. the DC ladder walk ------------------------------------------------
+        MOV     #LADDER, R5
+        MOV     #10, R4                 ; 8 entries
+L1:
+        MOV     (R5)+, R3               ; the DAC byte we want
+        JSR     PC, DUP                 ; -> a both-channel port word
+        JSR     PC, HOLD                ; hold it, writing continuously
+        SOB     R4, L1
+
+        MOV     #200, R3                ; back to silence before the next part
+        JSR     PC, DUP
+        JSR     PC, HOLD
+
+; ---- 2. a square wave -----------------------------------------------------
+        MOV     #2000, R4               ; how many periods (about a second)
+L2:
+        MOV     #0, @#PORT              ; byte 0377 = the positive rail
+        JSR     PC, SDLY
+        MOV     #177777, @#PORT         ; byte 0000 = the negative rail
+        JSR     PC, SDLY
+        SOB     R4, L2
+
+; ---- 3. a sine, both channels ---------------------------------------------
+        MOV     #12000, R4              ; how many table passes (about 2 s)
+L3:
+        JSR     PC, SINE
+        SOB     R4, L3
+
+; ---- 4. stereo, then the mono cases ---------------------------------------
+; Hard LEFT: the sine in the low byte, silence in the high byte. Then hard
+; RIGHT. Flip DIP 5 during this section - it takes effect with no reset.
+        MOV     #5000, R4               ; about a second hard LEFT
+L4A:
+        JSR     PC, SINEL
+        SOB     R4, L4A
+        MOV     #5000, R4               ; then about a second hard RIGHT
+L4B:
+        JSR     PC, SINER
+        SOB     R4, L4B
+
+; The mono-Covox case: BYTE writes to the low lane only.
+;
+; A byte write is a DATA write as far as the TurboSound is concerned, so it
+; goes into whatever register was last selected - and the word-write sample
+; streams above left that pointer wherever the last sample's low nibble put
+; it. Park it somewhere harmless FIRST: register 1 is channel A's coarse tone
+; period, inaudible while every channel is disabled (R7 = 0377 out of reset,
+; 077 after SILENC). Real mono-Covox software has exactly this hazard; the
+; program has to be explicit about it rather than get lucky.
+        MOV     #177776, @#PORT         ; word write: select register 1
+        MOV     #5000, R4
+L4C:
+        JSR     PC, SINEB
+        SOB     R4, L4C
+
+        MOV     #200, R3
+        JSR     PC, DUP
+        JSR     PC, HOLD
+
+; ---- 5. the TurboSound mute ----------------------------------------------
+        MOV     #3, R4                  ; three times, so it is unmistakable
+L5:
+        MOV     #5000, R2               ; the sine alone first, about a second
+L5A:
+        JSR     PC, SINE
+        SOB     R2, L5A
+
+        JSR     PC, CHORD               ; the PSGs take the port away
+
+        MOV     #12000, R2              ; keep hammering the port: silent
+L5B:
+        JSR     PC, SINE
+        SOB     R2, L5B
+
+        JSR     PC, SILENC              ; the PSGs stop...
+
+        MOV     #12000, R2              ; ...and the sine returns after ~0.7 s
+L5C:
+        JSR     PC, SINE
+        SOB     R2, L5C
+
+        SOB     R4, L5
+
+; ---- 6. silence -----------------------------------------------------------
+; Stop writing entirely. After the idle one-shot expires the mixer slot is
+; zeroed and the ladders go back to their exact-zero code.
+        JSR     PC, WAIT
+        JSR     PC, WAIT
+
+        JMP     LOOP
+
+; ---- DUP: R3 (a DAC byte) -> the port word that produces it on both sides -
+DUP:
+        COM     R3                      ; the port inverts
+        BIC     #177400, R3             ; keep the complemented low byte
+        MOV     R3, R0
+        SWAB    R0
+        BIS     R0, R3
+        RTS     PC
+
+; ---- HOLD: write R3 continuously for about a second -----------------------
+; A Covox holds nothing by itself - the mixer slot mutes ~43 ms after the
+; last write - so a "static" level has to be written continuously. That is a
+; feature under test, not a workaround.
+HOLD:
+        MOV     #20, R2
+HOLD1:
+        CLR     R1
+HOLD2:
+        MOV     R3, @#PORT
+        SOB     R1, HOLD2
+        SOB     R2, HOLD1
+        RTS     PC
+
+; ---- SINE / SINEL / SINER / SINEB: one pass of the table ------------------
+; SINE  - both channels      SINEL - left only, right silent
+; SINER - right only         SINEB - byte writes to the low lane (mono Covox)
+SINE:
+        MOV     #TAB, R5
+        MOV     #40, R2
+SINE1:
+        MOV     (R5)+, R3
+        JSR     PC, DUP
+        MOV     R3, @#PORT
+        SOB     R2, SINE1
+        RTS     PC
+
+SINEL:
+        MOV     #TAB, R5
+        MOV     #40, R2
+SINL1:
+        MOV     (R5)+, R3
+        JSR     PC, DUP
+        BIC     #177400, R3             ; drop the duplicate
+        BIS     #SILNC*400, R3          ; right channel = DAC zero
+        MOV     R3, @#PORT
+        SOB     R2, SINL1
+        RTS     PC
+
+SINER:
+        MOV     #TAB, R5
+        MOV     #40, R2
+SINR1:
+        MOV     (R5)+, R3
+        JSR     PC, DUP
+        BIC     #377, R3                ; drop the duplicate
+        BIS     #SILNC, R3              ; left channel = DAC zero
+        MOV     R3, @#PORT
+        SOB     R2, SINR1
+        RTS     PC
+
+SINEB:
+        MOV     #TAB, R5
+        MOV     #40, R2
+SINB1:
+        MOV     (R5)+, R3
+        JSR     PC, DUP
+        MOVB    R3, @#PORT              ; low lane only
+        SOB     R2, SINB1
+        RTS     PC
+
+; ---- CHORD: three tones on the primary PSG --------------------------------
+CHORD:
+        MOV     #0, @#PORT              ; select the primary chip
+        MOV     #0, R1                  ; A period
+        MOV     #365, R2
+        JSR     PC, AYSET
+        MOV     #2, R1                  ; B period
+        MOV     #303, R2
+        JSR     PC, AYSET
+        MOV     #4, R1                  ; C period
+        MOV     #244, R2
+        JSR     PC, AYSET
+        MOV     #7, R1                  ; mixer: 3 tones on, noise off
+        MOV     #70, R2
+        JSR     PC, AYSET
+        MOV     #10, R1
+        MOV     #17, R2
+        JSR     PC, AYSET
+        MOV     #11, R1
+        MOV     #17, R2
+        JSR     PC, AYSET
+        MOV     #12, R1
+        MOV     #17, R2
+        JSR     PC, AYSET
+        RTS     PC
+
+; ---- AYSET: write PSG register R1 with value R2 ---------------------------
+AYSET:
+        MOV     R1, R0
+        COM     R0
+        MOV     R0, @#PORT              ; word write  = latch the register
+        MOV     R2, R0
+        COM     R0
+        MOVB    R0, @#PORT              ; byte write  = the data
+        RTS     PC
+
+; ---- SILENC: volumes to zero, then the mixer off --------------------------
+SILENC:
+        MOV     #10, R1
+        CLR     R2
+        JSR     PC, AYSET
+        MOV     #11, R1
+        CLR     R2
+        JSR     PC, AYSET
+        MOV     #12, R1
+        CLR     R2
+        JSR     PC, AYSET
+        MOV     #7, R1
+        MOV     #77, R2
+        JSR     PC, AYSET
+        RTS     PC
+
+; ---- SDLY: the square-wave half period ------------------------------------
+SDLY:
+        MOV     #400, R3
+SDLY1:
+        SOB     R3, SDLY1
+        RTS     PC
+
+; ---- WAIT: roughly a second and a half at 3-4 MHz -------------------------
+WAIT:
+        MOV     #60, R3
+WAIT1:
+        CLR     R4
+WAIT2:
+        SOB     R4, WAIT2
+        SOB     R3, WAIT1
+        RTS     PC
+
+; ---- the tables -----------------------------------------------------------
+; DAC BYTES, not written values - DUP does the complement. 0200 is zero.
+LADDER:
+        .WORD   200, 240, 300, 377, 140, 100, 040, 000
+
+; One cycle of a sine, 32 points, amplitude 120 of 128 around the 0200 centre.
+TAB:
+        .WORD   200, 227, 256, 303, 325, 344, 357, 366
+        .WORD   370, 366, 357, 344, 325, 303, 256, 227
+        .WORD   200, 151, 122, 075, 053, 034, 021, 012
+        .WORD   010, 012, 021, 034, 053, 075, 122, 151
+
+        .END

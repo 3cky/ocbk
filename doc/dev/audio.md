@@ -124,8 +124,12 @@ cassette port shares the right DAC ladder, so tape is documented here too.
     the speaker on a STATIC `audio_ns6` code (40/24) with no shaping activity
     — the structural property the hardware-confirmed speaker path depends on.
     A literal ¼ of 31744 would be 7936 = 7.75×1024, NOT a fixed point, and
-    would leave the codes rattling. Covox and Menestrel must re-open this and
-    find their share of what is left.
+    would leave the codes rattling.
+    **Phase 12 re-opened this and closed it again for free**: Covox and the
+    PSGs are MUTUALLY EXCLUSIVE (same address, so the Covox mutes on
+    `ts_snd`), which makes the worst channel `max(22950, 20480) + 8192` — the
+    same 31142. See the Covox section for the arithmetic and for why 5/8 is
+    the largest legal Covox gain. Menestrel must re-open it once more.
   * **The 177714 (nSEL2) capture seam** in `qbus_mem`, next to the `spk_bit`
     block: `port_wr` / `port_data[15:0]` / `port_word` / `port_be[1:0]`. All
     three planned devices decode this ONE address and differ only in how they
@@ -142,7 +146,8 @@ cassette port shares the right DAC ladder, so tape is documented here too.
     reply/`io_word`/`ad_oe`/`mem_ready`, which is what makes it timing-inert;
     177714 already replies via `sel_io`. Read merge deferred (see Open).
     **Since Phase 11 `bk_turbosound` consumes it** (it was dangling and free
-    through Phase 10); Covox and Menestrel will hang off the same four wires.
+    through Phase 10) and **`bk_covox` since Phase 12**; Menestrel will hang
+    off the same wires.
     The seam itself is oracle-pinned by `spk_capture_tb` driving the real
     `qbus_mem`, independently of any device.
   * **Cost and timing (confirmed) — the SHIPPED audio subsystem costs
@@ -280,3 +285,147 @@ cassette port shares the right DAC ladder, so tape is documented here too.
     solo to prove A-left/B-centre/C-right, noise, an envelope sweep, and the
     TurboSound section. A `DUAL_ENABLE` parameter drops the second chip — a
     documented fitter escape hatch, not the shipped configuration.
+
+## Covox
+
+- **Covox (Phase 12) — an 8-bit DAC on 0177714, `src/audio/bk_covox.sv`.** The
+  second device on the Phase-10 seam and, like `bk_turbosound`, an `ocbk_top`
+  sibling that only snoops: **`qbus_mem` is unchanged (comment edits only) and
+  no timing golden moves.**
+  * **BkEmu's `Covox.java` is the contract.** Low byte = LEFT, high byte =
+    RIGHT of the *same* word — one address, two lanes, not two addresses. The
+    port inverts, so the device does its own `~` (the `bk_turbosound` division
+    of labour). The byte map is exactly linear —
+    `((b-128)<<8)|b == 257*b − 32768` — and since `257*b` is `{b,b}` the whole
+    map is **one inverted bit**: `cx = $signed({~b[7], b[6:0], b})`. The device
+    carries no arithmetic and no scaling at all.
+  * **`port_word` and `port_be` are NOT ports of this device**, which is the
+    structural consequence of the lane rule below: because the latch holds the
+    lane a byte write did not touch, the Covox output is a **pure function of
+    `port_data`**. Word-vs-byte is the AY's discriminator, not ours. `port_wr`
+    is taken for the idle one-shot alone.
+  * **Per-lane hold, NOT BkEmu's `value << 8` zero-fill — a deliberate
+    divergence.** On a byte write BkEmu passes the other lane as 0, so its
+    model reads the *other* channel as `0xFF` = full scale. That is an artifact
+    of its `writeMemory` signature, not of the hardware: 177714 is a
+    byte-lane-strobed latch and holds what was not written, which is what
+    `qbus_mem` already does. Same call and the same reasoning as the 177716
+    `stop_block` lane rule — the real WR1/WR2 byte strobes win over a BkEmu
+    lane artifact. `sim/covox` section 3 is the discriminator.
+  * **Stereo/mono is DIP 5, not BkEmu's autodetect — the second deliberate
+    divergence.** BkEmu latches stereo on a word write whose inverted high byte
+    is neither `0x00` nor `0xFF`, and decays back to mono after 3 s. Both
+    halves exist because a BkEmu device *object* outlives the program that
+    programmed it — the identical argument that dropped the TurboSound dead-man
+    timeout. Here it is a switch (`~pDip[4]`, live 2-FF sync, `cx_mono` in
+    `ocbk_top`; **a separate wire from `tone_en`**, which stays for the
+    `TONE_ENABLE = 1` diagnostic build — the two are mutually exclusive by
+    build configuration, and sharing one wire would have made the one-token
+    diagnostic switch a landmine). **Accepted consequence, documented in
+    README:** a mono-only program writes the low lane only, so with DIP 5 OFF
+    the right channel carries whatever the high lane holds. That is what the
+    switch is for.
+  * **The mute is the whole reason the device has state.** Covox and TurboSound
+    decode the same address, so each renders the other's traffic as garbage.
+    `cx_en = live & ~psg_hold`:
+    - `live` — a ~43 ms one-shot retriggered by every 177714 write. This is
+      what keeps the **never-reset** latch off the ladders: at power-on
+      `port_data` reads 0, which **inverts to `b = 255` = +32767**, and a
+      finished program leaves its last sample behind. With the slot disabled
+      the mixer contributes *exactly* zero, so `audio_ns6` stays on its
+      exact-zero fixed point and silence keeps producing no pin activity — the
+      property the −85.8 dBFS measured idle floor and the CMT anti-echo
+      argument both rest on.
+    - `psg_hold` — a ~0.7 s retriggerable hold on `bk_turbosound`'s new
+      **`ts_snd`** output. Load-bearing: a PSG square wave is zero for half of
+      every period and goes silent for every rest, so without it the Covox
+      would unmute between pulses onto whatever AY register data the latch
+      holds — a click per note.
+  * **`ts_snd`, not `ts_act`, and taken before the ×15 stage.** `ts_snd` is
+    `|lsum | |rsum`, so it **leads `ts_l`/`ts_r` by one cycle** and the mute is
+    already asserted on the cycle the PSG sample first becomes non-zero — the
+    two sources can never both reach the mixer's stage 0. `ts_act` (`~R7[5:0]`,
+    the channel-**enable** bits, `pLed[4]`) would be both insufficient and
+    harmful: a channel with tone AND noise disabled passes its volume register
+    through as DC (`ym2149.sv:355-357`) — that is how AY "digi" playback works
+    — so `ts_act = 0` does not imply silence and the enable bits alone would
+    not close the headroom proof; and a player that exits leaving channels
+    enabled at volume 0 would mute the Covox until the next reset.
+  * **KNOWN, BOUNDED ARTIFACT — accepted, not engineered around.** An AY
+    program's *setup* phase writes registers before any channel sounds, so for
+    that window `ts_snd` is low and the Covox renders those register writes as
+    samples: a faint click of order 100 µs at the start of a TurboSound
+    program. It is bounded by how long a setup takes, it cannot recur while
+    music plays, and **every alternative discriminator collides with stereo
+    Covox**, which uses word writes exactly as the AY register latch does. If
+    it proves audible on the board the escape hatch is MiSTer's — a hard
+    user-selected mode — never a heuristic.
+  * **The gain budget was re-opened and closed again for free**, because the
+    two devices are mutually exclusive. The Covox emits BkEmu's raw ±32767 and
+    the **scale is a compile-time `SLOT_GAIN` nibble (5/8) in `bk_audio`**, not
+    a constant in the device — `audio_mixer`'s sample domain exists precisely
+    so a BkEmu map can transcribe 1:1:
+    ```
+    speaker           +/- 8192
+    TurboSound           0 .. 22950
+    Covox           -20480 .. +20479          (+/-32768 at 5/8)
+    worst channel   max(22950, 20480) + 8192 = 31142  <=  FS_SAT = 31744
+    ```
+    the **same 31142** Phase 11 computed. **5/8 is provably the maximum**: at
+    6/8 the bound is 24576 and 24576 + 8192 = 32768 > FS_SAT. And
+    32768×5/8 = 20480 = 20×1024 exactly, so a Covox parked at a DC still lands
+    on a **static** `audio_ns6` code — the `SPK_LVL` multiple-of-1024 property,
+    generalised. Menestrel must re-open this once more, and cannot rely on the
+    same exclusion unless it mutes on `ts_snd` too.
+  * **One gate, not two.** `cx_l`/`cx_r` keep carrying the sample while muted;
+    the mixer's runtime slot enable is the single mute mechanism. Zeroing in
+    the device as well would be logic no mutation could kill — the
+    `bk_turbosound` `lc1`/`rc1` precedent. `cx_en` is deliberately
+    **combinational** off the two counters: a registered version would arrive a
+    cycle after `ts_l` goes non-zero.
+  * **Reset is `~init_n`** (2-FF synced) ORed with the power-on reset — the
+    standard BK peripheral rule, so a RESET instruction silences the Covox. It
+    does **not** clear the 177714 latch (`qbus_mem`'s never-runtime-reset
+    state; a real Covox is a passive DAC with no reset pin), so after nINIT the
+    sample reappears but the slot stays muted until the next write.
+  * **Cost and timing (confirmed) — Covox costs +268 LE, and the STA chase
+    happened ON THE NEW SIGNAL, which is the interesting part.**
+    8,184 → **8,452 LE (68 % → 70 %)**, M4K unchanged at 3/52, pins unchanged
+    at 98/173, no new PLL. Most of it is the two one-shot counters (48 flops
+    plus their decrement and compare) and the two extra mixer slots; the byte
+    map itself is free.
+    **The first build came in at sys_clk −0.639 ns, TNS −12.003**, and unlike
+    Phase 11's chase this one was NOT placement fragility on an untouched
+    module — it was the increment's own new path:
+    `bk_turbosound|lc1[*] → bk_covox|psg_cnt[*]`. A combinational
+    `(|lsum)|(|rsum)` — an OR-reduce of two 11-bit ADDER outputs — was driving
+    the ENABLE of a 26-bit counter in another module across the chip.
+    **The exact rule this tree already had, for the third time**: keep
+    translate outputs out of a register's enable cone (`rdata_oe`, then
+    `wdata_o`, now this).
+    **Cured structurally, and for free**: `ts_snd` is now a FLOP fed by the
+    predicate taken one stage earlier, off the CHANNEL outputs
+    (`(|a0)|(|b0)|(|c0) | dual_act & (…)`). The fold is non-negative and every
+    term monotone, so that is the same predicate; and because `lc0`/`rc0`
+    register `a0..c0` on the same edge this flop registers, **the one-cycle
+    lead is preserved exactly** — which `bk_turbosound_tb` checks every cycle,
+    with mutation D14 for the late variant. **Result: −0.639 → +0.102 ns,
+    TNS 0**, and the Covox is off the critical path entirely.
+    ⚠️ **+0.102 ns is THIN, and that part IS placement.** The worst path is
+    now the chronic pre-existing cone this file predicted —
+    `ram_init|filling → sdram_arbiter|cmd_addr[*]`, with
+    `mem_mapper|mon_en → cpu_sdram_dp|addr_o[*]` right behind it at +0.148 —
+    neither of which this increment touched, and which stood at +0.528 before
+    it. +268 LE re-placed them. **The next increment must budget for a real
+    chase there**, and the cure is the documented one: re-register the
+    quasi-static high-fanout selector (`fill_active`) locally — noting that
+    doing so shifts the port-0 handover by a cycle, so it needs `sim/raminit`
+    re-run, not a drive-by edit. **Never an SDC exception, never SEED 3.**
+  * Oracle: **`sim/covox/run.sh`**, one leg, 13 mutations. The rate is split
+    between two checks — 2²² and 2²⁶ `sys_clk` are not simulable, so a second
+    instance pins the shipped **parameter defaults** while a scaled instance
+    pins the **behaviour**. `sim/ts` gains one assertion (that `ts_snd` leads
+    the sample) and mutation D13; `bk_audio_tb` gains the Covox pan section,
+    the mute section and the re-opened budget, with mutations A3/A4/A5.
+    `test/sndtestcx.mac` is the hardware acceptance program (pdpy11, with a
+    `.wav` so it loads over the CMT jack).

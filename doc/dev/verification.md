@@ -65,8 +65,10 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   emitting no event (CMT tape mode moved to DIP 4), parity-error and
   stale-prefix recovery.
 - `sim/run_audio.sh` — the Phase-10 audio oracles, **four legs, mutation-tested
-  ×25** (23 at Phase 10; Phase 11 added A1/A2 — the TurboSound slot-pack
-  orientation and the SPK_LVL multiple-of-1024 rule); `sim/audio/README.md` carries the pinned contract and the written
+  ×28** (23 at Phase 10; Phase 11 added A1/A2 — the TurboSound slot-pack
+  orientation and the SPK_LVL multiple-of-1024 rule; Phase 12 added A3/A4/A5 —
+  the Covox slot-pack orientation, its mute enable and its 5/8 slot gain);
+  `sim/audio/README.md` carries the pinned contract and the written
   justification for the resolution claim (the `sim/evnt/README.md` precedent).
   **Leg 3 `audio_ns6_tb` is the one that matters**: it proves the DC **identity**
   `1024·Σcode − M·(32·1024+s) == errp₀ − errp_M ∈ [−1023,1023]` — not a
@@ -84,15 +86,24 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   (slots 3/4 hard-panned opposite ways, the shipped map's only such pair;
   getting it backwards would silently swap the stereo image on the board) plus
   the **shipped worst case 22950 + 8192 = 31142 passing through UNSATURATED**,
-  i.e. the gain budget written down as an assertion. **Leg 1 `bk_audio_tb`** is the regression guard for
+  i.e. the gain budget written down as an assertion — and, since Phase 12, the
+  **Covox pair at 5/8** (`dut3` is now NSRC=7) with its own worst case
+  20480 + 8192 = 28671. The third combination, TurboSound AND Covox at once,
+  is deliberately NOT tested because it cannot occur: `bk_covox` mutes on
+  `ts_snd`. That is stated in the file so nobody "fixes" a future saturation
+  by raising `FS_SAT`. **Leg 1 `bk_audio_tb`** is the regression guard for
   the two hardware-confirmed behaviours — the speaker's STATIC rail codes and
   the whole CMT jack (oe split, comparator network, anti-echo, raw tape-out) —
-  plus true stereo, the CMT mono fold and the staircase. **Leg 2
+  plus true stereo, the CMT mono fold, the staircase, and — since Phase 12 —
+  the **Covox pan orientation, its 5/8 gain and its mute enable**, all three
+  pinned by the same static-fixed-point trick as the TurboSound pan (the
+  Covox at +16384 against the speaker's low rail must read code 34 exactly;
+  8/8 would read 40). **Leg 2
   `spk_capture_tb`** keeps the 177716 bit-6/7 captures and gains the **177714
   (nSEL2) port-write capture**, whose load-bearing case is the WTBT
   discriminator (see the audio bullet).
 - `sim/ts/run.sh` — the Phase-11 **TurboSound** oracles, two legs,
-  mutation-tested x15; `sim/ts/README.md` carries the pinned contract.
+  mutation-tested x16; `sim/ts/README.md` carries the pinned contract.
   **Leg 1 `ym2149_equiv_tb` is the authority and the reason this increment is
   safe**: the vendored reference `sim/ts/ym2149_ref.sv` (upstream MiSTer) and
   the shipped `src/audio/ym2149.sv` are elaborated side by side, driven with
@@ -113,10 +124,35 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   is the device contract on the 177714 seam — the BkEmu protocol (word =
   address, byte = data, inverted, the odd lane's 0xFF, the 4-bit latch mask),
   the 0xFF/0xFE chip select, the ACB fold and its headroom bound, `nINIT`, and
-  the /56 PSG clock enable — all checked with tone and noise DISABLED, which
+  the /56 PSG clock enable, and (Phase 12) **`ts_snd`, the Covox arbitration
+  hook**, which must be high exactly when the sample the fold is ABOUT to
+  present is non-zero — it is sampled one edge and compared against
+  `ts_l`/`ts_r` the next, because that one-cycle LEAD is the property that
+  stops the Covox and the PSGs both reaching the mixer's stage 0 — all checked
+  with tone and noise DISABLED, which
   makes each channel emit its volume as DC so the register file reads out
   directly on `CHANNEL_x` with no waiting. One property is deliberately NOT
   mutation-covered and the header says so out loud: see the TurboSound bullet.
+- `sim/covox/run.sh` — the Phase-12 **Covox** oracle, **one leg,
+  mutation-tested x13**; `sim/covox/README.md` carries the pinned contract.
+  One leg on purpose, the `sim/ts` precedent: the SEAM itself — one strobe per
+  bus write, BK-true polarity, the odd lane leaving the other half stale — is
+  pinned independently by `spk_capture_tb` against the real `qbus_mem`
+  (`Q1`–`Q5`), so `bk_covox_tb` models it in its write tasks and tests the
+  DEVICE against it. **Its sharpest section is the first one**: `qbus_mem`'s
+  177714 latch has no reset, so at power-on it reads 0, which INVERTS to
+  b = 255 = +32767 — the leg asserts both that the sample really is at full
+  scale AND that `cx_en` is low, because without the idle one-shot the board
+  would sit on a full-scale DC on both ladders from power-on. Also pinned: the
+  byte map at nine points, the **per-lane hold** (the one deliberate
+  divergence from BkEmu — a zero-fill build reads +32767 on the other channel
+  and this is what catches it), the mono fold, DIP 5 being LIVE, the PSG mute
+  surviving a pulse train, the idle one-shot retriggering, and `nINIT`
+  clearing the device but NOT the latch. **A known limit, stated in the runner
+  header rather than quietly dropped:** 2²² and 2²⁶ `sys_clk` are not
+  simulable, so a second instance pins the shipped parameter DEFAULTS while a
+  scaled instance pins the BEHAVIOUR — a mutation of either dies, of both
+  together would not.
 - `sim/run_clkgen.sh` — the Phase-7 `cpu_clkgen` unit oracle: BK-0010 (/32)
   mode **bit-identical** to a replica of the pre-Phase-7 `divc[4]` tap
   (enables included), the /24 BK-0011M rate exact, and a retarget sweep (no

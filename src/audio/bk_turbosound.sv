@@ -87,6 +87,12 @@
 //  TurboSound drops each individual chip by 6 dB, so a primary-only tune gets
 //  quieter the moment a program first selects chip 1.
 //
+//  ts_snd IS THE COVOX ARBITRATION HOOK (Phase 12). bk_covox decodes the same
+//  0177714 address, so with both present each renders the other's traffic as
+//  garbage; the PSGs win and the Covox mutes on this signal. It is deliberately
+//  NOT ts_act and deliberately taken before the x15 stage - see the note at the
+//  assignment, which is where that argument lives.
+//
 //  THE OUTPUT IS UNIPOLAR (0 at silence) ON PURPOSE. A real PSG channel is a
 //  gated DC level, so its natural rest value is zero, and subtracting a
 //  mid-scale offset to "centre" it would put a permanent DC on the ladder and
@@ -128,7 +134,13 @@ module bk_turbosound #(
 
     // ---- indicators --------------------------------------------------------
     output logic               ts_act,      // a tone/noise channel is enabled
-    output logic               dual_act     // TurboSound 2-chip mode engaged
+    output logic               dual_act,    // TurboSound 2-chip mode engaged
+
+    // ---- arbitration -------------------------------------------------------
+    // "the PSGs are emitting a non-zero sample" - bk_covox's mute input. See
+    // the note above the assignment for why this is NOT ts_act and why it is
+    // taken before the x15 stage.
+    output logic               ts_snd
 );
 
     // ---- reset -------------------------------------------------------------
@@ -283,6 +295,55 @@ module bk_turbosound #(
     // leaves (1530 * 15 = 22950; * 16 would be 24480 and would saturate).
     wire [14:0] lscl = {lsum, 4'b0000} - {4'b0000, lsum};
     wire [14:0] rscl = {rsum, 4'b0000} - {4'b0000, rsum};
+
+    // "the PSGs are emitting a non-zero sample", for bk_covox's mute. Covox and
+    // TurboSound decode the same address, so each renders the other's traffic
+    // as garbage and one of them has to stand down; the PSGs win.
+    //
+    // IT MUST LEAD ts_l/ts_r BY EXACTLY ONE CYCLE, so the mute is already
+    // asserted on the cycle the PSG output first becomes non-zero and the two
+    // sources can never both reach audio_mixer's stage 0. One cycle of overlap
+    // would be enough to saturate (22950 + 20480 + 8192 = 51622) and light
+    // pLed[1], which the gain budget says can never happen.
+    //
+    // AND NOT ts_act, which is ~R7[5:0] - the channel-ENABLE bits. That is
+    // both insufficient and harmful here: a channel with tone AND noise
+    // disabled passes its volume register through as DC (see the mixer terms
+    // in ym2149.sv), which is how AY "digi" playback works, so ts_act = 0 does
+    // not imply silence; and a player that exits leaving channels enabled at
+    // volume 0 would mute the Covox until the next reset. ts_act keeps its own
+    // job on pLed[4].
+    //
+    // IT IS A FLOP, AND IT IS TAKEN FROM THE CHANNELS RATHER THAN FROM
+    // lsum/rsum. Two reasons that happen to coincide:
+    //
+    //   TIMING - the reason it has to be a flop. It lands in the ENABLE cone
+    //   of bk_covox's 26-bit mute-hold counter, in another module, across the
+    //   chip. Driving that from a combinational `(|lsum)|(|rsum)` - and lsum
+    //   is itself an 11-bit ADDER output - measured sys_clk -0.639 ns,
+    //   TNS -12.003 on the first Covox build: the exact "keep translate
+    //   outputs out of a register's enable cone" failure this tree has hit
+    //   twice before (rdata_oe, then wdata_o). A flop output into the enable
+    //   is the structural cure, in the established idiom - never an SDC
+    //   exception, never a SEED change.
+    //
+    //   EQUIVALENCE - the reason it can be. The fold is non-negative and every
+    //   term is monotone, so `(|lsum)|(|rsum)` is zero exactly when every
+    //   CONTRIBUTING CHANNEL is zero. Taking that predicate one stage earlier
+    //   and registering it lands on the SAME cycle as the combinational
+    //   version did: lc0/rc0 register a0..c0 on the same edge this flop
+    //   registers the predicate. The lead is preserved exactly, and
+    //   bk_turbosound_tb checks it against ts_l/ts_r every cycle.
+    //
+    // dual_act is sampled one stage earlier here too, which cannot matter: it
+    // is sticky, and on the edge it rises the secondary is still silent (it
+    // can only be programmed after the 0xFE that sets it).
+    wire snd_now = (|a0) | (|b0) | (|c0) | (dual_act & ((|a1)|(|b1)|(|c1)));
+
+    always_ff @(posedge sys_clk) begin
+        if (reset) ts_snd <= 1'b0;
+        else       ts_snd <= snd_now;
+    end
 
     always_ff @(posedge sys_clk) begin
         if (reset) begin

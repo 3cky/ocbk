@@ -100,16 +100,25 @@ latches in `src/ocbk_top.sv`, and `src/sdram/ram_init.sv`.
   `~pDip[3]` read LIVE — a 2-FF sys_clk sync, NOT DCLO-latched, since CMT
   never touches the CPU — so flipping it needs no reset; `pLed[6]` = mode
   tap; was the PS/2 Scroll Lock key through Phase 8, see the tape bullet).
-  **DIP 5 = the audio self-test tone** (Phase 10; `~pDip[4]`, read LIVE
-  through the same 2-FF sys_clk sync as DIP 4 and for the same reason — it
-  never touches the CPU, so it needs no reset). A DIAGNOSTIC, not a user
-  feature: it plays a 440 Hz reference on BOTH channels plus a 1567 Hz
-  RIGHT-ONLY tone whose level steps down 6 dB every ~0.7 s through eight
-  steps, the last three of which are BELOW one ladder step — the by-ear
-  demonstration that the noise-shaped DAC resolves finer than its six
-  physical bits, and (via the two different pans) that stereo works. It
-  **mutes the BK speaker while it runs**; see the gain-budget note in the
-  audio bullet. `pLed[3]` = mode tap.
+  **DIP 5 = Covox mono/stereo** (Phase 12; `~pDip[4]`, OFF = stereo, ON =
+  mono, read LIVE through the same 2-FF sys_clk sync as DIP 4 and for the
+  same reason — the Covox never touches the CPU, so flipping it needs no
+  reset). It replaces BkEmu's stereo autodetect and 3 s dead-man timeout, on
+  the same argument that dropped the TurboSound timeout; see the Covox bullet
+  in the audio file, including the accepted consequence that a mono-only
+  program with DIP 5 OFF leaves the right channel on the stale high lane.
+  **`ocbk_top` gives it its OWN resync wire (`cx_mono`)** rather than reusing
+  `tone_en` off the same pin: the two are mutually exclusive by build
+  configuration, not by wiring.
+  Through Phase 11 this pin was **the audio self-test tone** (Phase 10) — a
+  DIAGNOSTIC, not a user feature: a 440 Hz reference on BOTH channels plus a
+  1567 Hz RIGHT-ONLY tone whose level stepped down 6 dB every ~0.7 s through
+  eight steps, the last three BELOW one ladder step, the by-ear demonstration
+  that the noise-shaped DAC resolves finer than its six physical bits. It was
+  retired from the shipped build on 2026-07-31 once that claim had been
+  measured (`TONE_ENABLE = 0`), and the wiring is kept only so restoring it
+  stays a one-token change. In such a build DIP 5 drives both — harmless,
+  because the tone mutes the Covox slots anyway.
   **DIP 2 is unused** — it
   forced the on-chip test ROM, removed 2026-07-10 (ROM is always the loaded
   SDRAM image). **TURBO is NOT a DIP** — it is the PS/2 **F12** key, with

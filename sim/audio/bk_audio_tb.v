@@ -53,6 +53,8 @@ module bk_audio_tb;
     logic       tone_en  = 1'b0;
     logic       ext_lvl  = 1'b0;   // "tape recorder" level at the jack
     logic signed [15:0] ts_l = 16'sd0, ts_r = 16'sd0;
+    logic signed [15:0] cx_l = 16'sd0, cx_r = 16'sd0;
+    logic               cx_en = 1'b0;
     logic [5:0] dac_l, dac_r_o, dac_r_oe;
     logic       tape_lvl, active, dbg_sat, dbg_clip, dbg_tone;
 
@@ -76,6 +78,9 @@ module bk_audio_tb;
         .tone_en    (tone_en),
         .ts_l       (ts_l),
         .ts_r       (ts_r),
+        .cx_l       (cx_l),
+        .cx_r       (cx_r),
+        .cx_en      (cx_en),
         .tape_lvl   (tape_lvl),
         .dac_l      (dac_l),
         .dac_r_o    (dac_r_o),
@@ -335,6 +340,87 @@ module bk_audio_tb;
         end
         ts_l = 16'sd0; ts_r = 16'sd0;
         wait_ticks(4);
+
+        // =================================================================
+        //  THE COVOX PAN ORIENTATION, ITS GAIN, AND ITS MUTE
+        // =================================================================
+        // Same argument as the TurboSound pan above: bk_covox_tb proves the
+        // low byte lands in cx_l and the high byte in cx_r, audio_mixer_tb
+        // proves slot 5 is L-only and slot 6 R-only, and only THIS check
+        // proves bk_audio packs cx_l into slot 5 rather than slot 6.
+        //
+        // It pins the GAIN at the same time, which nothing else does. The
+        // Covox slots run at 5/8 (the device emits BkEmu's raw +/-32767 map),
+        // so +16384 contributes (16384*5)>>3 = 10240 = 10*1024 exactly.
+        // Against the speaker's low rail: -8192 + 10240 = 2048 = 2*1024 ->
+        // code 34, still an audio_ns6 fixed point, so this is a plain compare
+        // with no settling window. At the wrong gain the code is not 34: 8/8
+        // would give 40, 4/8 would give 32.
+        cx_en = 1'b1;
+        cx_l = 16'sd16384; cx_r = 16'sd0;
+        wait_ticks(6);
+        #1 if (dac_l !== 6'd34 || dac_r_o !== 6'd24) begin
+            $display("AUDIO-ERROR covox: cx_l did not land LEFT-ONLY at 5/8 (l=%0d r=%0d, expected 34/24)",
+                     dac_l, dac_r_o);
+            errors = errors + 1;
+        end
+
+        cx_l = 16'sd0; cx_r = 16'sd16384;
+        wait_ticks(6);
+        #1 if (dac_l !== 6'd24 || dac_r_o !== 6'd34) begin
+            $display("AUDIO-ERROR covox: cx_r did not land RIGHT-ONLY at 5/8 (l=%0d r=%0d, expected 24/34)",
+                     dac_l, dac_r_o);
+            errors = errors + 1;
+        end
+
+        cx_l = 16'sd16384; cx_r = 16'sd16384;
+        wait_ticks(6);
+        #1 if (dac_l !== 6'd34 || dac_r_o !== 6'd34) begin
+            $display("AUDIO-ERROR covox: both slots gave l=%0d r=%0d, expected 34/34",
+                     dac_l, dac_r_o);
+            errors = errors + 1;
+        end
+
+        // THE MUTE. cx_en is bk_covox's only mute mechanism - the device
+        // keeps presenting its sample while muted (one gate, not two), so if
+        // this enable is not wired into slot_en the Covox can never be
+        // silenced and the PSG arbitration does nothing at all.
+        cx_en = 1'b0;
+        wait_ticks(6);
+        #1 if (dac_l !== 6'd24 || dac_r_o !== 6'd24) begin
+            $display("AUDIO-ERROR covox: cx_en=0 did not zero the slots (l=%0d r=%0d, expected 24/24)",
+                     dac_l, dac_r_o);
+            errors = errors + 1;
+        end
+
+        // THE RE-OPENED GAIN BUDGET. The Covox at its bound plus the speaker
+        // at its high rail must not saturate or clip:
+        //    32767*5/8 = 20479, + 8192 = 28671 <= FS_SAT = 31744.
+        // Then the OTHER worst case, the TurboSound one, with the Covox muted
+        // as bk_covox guarantees it will be: 22950 + 8192 = 31142 <= 31744.
+        // The illegal third case - both devices at once - cannot occur,
+        // because bk_covox mutes on bk_turbosound's ts_snd; that exclusion is
+        // the device's job (sim/covox section 6), not the mixer's, and this
+        // comment is here so nobody "fixes" the budget by trusting the
+        // saturator instead.
+        spk_bit = 1'b1;
+        cx_en = 1'b1;
+        cx_l = 16'sd32767; cx_r = 16'sd32767;
+        wait_ticks(8);
+        cx_en = 1'b0; cx_l = 16'sd0; cx_r = 16'sd0;
+        ts_l = 16'sd22950; ts_r = 16'sd22950;
+        wait_ticks(8);
+        ts_l = 16'sd0; ts_r = 16'sd0;
+        spk_bit = 1'b0;
+        wait_ticks(4);
+        if (dbg_sat !== 1'b0) begin
+            $display("AUDIO-ERROR the re-opened gain budget saturated the mixer");
+            errors = errors + 1;
+        end
+        if (dbg_clip !== 1'b0) begin
+            $display("AUDIO-ERROR the re-opened gain budget clipped a shaper");
+            errors = errors + 1;
+        end
 
         // Tone on: the codes must MOVE, and the two ladders must DIFFER (voice A
         // is panned BOTH, voice B RIGHT-only - so a mono path cannot pass this).

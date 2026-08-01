@@ -1,6 +1,6 @@
 # Audio oracles — the pinned contract
 
-`../run_audio.sh` runs four legs; `--mutate` runs 25 mutations, each of which
+`../run_audio.sh` runs four legs; `--mutate` runs 28 mutations, each of which
 must break one of them. This file records *what is pinned and why*, because the
 central claim of the audio subsystem — that a 6-bit R-2R ladder carries far more
 than 6 bits of audio-band resolution — needs a written justification and not
@@ -105,8 +105,13 @@ have to become a bounded-variance check.
 
 ## Leg 4 — `audio_mixer_tb`
 
-Four instances. `dut3` is the shipped 3-slot config (enable / pan / saturation /
-`dbg_sat` / exact 2-cycle latency); `dutg` sweeps gains {8,4,6,3,1,7} against an
+Four instances. `dut3` is the shipped config — now **NSRC=7**, and it MUST
+track `bk_audio.sv`'s `SLOT_GAIN`/`SLOT_PAN` (enable / pan / the non-unity
+Covox gain / saturation / `dbg_sat` / exact 2-cycle latency). Every device
+increment extends it the same way: **zero-pad and disable the new slots** in
+the older helpers (`set3`, `set5`) so every pre-existing check still means
+exactly what it did, and add a helper of its own (`set7`). `dutg` sweeps
+gains {8,4,6,3,1,7} against an
 **independently written** floor reference (integer division plus an explicit
 negative correction, never the RTL's arithmetic shift, so a shift bug cannot
 cancel out — the palette-table precedent); `dut1` is the **pass-through
@@ -118,6 +123,14 @@ Saturation is checked in the direction that matters: two full-scale slots must
 clamp and must **never come out negative**. Mutation M1 shows why — wrapping
 turns `+31744 + 31744` into `−2048`, a full-scale sign inversion, the loudest
 artifact this path can emit.
+
+Both hard-panned device pairs are pinned for crosstalk and orientation (slots
+3/4 TurboSound, 5/6 Covox), and **both shipped worst cases are written down as
+assertions**: `22950 + 8192 = 31142` and `20480 + 8192 = 28671`, each inside
+`FS_SAT = 31744`. The third combination — TurboSound *and* Covox at once — is
+deliberately not tested, because `bk_covox` mutes on `ts_snd` and it cannot
+occur. That is said in the file itself so that a future saturation is fixed by
+restoring the exclusion, not by raising `FS_SAT`.
 
 ## Leg 1 — `bk_audio_tb`, the subsystem
 
@@ -137,6 +150,18 @@ carry is different:
   toggle at 3 MHz, where before it was a quasi-static mono speaker level.
 - **tape-out is checked with the tone running**, so a regression to a shaped
   sample bit is caught rather than aliased against a silent mixer.
+
+It is also where the **slot map** is pinned, and it is the only place that
+can be: `bk_turbosound_tb`/`bk_covox_tb` prove what each device puts in its
+own left and right outputs, `audio_mixer_tb` proves which slot index is panned
+where, and only this leg proves `bk_audio` **packs the left output into the
+left-panned slot**. Swap either pair and every other oracle still passes while
+the board plays that device's stereo image mirrored (mutations A1 and A3). The
+Covox section additionally pins its **5/8 gain** — +16384 against the
+speaker's low rail must read code 34 exactly, where 8/8 would read 40 — and
+its **mute**: `cx_en = 0` must take both ladders back to the speaker-only
+code, because that enable is `bk_covox`'s only mute mechanism (the device
+keeps presenting its sample while muted, one gate not two).
 
 New behaviour pinned: true stereo (the ladders must differ on ≥100 of 4000
 ticks), the CMT **mono fold** on the left ladder, `tone_en` routing, exact
@@ -169,8 +194,8 @@ Two testbench-timing traps worth knowing before editing this file or
 Directed Q-bus cycles into the **real** `qbus_mem`. The 177716 bit-6/bit-7
 speaker and motor captures (including the BK-0011M `bank_wr` exclusion and the
 "nINIT must not clear them" rule), the 177716 read assembly including tape bit 5,
-and the **177714 (nSEL2) port-write capture** that the future Covox / AY /
-Menestrel will consume.
+and the **177714 (nSEL2) port-write capture** that `bk_turbosound` and
+`bk_covox` consume (and Menestrel will).
 
 The load-bearing case there is the **WTBT discriminator**. WTBT is dual-purpose —
 "write cycle" at SYNC time, "byte op" at DOUT time — so `port_word` must sample

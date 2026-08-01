@@ -20,7 +20,8 @@ Everything below is confirmed running on the board.
   Both colour-256 and mono-512 modes.
 - **Keyboard** - a PS/2 keyboard behaves as the BK's own, including the
   Russian/Latin and case triggers, СУ/АР2/НР modifiers and СТОП.
-- **Sound** - the 1-bit speaker plus **TurboSound** (2x YM2149).
+- **Sound** - the 1-bit speaker, **TurboSound** (2x YM2149) and a stereo
+  **Covox** 8-bit DAC.
 - **Tape** - the right audio jack doubles as the cassette port. Load real BK
   tape recordings from a PC, and save back to one.
 - **SMK512** - the 512 KB RAM extension, its BIOS, and an IDE drive backed by
@@ -38,6 +39,7 @@ Everything below is confirmed running on the board.
 |--------|----------|
 | **1** | **Model**: OFF = BK-0010, ON = BK-0011M. Needs reset when switched |
 | **4** | **Tape mode**: ON = the right audio jack is the cassette port |
+| **5** | **Covox**: OFF = stereo, ON = mono. Takes effect immediately |
 | **8** | **SMK512**: ON = the storage controller is present. Needs reset when switched |
 
 ### Special keys and buttons
@@ -84,6 +86,24 @@ Switch **DIP 4** on (LED 7 lights). Play a BK tape recording - e.g. a WAV
 rendered from a `.BIN` - into the **right** audio channel, then load it the
 normal way. Switch DIP 4 off when you're done - that jack is the right audio channel otherwise.
 
+### Covox
+
+Nothing to switch on - the Covox is always there, on the same 0177714 port as
+the TurboSound. Because they share that port, only one of them can sound at a
+time, and **the PSGs win**: while a TurboSound tune is playing the Covox stays
+quiet, and it comes back about a second after the music stops.
+
+**DIP 5 picks stereo or mono.** Stereo is the default: a program writing a
+whole word puts the low byte in the left channel and the high byte in the
+right. Software written for a *mono* Covox writes only the low byte, which
+leaves the right channel stuck on whatever was there before - so if a Covox
+program sounds one-sided or has a hum on one side, **switch DIP 5 on** and it
+plays down the middle. The switch is live; you don't need to reset.
+
+A Covox has no clock of its own, so the pitch of anything it plays follows the
+CPU - it will sound higher on a BK-0011M than on a BK-0010, and higher again
+in turbo. That is how the real thing behaves.
+
 ### SD card (SMK512)
 
 Write a raw **AltPro HDD image** to the card starting at the very beginning -
@@ -120,7 +140,7 @@ something broken.
 
 ## Under the hood
 
-It fits in **8,184 of 12,060 logic elements (68 %)**, 3 memory blocks and the
+It fits in **8,452 of 12,060 logic elements (70 %)**, 3 memory blocks and the
 board's single PLL.
 
 Developer documentation is in **[doc/dev/](doc/dev/)**, one file per subsystem -

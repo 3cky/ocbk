@@ -112,8 +112,10 @@ The constraints that shape every decision; details and the reasoning in
   is the root reason the arbiter / done-gate machinery exists.
 - **The panel is standard-VESA-only**, so the output is 1024×768@60 and the
   48.83→60 Hz gap is bridged in the framebuffer.
-- **Current fit: 8,184 / 12,060 LE (68 %)**, 3/52 M4K, 98/173 pins, one PLL,
-  sys_clk setup +0.528 ns, TNS 0.
+- **Current fit: 8,452 / 12,060 LE (70 %)**, 3/52 M4K, 98/173 pins, one PLL,
+  sys_clk setup +0.102 ns, TNS 0. That margin is THIN — the next increment
+  starts with an STA chase on the `ram_init|filling` / `mem_mapper|mon_en`
+  cone. → audio, gotchas
 
 ## Source tree
 

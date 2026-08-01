@@ -18,13 +18,14 @@
 #                          protocol (word = address, byte = data, inverted,
 #                          the odd lane's 0xFF, the 4-bit latch mask), the
 #                          0xFF/0xFE chip select, the shared register pointer,
-#                          the ACB fold and its headroom bound, nINIT, and the
-#                          /56 PSG clock enable.
+#                          the ACB fold and its headroom bound, nINIT, the
+#                          /56 PSG clock enable, and ts_snd (the Covox
+#                          arbitration hook, which must LEAD the sample).
 #
 # --mutate  rewrites one property of a COPY of the real RTL (the sim/evnt
 #           idiom - no inline replica to drift) and requires the named leg to
-#           break. 15 mutations: E1-E4 on the core, D1-D10 and D12 on the
-#           device.
+#           break. 18 mutations: E1-E4 on the core, D1-D10 and D12-D15 on
+#           the device.
 #
 # ONE THING IS DELIBERATELY NOT MUTATION-COVERED, and this says so out loud
 # rather than quietly dropping the check (the sd_backend 0xFD/CMD12 precedent).
@@ -161,10 +162,16 @@ mut_ts "D10 a DATA write is broadcast to both chips" \
    "s/wire bdir1 = s_wr \& (s_word |  s_sel);/wire bdir1 = s_wr;/"
 mut_ts "D12 the 4-bit address mask dropped (silicon semantics, not BkEmu's)" \
    "s/s_di   <= port_word ? {4'b0000, v\[3:0\]} : wdata;/s_di   <= port_word ? v : wdata;/"
+mut_ts "D13 ts_snd tied low (the Covox would never mute)" \
+   "s/^    wire snd_now = .*/    wire snd_now = 1'b0;/"
+mut_ts "D14 ts_snd taken one stage LATE (loses its lead over ts_l\/ts_r)" \
+   "s/wire snd_now = (|a0) | (|b0) | (|c0)/wire snd_now = (|lc0) | (|rc0)/"
+mut_ts "D15 the secondary's channels ignored in ts_snd (2-chip mute hole)" \
+   "s/| (dual_act \& ((|a1)|(|b1)|(|c1)));/;/"
 
 echo
 if [ "$mfail" -ne 0 ]; then
    echo "MUTATION TESTING FAILED: $mfail mutation(s) survived"
    exit 1
 fi
-echo "ALL TURBOSOUND ORACLES PASS (15 mutations killed)"
+echo "ALL TURBOSOUND ORACLES PASS (18 mutations killed)"
