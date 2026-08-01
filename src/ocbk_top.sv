@@ -929,9 +929,9 @@ module ocbk_top (
                                      // it must NOT gate CMT mode (real BK
                                      // software writes bit 7 = 0 outside tape
                                      // ops); cmt_mode comes from DIP 4.
-        // ---- the 177714 sound-device seam (Phase 10) --------------------
+        // ---- the 177714 sound-device seam --------------------
         // Every BK sound expansion - Covox, 2x YM2149, Menestrel - decodes
-        // THIS one address and differs only in how it reads the data, so the
+        // this one address and differs only in how it reads the data, so the
         // bus side is captured once in qbus_mem and lands here. u_ts
         // (bk_turbosound) and u_cx (bk_covox) consume it; Menestrel will
         // hang off the same wires when it lands. Devices live in src/audio/ and
@@ -956,7 +956,8 @@ module ocbk_top (
     // latch), the TurboSound and the Covox into an N-slot stereo mixer, then
     // noise-shapes each channel down to the 6-bit ladder code at sys_clk/16.
     // The shaping is what lets a 6-bit ladder resolve far finer than six bits
-    // in the audio band - the seam the sound devices plug into. While CMT mode is on (DIP 4, see cmt_mode above) the right channel
+    // in the audio band - the seam the sound devices plug into. While CMT mode
+    // is on (DIP 4, see cmt_mode above) the right channel
     // becomes the esemsx3-style CMT comparator (pDac_SR[5] input + ladder
     // feedback, [0] = the RAW speaker bit as tape-out) and the LEFT ladder
     // carries the mono fold of both channels.
@@ -965,12 +966,7 @@ module ocbk_top (
     wire spk_active, snd_sat, snd_clip, snd_tone;
     wire [5:0] dac_r_o, dac_r_oe;
 
-    // ---- TurboSound: 2x YM2149 on 0177714 ---------------------------------
-    // The first consumer of the Phase-10 177714 capture seam. A sibling like
-    // u_ide: it snoops what qbus_mem captured and never touches the bus, so
-    // qbus_mem is unchanged by this feature and no timing golden moves. All
-    // sys_clk; nINIT resets it (the standard BK peripheral rule), while
-    // vid_rst_n is the power-on reset the rest of the audio path uses.
+    // ---- TurboSound: 2x YM2149 ---------------------------------
     wire signed [15:0] ts_l, ts_r;
     wire               ts_act, ts_dual, ts_snd;
     bk_turbosound u_ts (
@@ -988,18 +984,7 @@ module ocbk_top (
         .ts_snd    (ts_snd)
     );
 
-    // ---- Covox: an 8-bit DAC on the same 0177714 --------------------------
-    // The second consumer of the Phase-10 seam, and another sibling that only
-    // snoops. It needs neither port_word nor port_be: the 177714 latch holds
-    // the lane a byte write did not touch, so the Covox output is a pure
-    // function of port_data (word-vs-byte is the AY's discriminator, not
-    // ours). port_wr is taken for the idle one-shot alone.
-    //
-    // THE TWO DEVICES ARE MUTUALLY EXCLUSIVE, because they decode the same
-    // address and each renders the other's traffic as garbage. The PSGs win:
-    // ts_snd ("a non-zero PSG sample") mutes the Covox, held ~0.7 s so a rest
-    // between notes cannot unmute it. That exclusion is also what keeps
-    // bk_audio's gain budget closed - see its slot map.
+    // ---- Covox: stereo 8-bit DAC --------------------------
     wire signed [15:0] cx_l, cx_r;
     wire               cx_en;
     bk_covox u_cx (
@@ -1014,13 +999,8 @@ module ocbk_top (
         .cx_r      (cx_r),
         .cx_en     (cx_en)
     );
-    // TONE_ENABLE = 0: the DIP-5 self-test is retired from the shipped build
-    // (see the tone_en note above). Set it back to 1'b1 for a diagnostic
-    // firmware - that single token is the whole difference, and it costs
-    // ~130 LE. audio_tone.sv and its oracle leg stay in the tree precisely so
-    // this stays a one-token change: the BK speaker maps to the rails and
-    // emits a STATIC code, so the tone is the only stimulus that can exercise
-    // the shaper on hardware at all.
+
+    // ---- Audio mixer and output --------------------------
     bk_audio #(.TONE_ENABLE (1'b0)) u_audio (
         .sys_clk    (sys_clk),
         .rst_n      (vid_rst_n),
