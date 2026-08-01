@@ -123,10 +123,11 @@ something broken.
 It fits in **8,184 of 12,060 logic elements (68 %)**, 3 memory blocks and the
 board's single PLL.
 
-Developer documentation - the architecture, the platform constraints, the
-memory map, the per-module design rules and the simulation oracles that keep
-the timing honest - is in **[CLAUDE.md](CLAUDE.md)**. Start with "Platform &
-system map".
+Developer documentation is in **[doc/dev/](doc/dev/)**, one file per subsystem -
+the architecture, the platform constraints, the memory map, the per-module
+design rules and the simulation oracles that keep the timing honest. Start with
+**[doc/dev/platform.md](doc/dev/platform.md)**; **[CLAUDE.md](CLAUDE.md)** is
+the index and the list of rules a change must not break.
 
 ## Credits
 
