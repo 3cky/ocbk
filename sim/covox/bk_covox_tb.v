@@ -32,6 +32,17 @@
 //  zero. Without the idle one-shot the board would sit on a full-scale DC on
 //  both ladders from power-on.
 //
+//  SECTION 10 IS THE OTHER ONE, and it is a HARDWARE-FOUND REGRESSION. Arming
+//  on any write is not enough: MONITOR's system-init routine ends with a lone
+//  CLR @#177714 (d1.mac:270), which is a single write of the one value that
+//  inverts to FULL POSITIVE SCALE on both lanes, and it runs at boot and again
+//  on every return from a user program. The board clicked several times per
+//  boot. So `live` now takes a write that CHANGES the code, inside a one-shot
+//  that is already running - "the port is being modulated", not "the port was
+//  written" - and section 10 walks the exact MONITOR sequence. The tasks below
+//  therefore split into wr_* (one bus write) and arm_word (a two-write burst
+//  that leaves the DAC on a chosen code and the slot live).
+//
 //  The device carries no scaling: it emits BkEmu's own +/-32767 map and the
 //  headroom is one SLOT_GAIN nibble in bk_audio, where bk_audio_tb pins it.
 //  So there is no gain arithmetic to check here - only the map itself.
@@ -150,6 +161,17 @@ module bk_covox_tb;
 
    task wr_odd(input [7:0] r);                   // MOVB 0177715 -> high lane
       begin port_data[15:8] = ~r; pulse_wr; end
+   endtask
+
+   // Arm the slot and land on {l,r}. Two writes: the first opens the one-shot,
+   // the second CHANGES the code inside it, which is what `live` now takes.
+   // Written as l ^ 1 rather than a fixed priming value so the caller's
+   // chosen code is what the DAC ends up on.
+   task arm_word(input [7:0] l, input [7:0] r);
+      begin
+         wr_word(l ^ 8'h01, r);
+         wr_word(l, r);
+      end
    endtask
 
    task settle; repeat (4) @(posedge sys_clk); endtask
@@ -276,8 +298,8 @@ module bk_covox_tb;
 
       // ================= 6. the PSG mute ===================================
       // 6a. a live Covox is muted by the PSGs.
-      wr_word(8'h90, 8'h30); settle;
-      chk_b("recent write => live", cx_en, 1'b1);
+      arm_word(8'h90, 8'h30); settle;
+      chk_b("a modulated port => live", cx_en, 1'b1);
       @(negedge sys_clk); psg_act = 1'b1;
       @(negedge sys_clk); psg_act = 1'b0;
       settle;
@@ -300,6 +322,9 @@ module bk_covox_tb;
       // 6c. a PSG square wave is zero for half of every period, so psg_act
       // arrives as a train of pulses. The hold must swallow the gaps: this is
       // the section a hold-less build (mute follows psg_act) dies in.
+      // NOTE the writes below are IDENTICAL and still keep the device live -
+      // arming takes a change, HOLDING must not, or a sample run that repeats
+      // a value would drop out mid-note.
       for (i = 0; i < 8; i = i + 1) begin
          @(negedge sys_clk); psg_act = 1'b1;
          @(negedge sys_clk); psg_act = 1'b0;
@@ -313,8 +338,8 @@ module bk_covox_tb;
       chk_b("mute releases once the PSGs stop", cx_en, 1'b1);
 
       // ================= 7. the idle one-shot ==============================
-      // Measure it: one write, then count until the slot goes quiet.
-      wr_word(8'hA0, 8'h50);
+      // Measure it: arm, then count until the slot goes quiet.
+      arm_word(8'hA0, 8'h50);
       t0 = 0;
       while (cx_en === 1'b1 && t0 < 4*IDLE_LEN) begin
          @(posedge sys_clk);
@@ -327,10 +352,13 @@ module bk_covox_tb;
          errors = errors + 1;
       end
 
-      // RETRIGGERABLE: write, wait most of the period, write again. The slot
+      // RETRIGGERABLE: arm, wait most of the period, write again. The slot
       // must then stay live for another full period from the SECOND write - a
       // build that reloads only from the idle state falls silent early.
-      wr_word(8'hA0, 8'h50);
+      // The retrigger write repeats the code the DAC is already on, which is
+      // the point: the one-shot reload is VALUE-BLIND even though arming is
+      // not, so a repeated sample can never cut a live stream short.
+      arm_word(8'hA0, 8'h50);
       repeat (IDLE_LEN - IDLE_LEN/4) @(posedge sys_clk);
       chk_b("still live just before the retrigger", cx_en, 1'b1);
       wr_word(8'hA0, 8'h50);
@@ -347,7 +375,7 @@ module bk_covox_tb;
 
       // ================= 8. nINIT resets the device ========================
       // Go in LIVE and MUTED-pending so both counters have something to clear.
-      wr_word(8'h11, 8'h22);
+      arm_word(8'h11, 8'h22);
       @(negedge sys_clk); psg_act = 1'b1;
       @(negedge sys_clk); psg_act = 1'b0;
       settle;
@@ -372,12 +400,75 @@ module bk_covox_tb;
       chk_b("nINIT cleared the PSG hold too - still muted only by idle",
             cx_en, 1'b0);
 
-      // A single fresh write brings the device straight back, which is what
-      // proves the hold was cleared rather than merely still running.
+      // A fresh BURST brings the device straight back, which is what proves
+      // the hold was cleared rather than merely still running - and it takes
+      // a burst, not a write: nINIT left both counters at zero, so the first
+      // write only opens the window even though it does change the code.
       wr_word(8'h11, 8'h22);
       settle;
-      chk_b("post-nINIT a write re-arms the slot", cx_en, 1'b1);
+      chk_b("post-nINIT one write does not arm", cx_en, 1'b0);
+      wr_word(8'h11, 8'h23);          // ...the second one, changing, arms it
+      settle;
+      chk_b("post-nINIT a change re-arms", cx_en, 1'b1);
       chk("post-nINIT the sample is right again",  cx_l, pcm(8'h11));
+      chk("the compare sees the right lane",
+          cx_r, pcm(8'h23));
+
+      // ================= 10. the MONITOR CLR regression ====================
+      // The hardware bug this rule exists for. MONITOR's system-init routine
+      // MIDMBK ends with
+      //
+      //     CLR  @#APORT          ; APORT = 177714  (d1.mac:135,270)
+      //
+      // - ONE isolated write, of the one value that inverts to b = 255 on
+      // BOTH lanes, i.e. full positive scale. MIDMBK runs at boot and again
+      // on every return from a user program, so a build that arms on any
+      // write clicks several times per boot: two -3.8 dBFS DC edges 43 ms
+      // apart on both ladders, each time.
+
+      // Start from where a finished program leaves the machine: a stream that
+      // was live, then stopped.
+      arm_word(8'h60, 8'hA5);
+      settle;
+      chk_b("10: a modulated port is live", cx_en, 1'b1);
+      repeat (IDLE_LEN + 8) @(posedge sys_clk);
+      chk_b("10: the stream stopped => muted", cx_en, 1'b0);
+
+      // 10a. THE CLR itself. Both halves are checked, so the section cannot
+      // pass vacuously: the sample really IS at the positive rail, and the
+      // slot really IS still muted.
+      wr_word(8'd255, 8'd255);              // bus value 0 = CLR @#177714
+      settle;
+      chk("10a: the CLR is at +full scale L", cx_l, pcm(255));
+      chk("10a: the CLR is at +full scale R", cx_r, pcm(255));
+      chk_b("10a: a lone CLR does not unmute", cx_en, 1'b0);
+      repeat (IDLE_LEN + 8) @(posedge sys_clk);
+      chk_b("10a: still muted a one-shot later", cx_en, 1'b0);
+
+      // 10b. MIDMBK runs more than once, so a second CLR can land well inside
+      // the first one's window. Two writes - but the same value, so it is
+      // still not modulation.
+      wr_word(8'd255, 8'd255);
+      repeat (IDLE_LEN/4) @(posedge sys_clk);
+      chk_b("10b: muted between the two CLRs", cx_en, 1'b0);
+      wr_word(8'd255, 8'd255);
+      settle;
+      chk_b("10b: two CLRs do not unmute", cx_en, 1'b0);
+      repeat (IDLE_LEN + 8) @(posedge sys_clk);
+
+      // 10c. Nor does a HOLD-style burst of one repeated code, arriving on a
+      // quiet port: that is a DC, and a real Covox drives an AC-COUPLED
+      // amplifier that does not reproduce one. The first write changes the
+      // code but only OPENS the window; the other 31 change nothing.
+      for (i = 0; i < 32; i = i + 1) wr_word(8'h60, 8'h60);
+      chk_b("10c: a constant-code burst is a DC", cx_en, 1'b0);
+
+      // 10d. ...and the anti-vacuity half: one changing write inside that
+      // same window, which is what a sample stream does, unmutes at once.
+      wr_word(8'h61, 8'h60);
+      settle;
+      chk_b("10d: a changing write unmutes", cx_en, 1'b1);
+      chk("10d: on the code it wrote", cx_l, pcm(8'h61));
 
       // ================= 9. anti-vacuity ===================================
       if (distinct_l < 12) begin

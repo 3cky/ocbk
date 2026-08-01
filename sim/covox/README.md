@@ -52,17 +52,30 @@ TurboSound dead-man timeout. Here it is a switch, read live.
 
 Covox and TurboSound decode the same address, so with both present each renders
 the other's traffic as garbage. The PSGs win: `cx_en = live & ~psg_hold`, where
-`live` is a ~43 ms one-shot retriggered by every 177714 write and `psg_hold` is
-a ~694 ms hold on `bk_turbosound`'s `ts_snd`.
+`live` means **the port is being *modulated*** — a write that CHANGES the code,
+inside a ~43 ms one-shot that is already running — and `psg_hold` is a ~694 ms
+hold on `bk_turbosound`'s `ts_snd`. The one-shot itself is **value-blind**: any
+write reloads it, because only *arming* may demand a change, or a sample run
+that repeats a value would drop out mid-note.
 
 Both halves are load-bearing and both have a section:
 
-* **`live` (section 7)** is what keeps the never-reset latch off the ladders.
-  At power-on `port_data` reads 0, which **inverts to `b = 255` = +32767** —
-  full positive scale on both channels. Section 1 asserts both halves of that:
-  the sample really is at full scale, *and* `cx_en` is low. Without the
-  one-shot the board would sit on a full-scale DC from power-on, and the
-  measured −85.8 dBFS idle floor would be gone.
+* **`live` (sections 7 and 10)** is what keeps the never-reset latch off the
+  ladders. At power-on `port_data` reads 0, which **inverts to `b = 255` =
+  +32767** — full positive scale on both channels. Section 1 asserts both
+  halves of that: the sample really is at full scale, *and* `cx_en` is low.
+  Without the one-shot the board would sit on a full-scale DC from power-on,
+  and the measured −85.8 dBFS idle floor would be gone.
+  **Why arming takes a *change*, not just a write — this is a hardware-found
+  fix.** Phase 12 shipped `cx_en = (idle_cnt != 0) & (psg_cnt == 0)`, and the
+  board clicked several times per boot. MONITOR's system-init routine `MIDMBK`
+  ends with a lone `CLR @#APORT` (`APORT = 177714`, `d1.mac:135,270`) — one
+  isolated write, of the one value that inverts to full positive scale on both
+  lanes — and it runs at boot *and* on every return from a user program. A real
+  Covox is never *played* by one write. **Section 10 walks that exact sequence**
+  and **X19 is the pre-fix predicate restored verbatim**. Accepted consequence:
+  a constant code written forever is inaudible, which is what a real Covox does
+  too — its amplifier is AC-coupled, so only transitions are heard.
 * **`psg_hold` (section 6)** must survive the gaps. A PSG square wave is zero
   for half of every period, so `ts_snd` arrives as a pulse train; without the
   hold the Covox would unmute between pulses onto whatever AY register data the
@@ -92,7 +105,8 @@ its bus cycle touches) rather than the device's expectation of it.
 | 5 | DIP 5 is **live** — it takes effect with no write and no reset |
 | 6 | the PSG mute: it fires, it is held for the right length, and it survives a pulse train |
 | 7 | the idle one-shot: it expires at the right length, and it **retriggers** |
-| 8 | nINIT clears the device but **not** the latch; the slot stays muted until a fresh write |
+| 8 | nINIT clears the device but **not** the latch; the slot stays muted until a fresh burst |
+| 10 | **the MONITOR `CLR @#177714` regression** — a lone `CLR` (still at full scale, still muted), two `CLR`s in a row, a constant-code burst, and one changing write that does unmute |
 | 9 | anti-vacuity: ≥ 12 distinct samples, both rails reached, the channels differed, ≥ 2 mute/unmute events |
 
 ### Why one leg
@@ -124,10 +138,13 @@ ordering — so one write keeps the device live right through a hold measurement
 
 ## Mutations
 
-13, all killed. X1–X4 the map (inversion, right lane, the −32768 offset, the
+19, all killed. X1–X4 the map (inversion, right lane, the −32768 offset, the
 low-byte replication); X5–X6 mono (fold inverted, DIP 5 ignored); X7–X11 the
-arbitration (mute dropped, no hold, one-shot dropped, `cx_en` stuck high,
-one-shot not retriggerable); X12 the shipped rate; X13 nINIT.
+arbitration (mute dropped, no hold, arm gate dropped, `cx_en` stuck high,
+one-shot not retriggerable); X12 the shipped rate; X13 nINIT; **X14–X19 the
+arming rule** — arms on any write, the running-one-shot precondition dropped,
+`last_data` never updated, the compare inverted, `live` never clearing, and
+**X19, the pre-fix predicate itself**, which dies in section 10a.
 
 Each is a `sed` against a **copy** of the real RTL — no inline replica to
 drift — and a `sed` that fails to apply is a hard error, never a silent skip.

@@ -8,7 +8,9 @@
 #                    (the one place this device deliberately departs from
 #                    BkEmu), the DIP-5 mono fold and its liveness, the PSG
 #                    mute and its hold, the idle one-shot and its retrigger,
-#                    nINIT, and the power-on state.
+#                    nINIT, the power-on state, and section 10 - the MONITOR
+#                    CLR @#177714 regression that made arming take a write
+#                    which CHANGES the code rather than any write at all.
 #
 # WHY ONE LEG AND NOT TWO. bk_turbosound has the same shape and the same
 # single leg: the SEAM itself - one strobe per bus write, the BK-true
@@ -35,7 +37,7 @@
 #
 # --mutate  rewrites one property of a COPY of the real RTL (the sim/evnt
 #           idiom - no inline replica to drift) and requires the leg to break.
-#           13 mutations, X1-X13.
+#           19 mutations, X1-X19 (X19 is the pre-fix predicate itself).
 #
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -108,15 +110,31 @@ mut "X6 DIP 5 ignored - always stereo" \
 
 # -- the arbitration --
 mut "X7 the PSG mute dropped entirely" \
-   "s/assign cx_en = (idle_cnt != 0) \& (psg_cnt == 0);/assign cx_en = (idle_cnt != 0);/"
+   "s/assign cx_en = live \& (psg_cnt == 0);/assign cx_en = live;/"
 mut "X8 the PSG mute has no hold (follows psg_act combinationally)" \
-   "s/assign cx_en = (idle_cnt != 0) \& (psg_cnt == 0);/assign cx_en = (idle_cnt != 0) \& ~psg_act;/"
-mut "X9 the idle one-shot dropped - the power-on latch reaches the ladders" \
-   "s/assign cx_en = (idle_cnt != 0) \& (psg_cnt == 0);/assign cx_en = (psg_cnt == 0);/"
+   "s/assign cx_en = live \& (psg_cnt == 0);/assign cx_en = live \& ~psg_act;/"
+mut "X9 the arm gate dropped - the power-on latch reaches the ladders" \
+   "s/assign cx_en = live \& (psg_cnt == 0);/assign cx_en = (psg_cnt == 0);/"
 mut "X10 cx_en stuck asserted" \
-   "s/assign cx_en = (idle_cnt != 0) \& (psg_cnt == 0);/assign cx_en = 1'b1;/"
+   "s/assign cx_en = live \& (psg_cnt == 0);/assign cx_en = 1'b1;/"
 mut "X11 the idle one-shot is not retriggerable (reloads only from idle)" \
    "s/else if (port_wr)       idle_cnt <= {IDLE_BITS{1'b1}};/else if (port_wr \&\& idle_cnt == 0) idle_cnt <= {IDLE_BITS{1'b1}};/"
+
+# -- the arming rule: "modulated", not merely "written" (section 10) --
+# X19 IS THE HARDWARE BUG ITSELF - the predicate Phase 12 shipped, restored
+# verbatim. It must die in 10a, and it is the reason that section exists.
+mut "X19 the pre-fix predicate: any recent write unmutes (the shipped bug)" \
+   "s/assign cx_en = live \& (psg_cnt == 0);/assign cx_en = (idle_cnt != 0) \& (psg_cnt == 0);/"
+mut "X14 live arms on ANY write - a second write unmutes whatever it wrote" \
+   "s/else if (wr_change)     live <= 1'b1;/else if (port_wr)       live <= 1'b1;/"
+mut "X15 the running-one-shot precondition dropped (the first change arms)" \
+   "s/else if (idle_cnt == 0) live <= 1'b0;/else if (idle_cnt == 0 \&\& !wr_change) live <= 1'b0;/"
+mut "X16 last_data never updated - every write looks like a change" \
+   "s/else if (port_wr) last_data <= port_data;/else if (1'b0)    last_data <= port_data;/"
+mut "X17 the change compare inverted" \
+   "s/(port_data != last_data)/(port_data == last_data)/"
+mut "X18 live never clears - the slot latches on forever" \
+   "s/else if (idle_cnt == 0) live <= 1'b0;/else if (1'b0)          live <= 1'b0;/"
 
 # -- the shipped rates and the reset --
 mut "X12 the shipped idle-one-shot default changed" \
@@ -129,4 +147,4 @@ if [ "$mfail" -ne 0 ]; then
    echo "MUTATION TESTING FAILED: $mfail mutation(s) survived"
    exit 1
 fi
-echo "ALL COVOX ORACLES PASS (13 mutations killed)"
+echo "ALL COVOX ORACLES PASS (19 mutations killed)"

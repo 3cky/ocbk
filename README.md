@@ -93,6 +93,12 @@ the TurboSound. Because they share that port, only one of them can sound at a
 time, and **the PSGs win**: while a TurboSound tune is playing the Covox stays
 quiet, and it comes back about a second after the music stops.
 
+The Covox also only sounds while the port is actually being *played* - a
+program has to keep changing the value it writes. That is why the operating
+system's own housekeeping writes to the port are silent, and it matches a real
+Covox, where the amplifier is capacitor-coupled and a value that never changes
+produces no sound.
+
 **DIP 5 picks stereo or mono.** Stereo is the default: a program writing a
 whole word puts the low byte in the left channel and the high byte in the
 right. Software written for a *mono* Covox writes only the low byte, which
@@ -140,7 +146,7 @@ something broken.
 
 ## Under the hood
 
-It fits in **8,452 of 12,060 logic elements (70 %)**, 3 memory blocks and the
+It fits in **8,485 of 12,060 logic elements (70 %)**, 3 memory blocks and the
 board's single PLL.
 
 Developer documentation is in **[doc/dev/](doc/dev/)**, one file per subsystem -

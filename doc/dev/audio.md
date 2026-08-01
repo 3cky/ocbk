@@ -328,14 +328,20 @@ cassette port shares the right DAC ladder, so tape is documented here too.
   * **The mute is the whole reason the device has state.** Covox and TurboSound
     decode the same address, so each renders the other's traffic as garbage.
     `cx_en = live & ~psg_hold`:
-    - `live` — a ~43 ms one-shot retriggered by every 177714 write. This is
-      what keeps the **never-reset** latch off the ladders: at power-on
-      `port_data` reads 0, which **inverts to `b = 255` = +32767**, and a
-      finished program leaves its last sample behind. With the slot disabled
-      the mixer contributes *exactly* zero, so `audio_ns6` stays on its
-      exact-zero fixed point and silence keeps producing no pin activity — the
-      property the −85.8 dBFS measured idle floor and the CMT anti-echo
+    - `live` — **"the port is being *modulated*", not "the port was
+      written".** This is what keeps the **never-reset** latch off the ladders:
+      at power-on `port_data` reads 0, which **inverts to `b = 255` = +32767**,
+      and a finished program leaves its last sample behind. With the slot
+      disabled the mixer contributes *exactly* zero, so `audio_ns6` stays on
+      its exact-zero fixed point and silence keeps producing no pin activity —
+      the property the −85.8 dBFS measured idle floor and the CMT anti-echo
       argument both rest on.
+      The predicate is **a write that CHANGES the code, inside a ~43 ms
+      one-shot that is already running** — i.e. at least two writes within
+      43 ms, the second one moving the DAC. The one-shot itself
+      (`idle_cnt`) stays **value-blind**: any write reloads it, because only
+      *arming* may demand a change — a sample run that repeats a value must
+      not drop out mid-note.
     - `psg_hold` — a ~0.7 s retriggerable hold on `bk_turbosound`'s new
       **`ts_snd`** output. Load-bearing: a PSG square wave is zero for half of
       every period and goes silent for every rest, so without it the Covox
@@ -351,6 +357,36 @@ cassette port shares the right DAC ladder, so tape is documented here too.
     — so `ts_act = 0` does not imply silence and the enable bits alone would
     not close the headroom proof; and a player that exits leaving channels
     enabled at volume 0 would mute the Covox until the next reset.
+  * **The arming rule is a HARDWARE-FOUND FIX — CONFIRMED ON THE BOARD
+    2026-08-01 (the OS boots silent) — and the first cut was wrong.**
+    Phase 12 shipped `cx_en = (idle_cnt != 0) & (psg_cnt == 0)` — "a write
+    happened recently". On the board the OS **clicked several times per boot**.
+    The trace: MONITOR's system-init routine `MIDMBK` ends with
+    ```
+    CLR  @#APORT            ; APORT = 177714   (d1.mac:135,270)
+    ```
+    a **single isolated write**, of the one value that inverts to `b = 255` =
+    **+32767 on both lanes** — the loudest sample the map can produce. It is
+    the only 177714 write in the MONITOR sources, and `MIDMBK` runs at boot
+    *and* on every return from a user program. So one `CLR` unmuted the slot
+    for the full 43 ms: a pair of ~−3.8 dBFS DC edges on both ladders (through
+    5/8 and the shaper, ladder code 24 → 44 → 24), every time.
+    **A real Covox is never *played* by one write**, so the fix belongs in the
+    predicate, not in a filter: `live` now takes a *changing* write inside a
+    running one-shot. `sim/covox` section 10 walks the exact MONITOR sequence
+    (one `CLR`, then two, then a constant-code burst), and **mutation X19 is
+    the pre-fix predicate restored verbatim** — it must die in 10a.
+    **Accepted consequence:** a program that writes a constant code forever,
+    never changing it, is inaudible. That is what a real Covox does too — a
+    passive DAC into an **AC-coupled** amplifier, where a constant code is a DC
+    the coupling capacitor removes and only the transitions are heard. It costs
+    nothing in `test/sndtestcx.mac`: `LADDER[0]` is `0200`, the DAC's own zero,
+    and every later step changes the code and arms on its first write.
+    The alternatives were weighed and rejected — a DC blocker (BkEmu's 10 Hz
+    high-pass, BKemu's running-mean `DCOffset`) only *decays* the thump instead
+    of removing it, and would cost a wide accumulator plus saturation, re-open
+    the headroom proof and threaten `audio_ns6`'s exact-zero fixed point at
+    70 % LE and +0.102 ns; MiSTer's hard user-selected mode has no spare DIP.
   * **KNOWN, BOUNDED ARTIFACT — accepted, not engineered around.** An AY
     program's *setup* phase writes registers before any channel sounds, so for
     that window `ts_snd` is low and the Covox renders those register writes as
@@ -380,9 +416,13 @@ cassette port shares the right DAC ladder, so tape is documented here too.
   * **One gate, not two.** `cx_l`/`cx_r` keep carrying the sample while muted;
     the mixer's runtime slot enable is the single mute mechanism. Zeroing in
     the device as well would be logic no mutation could kill — the
-    `bk_turbosound` `lc1`/`rc1` precedent. `cx_en` is deliberately
-    **combinational** off the two counters: a registered version would arrive a
-    cycle after `ts_l` goes non-zero.
+    `bk_turbosound` `lc1`/`rc1` precedent. **The PSG term of `cx_en` is
+    deliberately combinational**, and that half is load-bearing: a registered
+    `psg_cnt == 0` would arrive a cycle after `ts_l` goes non-zero. The **arm**
+    term is a flop (`live`), which is safe in the only direction that matters —
+    it can make an *unmute* one cycle late, never a mute — and it **shortens**
+    the cone, since the `IDLE_BITS`-wide `!= 0` that used to sit on `cx_en` now
+    feeds `live`'s D input.
   * **Reset is `~init_n`** (2-FF synced) ORed with the power-on reset — the
     standard BK peripheral rule, so a RESET instruction silences the Covox. It
     does **not** clear the 177714 latch (`qbus_mem`'s never-runtime-reset
@@ -421,11 +461,23 @@ cassette port shares the right DAC ladder, so tape is documented here too.
     quasi-static high-fanout selector (`fill_active`) locally — noting that
     doing so shifts the port-0 handover by a cycle, so it needs `sim/raminit`
     re-run, not a drive-by edit. **Never an SDC exception, never SEED 3.**
-  * Oracle: **`sim/covox/run.sh`**, one leg, 13 mutations. The rate is split
+    **The arming fix then bought that margin back, which was not the plan.**
+    `+33 LE` (8,452 → **8,485, still 70 %**; M4K, pins and the PLL unchanged)
+    and **sys_clk +0.102 → +0.471 ns, TNS 0**, 0 errors. Part is the shortened
+    cone — the `IDLE_BITS`-wide `!= 0` came off `cx_en` and went onto a flop's
+    D input — and part is placement luck, in the direction this file has
+    usually been bitten in. **The chase it predicted did not have to happen:**
+    the worst path is now `sd_backend|st.A_TAIL → st.S_CSD_DATA` at +0.471,
+    with `smk_ide|w_inv[*] → ptr[*]` behind it at +0.602, and neither
+    `ram_init|filling` nor `mem_mapper|mon_en` is in the top any more. The
+    prediction stands for the *next* increment: it is placement, not structure.
+  * Oracle: **`sim/covox/run.sh`**, one leg, 19 mutations. The rate is split
     between two checks — 2²² and 2²⁶ `sys_clk` are not simulable, so a second
     instance pins the shipped **parameter defaults** while a scaled instance
     pins the **behaviour**. `sim/ts` gains one assertion (that `ts_snd` leads
     the sample) and mutation D13; `bk_audio_tb` gains the Covox pan section,
     the mute section and the re-opened budget, with mutations A3/A4/A5.
+    **Section 10 is the MONITOR `CLR @#177714` regression** and X14–X19 are its
+    mutations, X19 being the pre-fix predicate itself.
     `test/sndtestcx.mac` is the hardware acceptance program (pdpy11, with a
     `.wav` so it loads over the CMT jack).

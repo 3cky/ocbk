@@ -134,7 +134,7 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   directly on `CHANNEL_x` with no waiting. One property is deliberately NOT
   mutation-covered and the header says so out loud: see the TurboSound bullet.
 - `sim/covox/run.sh` — the Phase-12 **Covox** oracle, **one leg,
-  mutation-tested x13**; `sim/covox/README.md` carries the pinned contract.
+  mutation-tested x19**; `sim/covox/README.md` carries the pinned contract.
   One leg on purpose, the `sim/ts` precedent: the SEAM itself — one strobe per
   bus write, BK-true polarity, the odd lane leaving the other half stale — is
   pinned independently by `spk_capture_tb` against the real `qbus_mem`
@@ -148,7 +148,13 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   divergence from BkEmu — a zero-fill build reads +32767 on the other channel
   and this is what catches it), the mono fold, DIP 5 being LIVE, the PSG mute
   surviving a pulse train, the idle one-shot retriggering, and `nINIT`
-  clearing the device but NOT the latch. **A known limit, stated in the runner
+  clearing the device but NOT the latch. **Section 10 is the other sharp one,
+  and it is a hardware-found regression**: MONITOR's `MIDMBK` ends with a lone
+  `CLR @#177714`, which is a single write of the one value that inverts to full
+  positive scale on both lanes, so a build that arms on *any* write clicks
+  several times per boot. The section walks that sequence — one `CLR`, then
+  two, then a constant-code burst — and **X19 is the pre-fix predicate restored
+  verbatim**, which must die there. **A known limit, stated in the runner
   header rather than quietly dropped:** 2²² and 2²⁶ `sys_clk` are not
   simulable, so a second instance pins the shipped parameter DEFAULTS while a
   scaled instance pins the BEHAVIOUR — a mutation of either dies, of both

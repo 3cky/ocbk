@@ -49,14 +49,17 @@ budget arithmetic in `bk_audio`'s slot-map comment — at 12288 the sum would be
 from x15 to x12 to pay for it.
 
 **The margin, before anything else**
-- **sys_clk setup is +0.102 ns, TNS 0 — met, but thin**, and that is where
-  Phase 12 left it. The Covox's own STA chase was found and cured structurally
-  (see the audio file), so the new logic is off the critical path entirely;
-  what remains is the chronic pre-existing cone that +268 LE re-placed —
-  `ram_init|filling → sdram_arbiter|cmd_addr[*]` at +0.102, with
-  `mem_mapper|mon_en → cpu_sdram_dp|addr_o[*]` at +0.148 right behind it. Both
-  stood at +0.528 before this increment and neither was touched by it.
-  **The next increment starts here.** The documented cure is to re-register
+- **sys_clk setup is +0.471 ns, TNS 0 — met, and better than Phase 12 left
+  it.** The Covox's own STA chase was found and cured structurally (see the
+  audio file), so the new logic is off the critical path entirely; that build
+  ended at **+0.102** on the chronic pre-existing cone that +268 LE re-placed
+  (`ram_init|filling → sdram_arbiter|cmd_addr[*]` at +0.102,
+  `mem_mapper|mon_en → cpu_sdram_dp|addr_o[*]` at +0.148, both +0.528 before
+  the increment and neither touched by it). The Covox **arming fix** then
+  re-placed them again — +33 LE, a shorter `cx_en` cone, and **+0.471**, with
+  the worst path now `sd_backend|st.A_TAIL → st.S_CSD_DATA`. So the chase has
+  not had to happen yet; it is placement, and it can come back.
+  **The next increment still starts here.** The documented cure is to re-register
   the quasi-static high-fanout selector (`fill_active`) locally — but note it
   shifts the port-0 handover by a cycle, so it needs `sim/raminit` re-run and
   a boot check, not a drive-by edit. **Never an SDC exception, never SEED 3**,
@@ -202,6 +205,14 @@ from x15 to x12 to pay for it.
   the Covox muted until the next reset instruction or reset press, and a
   mono-only Covox program run with DIP 5 OFF leaves the right channel on the
   stale high lane.
+  **A fourth, added when the OS-boot click was fixed:** `live` now takes a
+  write that *changes* the code, so **a program that writes a constant code
+  forever is inaudible**. That is deliberate and it is what real hardware does
+  — a passive DAC into an AC-coupled amplifier reproduces the transitions, not
+  the DC. Parallel-**printer** traffic on 177714 does still render as a short
+  burst, exactly as it did before and as it would on a real board with a Covox
+  hanging off the same connector. The trace and the rejected alternatives are
+  in `audio.md`'s Covox section.
 - **The 177714 READ merge is not implemented.** The Phase-10 seam captures
   WRITES only, deliberately: a write capture is provably reply-inert (177714
   already replies via `sel_io`), while a read merge reaches into the reply/OE

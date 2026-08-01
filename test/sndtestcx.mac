@@ -46,7 +46,10 @@
 ;
 ; WHAT TO LISTEN FOR
 ;   1. the ladder walk: eight steps from silence out to each rail and back,
-;      each held about a second. Clean level steps, no crackle, and NO
+;      each held about a second. The FIRST entry is 0200 - the DAC's own zero
+;      - and it is silent twice over: it is the zero code, and the Covox only
+;      unmutes on a write that CHANGES the code (see below), so the walk
+;      really starts at the second step. Clean level steps, no crackle, and NO
 ;      CLIPPING - pLed[1] (mixer saturated) and pLed[2] (DAC clipped) must
 ;      stay DARK for the whole run. The gain budget says they cannot light;
 ;      if they do, the arithmetic is wrong, not the analog stage.
@@ -71,6 +74,13 @@
 ;   6. silence: the loop stops writing for a few seconds. Real silence, no
 ;      residual hum and no DC thump - that is the idle one-shot muting the
 ;      slot and restoring the exact-zero shaper state.
+;
+;   And the one that is NOT in this program, because it is the operating
+;   system's: booting an OS, and returning from a program to MONITOR, must be
+;   SILENT. MONITOR's system init ends with a lone CLR @#177714, which is a
+;   single write of the value that inverts to full positive scale on both
+;   lanes; the Covox unmutes only on a write that CHANGES the code, so that
+;   write - and any run of identical writes - is inaudible.
 ;
 ;   Then press the reset button: nINIT must silence everything at once.
 ; ---------------------------------------------------------------------------
@@ -191,6 +201,12 @@ DUP:
 ; A Covox holds nothing by itself - the mixer slot mutes ~43 ms after the
 ; last write - so a "static" level has to be written continuously. That is a
 ; feature under test, not a workaround.
+;
+; The level becomes audible on the write that CHANGES the code and stays up
+; for as long as the writes keep coming: arming takes modulation, holding does
+; not. So a HOLD reached from a DIFFERENT level sounds, and a HOLD reached
+; from a quiet port (the first one after a silence) does not - which is the
+; MONITOR CLR @#177714 rule doing its job, not a fault.
 HOLD:
         MOV     #20, R2
 HOLD1:

@@ -76,14 +76,41 @@
 //
 //      cx_en = live & ~psg_hold
 //
-//    * `live` - a ~43 ms one-shot retriggered by every 177714 write. This is
-//      what stops the never-reset latch from parking a DC on the ladders: at
-//      power-on port_data is 0, which inverts to b = 255 = FULL POSITIVE
-//      SCALE, and a finished program leaves its last sample behind. With the
-//      slot disabled the mixer contributes EXACTLY zero, so audio_ns6 stays on
-//      its exact-zero fixed point and silence keeps producing no pin activity
-//      - the property the -85.8 dBFS hardware noise-floor measurement and the
-//      CMT anti-echo argument both rest on.
+//    * `live` - "the port is being MODULATED", not "the port was written".
+//      This is what stops the never-reset latch from parking a DC on the
+//      ladders: at power-on port_data is 0, which inverts to b = 255 = FULL
+//      POSITIVE SCALE, and a finished program leaves its last sample behind.
+//      With the slot disabled the mixer contributes EXACTLY zero, so audio_ns6
+//      stays on its exact-zero fixed point and silence keeps producing no pin
+//      activity - the property the -85.8 dBFS hardware noise-floor measurement
+//      and the CMT anti-echo argument both rest on.
+//
+//      THE PREDICATE IS A WRITE THAT CHANGES THE CODE, INSIDE A ~43 ms ONE-SHOT
+//      THAT IS ALREADY RUNNING - i.e. at least TWO writes within 43 ms, the
+//      second one moving the DAC. An isolated write can never unmute, and
+//      neither can any run of identical writes.
+//
+//      That is not fastidiousness, it is a HARDWARE-FOUND BUG. The first cut
+//      armed on any port_wr, and MONITOR's system-init routine MIDMBK ends
+//      with a single
+//
+//          CLR  @#APORT          ; APORT = 177714 (d1.mac:135,270)
+//
+//      - one isolated write, of the one value that inverts to FULL POSITIVE
+//      SCALE on BOTH lanes. MIDMBK runs at boot and again on every return from
+//      a user program, so the board clicked several times per boot: a pair of
+//      -3.8 dBFS DC edges 43 ms apart, on both ladders, every time. A real
+//      Covox is never PLAYED by one write, so the fix is in the predicate.
+//
+//      ACCEPTED CONSEQUENCE: a program that writes a constant code forever
+//      (never changing it) is inaudible. That is what a real Covox does too -
+//      it is a passive DAC into an AC-COUPLED amplifier, and a constant code
+//      is a DC the coupling capacitor removes. What you hear on real hardware
+//      is the TRANSITIONS, which is exactly what this predicate keys off.
+//
+//    * The one-shot itself (idle_cnt) stays VALUE-BLIND: any write reloads it.
+//      Only ARMING needs a change; holding a live stream live must not, or a
+//      sample run with a repeated value would drop out mid-note.
 //
 //    * `psg_hold` - a ~0.7 s retriggerable hold on psg_act, which ocbk_top
 //      drives from bk_turbosound's ts_snd ("the PSGs are emitting a non-zero
@@ -116,9 +143,14 @@
 //  ONE GATE, NOT TWO. cx_l/cx_r keep carrying the sample while muted; the
 //  mixer's runtime slot enable is the single mute mechanism. Zeroing here as
 //  well would be logic no mutation could kill - the bk_turbosound lc1/rc1
-//  precedent. cx_en is deliberately COMBINATIONAL off the two counters: a
-//  registered version would arrive one cycle after ts_l goes non-zero and let
-//  both sources reach the mixer's stage 0 together.
+//  precedent.
+//
+//  THE PSG TERM OF cx_en IS COMBINATIONAL, AND THAT HALF IS LOAD-BEARING: a
+//  registered psg_cnt == 0 would arrive one cycle after ts_l goes non-zero and
+//  let both sources reach the mixer's stage 0 together. The ARM term is a flop
+//  (`live`), which is safe in the only direction that matters - it can only
+//  make an UNMUTE one cycle late, never a mute. It also shortens this cone: the
+//  IDLE_BITS-wide "!= 0" that used to sit on cx_en now feeds live's D input.
 //
 //  RESET is `~init_n` (2-FF synced) ORed with the power-on reset - the
 //  standard BK peripheral rule, so a RESET instruction silences the Covox. It
@@ -189,14 +221,41 @@ module bk_covox #(
     end
 
     // ---- the idle one-shot -------------------------------------------------
-    // Any 177714 write reloads it; the same shape as bk_audio's spk activity
-    // one-shot. Reloading unconditionally (not only from the idle state) is
-    // what makes it RETRIGGERABLE, which is the whole point.
+    // Any 177714 write reloads it - VALUE-BLIND on purpose, see the header;
+    // the same shape as bk_audio's spk activity one-shot. Reloading
+    // unconditionally (not only from the idle state) is what makes it
+    // RETRIGGERABLE, which is the whole point.
     logic [IDLE_BITS-1:0] idle_cnt;
     always_ff @(posedge sys_clk) begin
         if (reset)              idle_cnt <= {IDLE_BITS{1'b0}};
         else if (port_wr)       idle_cnt <= {IDLE_BITS{1'b1}};
         else if (idle_cnt != 0) idle_cnt <= idle_cnt - 1'b1;
+    end
+
+    // ---- the modulation detector -------------------------------------------
+    // qbus_mem sets port_data in the same always_ff that raises port_wr, so on
+    // the port_wr cycle port_data ALREADY holds the new value while last_data
+    // still holds the previous one: the compare is new-vs-previous with no
+    // extra pipe stage. It is on the whole 16-bit latch rather than per lane -
+    // the latch is the device, and being sensitive to the untouched lane can
+    // only ever arm sooner. The reset value is the true power-on latch value.
+    logic [15:0] last_data;
+    always_ff @(posedge sys_clk) begin
+        if (reset)        last_data <= 16'h0000;
+        else if (port_wr) last_data <= port_data;
+    end
+
+    wire wr_change = port_wr & (port_data != last_data);
+
+    // `live` - armed by a CHANGING write inside a one-shot that is ALREADY
+    // running. The idle_cnt == 0 clear is tested FIRST, so the write that
+    // starts a burst can never be the one that arms it: MONITOR's lone
+    // CLR @#177714 reloads idle_cnt, finds no successor, and expires silent.
+    logic live;
+    always_ff @(posedge sys_clk) begin
+        if (reset)              live <= 1'b0;
+        else if (idle_cnt == 0) live <= 1'b0;
+        else if (wr_change)     live <= 1'b1;
     end
 
     // ---- the PSG mute hold -------------------------------------------------
@@ -207,6 +266,6 @@ module bk_covox #(
         else if (psg_cnt != 0) psg_cnt <= psg_cnt - 1'b1;
     end
 
-    assign cx_en = (idle_cnt != 0) & (psg_cnt == 0);
+    assign cx_en = live & (psg_cnt == 0);
 
 endmodule
