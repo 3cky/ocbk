@@ -1,15 +1,14 @@
 # CLAUDE.md
 
 `ocbk` runs the Soviet **Elektronika BK-0010 / BK-0011M** (PDP-11-class) as
-alternative firmware on the 1chipMSX / OneChipBook board (Altera Cyclone I
+alternative firmware on the 1chipMSX / OneChipBook (Altera Cyclone I
 **EP1C12Q240C8**, Quartus II 11.0). The headline goal is **cycle-accurate** CPU
 behaviour.
 
-**Every phase (0–11) is done and confirmed on hardware** — README.md has the
+**Every phase is done and confirmed on hardware** — README.md has the
 user-facing result, `doc/dev/platform.md` the phase table. Two standing rules
-come out of that history: **a debug feature does not ship**, and — since the
-repo went public 2026-07-31 — **features develop on branches; `main` only takes
-what is shippable.**
+come out of that history: **a debug feature does not ship**, and **features
+develop on branches; `main` only takes what is shippable.**
 
 This file is the index and the rule list. The detail lives in `doc/dev/`, one
 file per subsystem; **read the relevant file before changing that subsystem** —
@@ -141,6 +140,10 @@ doc/                bk0011m.sch, smk64.mac; doc/dev/ = this documentation
 `ocbk_common.qsf` lists every file one per line **in compile order** — that is
 not the directory order and must not be shuffled; `ocbk.f` (the slang/verilator
 filelist) mirrors the same set and must be kept in sync with it.
+
+Keep comments concise but precise and clear. Update comments every time the
+corresponding code is changed. Avoid using all-uppercase in comments for emphasis
+except situations where it is absolutely required.
 
 ## Build & test
 
