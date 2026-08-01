@@ -1,18 +1,18 @@
 # ocbk - BK-0010 / BK-0011M on the OneChipBook
 
-Alternative firmware that turns the OneChipBook board (Altera Cyclone I
-**EP1C12Q240C8**) into a Soviet **Elektronika BK-0010(.01)** or **BK-0011M** -
-the PDP-11-class home computers built around the 1801ВМ1 CPU. It runs the real
+Alternative firmware that turns the OneChipBook FPGA laptop (Altera Cyclone I
+EP1C12Q240C8) into a Soviet **Elektronika BK-0010(-01)** or **BK-0011M** -
+the PDP-11-class home computers built around the 1801VM1 CPU. It runs the real
 ROMs, boots to the real firmware, and aims at **cycle-accurate** timing rather
-than "close enough": the 1801ВП1-037's memory arbitration is reproduced, so the
+than "close enough": the 1801VP1-037's memory arbitration is reproduced, so the
 screen slows the CPU exactly as it does on real silicon, and beam-raced demo
 effects land where their authors intended.
 
 ## What works
 
-Everything below is confirmed running on the board.
+Everything below is confirmed running on the device.
 
-- **BK-0010.01** - MONITOR + BASIC Vilnius, 3.02 MHz.
+- **BK-0010-01** - MONITOR + BASIC Vilnius, 3.02 MHz.
 - **BK-0011M** - BOS, 4.03 MHz, banked memory, two video pages, the 16-colour
   programmable palette and the 50 Hz frame interrupt.
 - **Display** - full-screen borderless **1024×768@60** on the panel, integer
@@ -86,30 +86,6 @@ Switch **DIP 4** on (LED 7 lights). Play a BK tape recording - e.g. a WAV
 rendered from a `.BIN` - into the **right** audio channel, then load it the
 normal way. Switch DIP 4 off when you're done - that jack is the right audio channel otherwise.
 
-### Covox
-
-Nothing to switch on - the Covox is always there, on the same 0177714 port as
-the TurboSound. Because they share that port, only one of them can sound at a
-time, and **the PSGs win**: while a TurboSound tune is playing the Covox stays
-quiet, and it comes back about a second after the music stops.
-
-The Covox also only sounds while the port is actually being *played* - a
-program has to keep changing the value it writes. That is why the operating
-system's own housekeeping writes to the port are silent, and it matches a real
-Covox, where the amplifier is capacitor-coupled and a value that never changes
-produces no sound.
-
-**DIP 5 picks stereo or mono.** Stereo is the default: a program writing a
-whole word puts the low byte in the left channel and the high byte in the
-right. Software written for a *mono* Covox writes only the low byte, which
-leaves the right channel stuck on whatever was there before - so if a Covox
-program sounds one-sided or has a hum on one side, **switch DIP 5 on** and it
-plays down the middle. The switch is live; you don't need to reset.
-
-A Covox has no clock of its own, so the pitch of anything it plays follows the
-CPU - it will sound higher on a BK-0011M than on a BK-0010, and higher again
-in turbo. That is how the real thing behaves.
-
 ### SD card (SMK512)
 
 Write a raw **AltPro HDD image** to the card starting at the very beginning -
@@ -157,12 +133,11 @@ the index and the list of rules a change must not break.
 
 ## Credits
 
-- The **1801ВМ1** CPU and **1801ВП1-037/014** chip models are reverse-engineered
+- The **1801VM1** CPU and **1801VP1-037/014** chip models are reverse-engineered
   gate-level designs from the [cpu11](https://github.com/1801BM1/cpu11) and
   [k1801](https://github.com/1801BM1/k1801) projects - the reason this can be
   cycle-accurate at all rather than merely compatible.
-- The BK ROM images and the reference for BK register behaviour come from the
-  **BkEmu** emulator. BK ROMs are not subject to distribution restrictions.
+- YM2149 / AY-3-8910 PSG core was adapted from [BK0011M for MiSTer Board](https://github.com/MiSTer-devel/BK0011M_MiSTer/) project.
 - The board bring-up (clocking, SDRAM, VGA) builds on **esemsx3** from
   [ocm-pld-dev](https://github.com/gnogni/ocm-pld-dev), the 1chipMSX firmware
   project.
