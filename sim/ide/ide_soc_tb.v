@@ -168,6 +168,8 @@ module ide_soc_tb;
         .cpu_clk  (~clk),
         .reset    (~dclo),
         .ide_rdata(ide_rdata),       // <- the device merge under test
+        .joy_word(16'o000000), // no joysticks here; never leave it
+                               // floating - an X poisons rdata
         .init_n   (init),
         .kbd_down (1'b0),
         .tape_in  (1'b0),

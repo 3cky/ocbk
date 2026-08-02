@@ -173,6 +173,13 @@ module smk_soc_tb;
         .cpu_clk  (~clk),            // as ocbk_top: FSM on the inverted CPU clock
         .reset    (~dclo),
         .ide_rdata(16'h0000),  // no SMK IDE device in this tb
+        // A NON-ZERO joystick word on purpose - this oracle owns the !sel2_n
+        // gate on qbus_mem's io_word merge. Section 2 of gen_smk_test.py reads
+        // 0177714 (must be BIOS | this word), 0177776 (must be BIOS ALONE - an
+        // ungated merge leaks the joystick into every I/O-page overlay read)
+        // and 0177716 (nSEL1 wins the ternary). Keep this in sync with
+        // gen_smk_test.py's JOY_WORD; both sticks up + fire A.
+        .joy_word(16'o020441),
         .init_n   (init),
         .kbd_down (1'b0),
         .tape_in  (1'b0),

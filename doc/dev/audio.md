@@ -144,7 +144,12 @@ cassette port shares the right DAC ladder, so tape is documented here too.
     exception (a real Covox is a passive DAC on the port latch with no reset
     pin). It is a PURE OBSERVER with no path into `selected`/`wcnt`/the
     reply/`io_word`/`ad_oe`/`mem_ready`, which is what makes it timing-inert;
-    177714 already replies via `sel_io`. Read merge deferred (see Open).
+    177714 already replies via `sel_io`. **The READ direction of the same
+    address is now the joystick word** (a `!sel2_n`-gated leg of `io_word`, see
+    [peripherals.md](peripherals.md)) — structurally separate from this
+    capture: different direction, different always block, and no sound device
+    contributes read data (Covox never reads, `bk_turbosound` leaves the core's
+    `DO` unconnected). The seam's contract is unchanged by it.
     **Since Phase 11 `bk_turbosound` consumes it** (it was dangling and free
     through Phase 10) and **`bk_covox` since Phase 12**; Menestrel will hang
     off the same wires.

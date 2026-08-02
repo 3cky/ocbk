@@ -32,7 +32,7 @@ to do with.
 | `mem_mapper`'s SMK stage, `smk_ide`, `sd_backend` | [doc/dev/smk512.md](doc/dev/smk512.md) — SMK512 RAM/BIOS/IDE/SD, `N_EXT` |
 | `src/video/`, `bk_evnt` | [doc/dev/video.md](doc/dev/video.md) — framebuffer conventions, palette, 177662, EVNT/IRQ2 |
 | `src/audio/`, the CMT jack | [doc/dev/audio.md](doc/dev/audio.md) — mixer/DAC stage, TurboSound, tape |
-| `src/peripheral/` (keyboard), `qbus_slot` | [doc/dev/peripherals.md](doc/dev/peripherals.md) |
+| `src/peripheral/` (keyboard, joysticks), `qbus_slot` | [doc/dev/peripherals.md](doc/dev/peripherals.md) |
 | Quartus / Icarus / bus behaviour that surprised us once | [doc/dev/gotchas.md](doc/dev/gotchas.md) |
 | planning new work | [doc/dev/open-items.md](doc/dev/open-items.md) — what is deferred and why |
 
@@ -111,10 +111,12 @@ The constraints that shape every decision; details and the reasoning in
   is the root reason the arbiter / done-gate machinery exists.
 - **The panel is standard-VESA-only**, so the output is 1024×768@60 and the
   48.83→60 Hz gap is bridged in the framebuffer.
-- **Current fit: 8,485 / 12,060 LE (70 %)**, 3/52 M4K, 98/173 pins, one PLL,
-  sys_clk setup +0.471 ns, TNS 0. Still thin, and it moves with placement: the
+- **Current fit: 8,518 / 12,060 LE (71 %)**, 3/52 M4K, 110/173 pins, one PLL,
+  sys_clk setup +0.254 ns, TNS 0. Still thin, and it moves with placement: the
   Phase-12 Covox left it at +0.102 on the `ram_init|filling` /
-  `mem_mapper|mon_en` cone and the arming fix bought it back for +33 LE.
+  `mem_mapper|mon_en` cone and the arming fix bought it back for +33 LE; the
+  joysticks then drove it to **−0.121** on `sdram_ctrl|wait_cnt → s_addr` — the
+  Phase-7 no-boot cone — and the `wait_zero` flop bought it back.
   → audio, gotchas
 
 ## Source tree

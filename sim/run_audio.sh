@@ -16,7 +16,10 @@
 #                      and the re-opened gain budget.
 #   2  spk_capture_tb  directed Q-bus cycles into the REAL qbus_mem: the
 #                      177716 bit-6/7 speaker+motor captures, the 177716 read
-#                      assembly, and the 177714 (nSEL2) port-write capture.
+#                      assembly, the 177714 (nSEL2) port-write capture, and
+#                      section 10 - the 177714 READ merge (the joystick word),
+#                      including the DATIO(B) leg where the read half returns
+#                      the sticks and the write half still reaches the seam.
 #   3  audio_ns6_tb    THE RESOLUTION ORACLE. The DC identity that proves the
 #                      6-bit code stream carries a value to <1/1000 of a ladder
 #                      step, exact silence, the clamp, and - the sharpest single
@@ -34,7 +37,8 @@
 #           no inline replica to drift) and requires the oracle to break. Each
 #           mutation names the leg that must catch it. 28 mutations: N1-N7 on
 #           the shaper, M1-M7 on the mixer, O1-O4 on the output stage, A1-A5
-#           on bk_audio's slot map and Q1-Q5 on the qbus_mem capture seam.
+#           on bk_audio's slot map, Q1-Q5 on the qbus_mem 177714 write-capture
+#           seam and Q6-Q9 on its 177714 READ merge (the joystick word).
 #
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -236,6 +240,25 @@ if [ "$MODE" = "--mutate" ]; then
    mut_mem Q4 's|^        port_wr <= 1.b0;|        port_wr <= 1'"'"'b0;\n        if (!init_n) port_data <= 16'"'"'o000000;|'
    # Q5 decoded off the WRONG nSEL pin (177716 instead of 177714)
    mut_mem Q5 's|wire port_dout = !sync_n \&\& !dout_n \&\& !sel2_n;|wire port_dout = !sync_n \&\& !dout_n \&\& !sel1_n;|'
+
+   # ---- qbus_mem: the 177714 READ merge (the joystick word), section 10 ---
+   # Q6 the merge dropped - 177714 goes back to reading a hard 0
+   mut_mem Q6 's|        !sel2_n ? joy_word :|        !sel2_n ? 16'"'"'o000000 :|'
+   # Q7 the two bytes swapped at the merge (player 1 and player 2 exchanged) -
+   #    a symmetric pattern could not see this, which is why 10b uses one that
+   #    is not symmetric
+   mut_mem Q7 's|        !sel2_n ? joy_word :|        !sel2_n ? {joy_word[7:0], joy_word[15:8]} :|'
+   # Q8 the merge made DATIO-blind (gated on the byte/word flag) - the read
+   #    half of an RMW then returns 0 while the write half still lands
+   mut_mem Q8 's|        !sel2_n ? joy_word :|        !sel2_n ? (wtbt_n ? joy_word : 16'"'"'o000000) :|'
+   # Q9 the two async inputs of the sel1 arm crossed: tape-in replaced by a
+   #    joystick bit, i.e. the joystick leaking into the 177716 word
+   mut_mem Q9 's@(tape_in    ? 16.o000040 : 16.o0)@(joy_word[0] ? 16'"'"'o000040 : 16'"'"'o0)@'
+   # The !sel2_n GATE ITSELF is NOT mutated here: every address that could show
+   # a leak takes the mem-region ROM leg, whose reply is done-gated on an SDRAM
+   # fetch, and leg 2 has no SDRAM model. sim/smk owns it (its section 2 reads
+   # 177714, 177776 and 177716 against a non-zero joy_word on a full SoC) -
+   # see that runner's mutation list.
 
    echo "audio mutations: all killed"
 fi

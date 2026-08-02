@@ -147,6 +147,8 @@ module ref014_irq_soc_tb;
         .cpu_clk  (~clk),
         .reset    (~dclo),
         .ide_rdata(16'h0000),  // no SMK IDE device in this tb
+        .joy_word(16'o000000), // no joysticks here; never leave it
+                               // floating - an X poisons rdata
         .init_n   (init),
         .kbd_down (key_down),
         .tape_in  (1'b0),            // no tape signal in this oracle

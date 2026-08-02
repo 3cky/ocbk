@@ -28,7 +28,8 @@ Stage 2 walks the BkEmu SmkMemoryManager contract on the real SoC stack:
 the 177130 write reply + no-commit-without-arm, the BIOS windows (one image
 at BOTH 160000 and 170000, writes -> trap 4, 177130 READ = BIOS data under
 SYS but write-only again elsewhere), the I/O-page overlay OR-merge (177714
-pure-BIOS, 177776 BIOS-only reply, 177716 = START_W | SEL1) with the kbd
+= BIOS | the joystick word, 177776 BIOS-only reply - the !sel2_n gate on that
+merge, 177716 = START_W | SEL1) with the kbd
 (177660, trap 4) and vm1-internal (177712, self-served) carve-outs,
 SYS/RAM10/ALL/STD10/STD11/HLT10 layouts with fill/verify and the +4 rotation
 aliasing, two extra pages (2 and 8 - the v2/v0 scatter bits end-to-end),
@@ -111,12 +112,17 @@ S1PAT = 0o054054
 # synthetic-BIOS marker words (also read back through both windows)
 BIOSPAT0 = 0o125252          # image word 0 (160000 AND 170000)
 BIOSPAT130 = 0o052525        # image offset 0o7130 (the 177130 read under SYS)
-BIOSPAT14 = 0o135531         # image offset 0o7714 (177714: pure-BIOS merge)
+BIOSPAT14 = 0o135531         # image offset 0o7714 (177714: BIOS | joystick)
 BIOSPAT76 = 0o117117         # image offset 0o7776 (177776: BIOS-only reply)
 START_W = 0o166421           # image offset 0o7716: start 166400 + junk low
                              # bits (proves the low-bit OR-through)
 VOLATILE = 0o000144          # SEL1 bits masked in merged compares: kbd (6),
                              # tape (5), write-flag (2)
+JOY_WORD = 0o020441          # the 0177714 joystick word smk_soc_tb ties on
+                             # (both sticks up + fire A). MUST match the tb.
+                             # It makes section 2 a three-way discrimination:
+                             # 177714 merges it, 177776 must NOT (the !sel2_n
+                             # gate) and 177716 takes the nSEL1 arm instead.
 
 # seg-7 extent probes: HLT10 writes (land in abs P+7), read back via the ALL
 # seg-3 mem-region aliases; EXTPATs planted at abs P+3 in RAM10, read via the
@@ -222,9 +228,13 @@ def build_stage2(bk10=False):
         expect_trap4(a, lambda: a.emit(0o012737, 0o123123, seg(0)))
 
     # --- 2. the I/O-page overlay OR-merge ------------------------------------
-    # 177714 (nSEL2, io_word = 0): the merge returns the pure BIOS word
-    cmp_mem_imm(a, 0o177714, BIOSPAT14)
-    # 177776 (no register at all): the overlay alone replies
+    # These three reads are also THE contract for qbus_mem's io_word joystick
+    # merge, which is why the tb ties a non-zero joy_word on:
+    # 177714 (nSEL2): io_word = the joystick word, OR-ed with the BIOS word
+    cmp_mem_imm(a, 0o177714, BIOSPAT14 | JOY_WORD)
+    # 177776 (no register at all): the overlay alone replies - io_word must be
+    # 0 here, which is the !sel2_n GATE. Drop that gate and the joystick word
+    # leaks into every I/O-page overlay read, and this compare catches it.
     cmp_mem_imm(a, 0o177776, BIOSPAT76)
     # 177716: BIOS start word | SEL1 (mask the volatile SEL1 bits; the
     # surviving low bits 4,0 prove the OR-through - THE boot mechanism)

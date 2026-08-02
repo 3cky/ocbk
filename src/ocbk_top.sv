@@ -7,7 +7,11 @@
 // decoded through palette_apply into a double-buffered 4-bit-index framebuffer
 // in SDRAM and scanned out at 1024x768@60 (x2H/x3V) on the 6-bit R-2R VGA DAC.
 //
-// Only the pins the design drives are declared; every other device pin -
+// The board's two MSX joystick ports are read as the BK's 0177714 joystick
+// word (bk_joystick -> qbus_mem's io_word) - a read-only path with no state
+// and no reset.
+//
+// Only the pins the design uses are declared; every other device pin -
 // including the entire cartridge-slot block PIN_121-180 - is reserved as a
 // tri-stated input by the .qsf. The cartridge-slot Q-bus seam lives in qbus_slot
 // and is held disabled (SLOT_ENABLE=0) - a forward seam, not a build option.
@@ -111,6 +115,19 @@ module ocbk_top (
     // ---- PS/2 keyboard (receive-only; pins pulled up, driven Z) ----------
     inout  wire         pPs2Clk,
     inout  wire         pPs2Dat,
+
+    // ---- MSX joystick ports -> the BK's 0177714 read word ----------------
+    // Two DE-9 pads, ACTIVE LOW, in the board's index order:
+    //   [0] = UP  [1] = DOWN  [2] = LEFT  [3] = RIGHT  [4] = TRG_A  [5] = TRG_B
+    // Plain INPUTS, never inout: nothing here needs to drive, and a lone
+    // Z-idle tri-state feeding internal logic degenerates to stuck-asserted on
+    // Cyclone I (the virq_n trap). The released level comes from the QSF's weak
+    // pull-ups, so an unplugged connector reads all-released = 0177714 reads 0.
+    // pStrA/pStrB (DE-9 pin 8, PIN_6/PIN_15) are deliberately NOT declared - a
+    // plain digital pad does not use them, so they stay reserved-tristated and
+    // remain free if a pad ever turns out to need pin 8 driven.
+    input  logic [5:0]  pJoyA,
+    input  logic [5:0]  pJoyB,
 
     // ---- SD card (megasd slot; the SMK512 HDD backing store) -------------
     // SPI-mode roles per esemsx3: DAT3 = chip select, CMD = MOSI,
@@ -784,6 +801,20 @@ module ocbk_top (
     logic [1:0] tape_sr = '0;
     always_ff @(posedge cpu_clk_n) tape_sr <= {tape_sr[0], tape_lvl};
 
+    // ---- MSX joysticks -> the 0177714 read word --------------------------
+    // A pure level translator: the MSX active-low inversion, the MSX -> BkEmu
+    // bit remap (the two direction nibbles are different permutations), and a
+    // 2-FF sync onto cpu_clk_n - the same clock and the same reasoning as the
+    // tape_sr resync above, and the clock qbus_mem's read FSM runs on. No
+    // reset: a passive switch matrix has none. See bk_joystick.sv.
+    wire [15:0] joy_word;
+    bk_joystick u_joy (
+        .clk      (cpu_clk_n),
+        .pad_a_n  (pJoyA),
+        .pad_b_n  (pJoyB),
+        .joy_word (joy_word)
+    );
+
     // ---- SMK512 IDE controller --------------------------------------------
     // A sibling peripheral like u_kbd: it snoops the shared bus itself and
     // never drives it - qbus_mem's sel_ide decode owns the RPLY and merges
@@ -883,6 +914,7 @@ module ocbk_top (
         .turbo    (turbo_eff),      // PS/2 F12 turbo: this FSM owns the RAM reply
                                     //   (the 037 is in no_steal) at N_TURBO
         .ide_rdata(ide_rdata),      // SMK IDE read-word merge (u_ide below)
+        .joy_word (joy_word),       // 177714 read: the MSX pads (u_joy above)
         .boot_active(mem_boot_active),
         .bw_req   (mem_bw_req),
         .bw_addr  (mem_bw_addr),

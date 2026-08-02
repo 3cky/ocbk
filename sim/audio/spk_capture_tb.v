@@ -33,6 +33,8 @@ module spk_capture_tb;
     logic init_n  = 1'b1;  // Q-bus nINIT (pulsed by the RESET-instruction test)
     logic model_bk11 = 1'b0;  // flipped by the Phase-7 banking-gate cases
     logic tape_in = 1'b0;  // CMT comparator level -> 177716 read bit 5
+    // bk_joystick's 0177714 read word (section 10). Driven, never floating.
+    logic [15:0] joy_word = 16'o000000;
     wire        spk_bit;
     wire        mot_bit;
     wire        stop_block;
@@ -51,6 +53,7 @@ module spk_capture_tb;
         .cpu_clk   (cclk),
         .reset     (reset),
         .ide_rdata(16'h0000),  // no SMK IDE device in this tb
+        .joy_word  (joy_word),       // 0177714 read word (section 10)
         .init_n    (init_n),
         .kbd_down  (1'b0),
         .tape_in   (tape_in),
@@ -156,7 +159,11 @@ module spk_capture_tb;
     // DATIO(B): DIN then DOUT under ONE SYNC (INC/BIS/... on memory). CLAUDE.md
     // requires RMW coverage in any bus-path oracle - the read half must not
     // produce a port strobe and the write half must produce exactly one.
-    task bus_rmw_word(input [15:0] a, input [15:0] d);
+    // `e` is the value the READ half must return - the joystick word at 177714.
+    // Sampled where the reply already stands (N_ROM = 2 cclk edges after DIN),
+    // so this adds a check inside the window the task already waited out and
+    // changes no timing.
+    task bus_rmw_word(input [15:0] a, input [15:0] d, input [15:0] e);
         begin
             ad_oe = 1'b1; ad_drive = ~a;
             sel1_n = !(a[15:1] == (16'o177716 >> 1));
@@ -166,7 +173,13 @@ module spk_capture_tb;
             #4  ad_oe = 1'b0;                   // release the bus for the read
                 din_n  = 1'b0;
             repeat (2) @(posedge cclk);
-            #2  din_n  = 1'b1;
+            #2;
+            if (~ad_n !== e) begin
+                $display("AUDIO-ERROR RMW %o read half: exp=%o got=%o",
+                         a, e, ~ad_n);
+                errors = errors + 1;
+            end
+                din_n  = 1'b1;
             // The vm1 gates dout_start on the read reply's ack having cleared,
             // so a DATIO always has a BOTH-STROBES-IDLE gap between the halves
             // (CLAUDE.md's ROM-write-timeout note). Model it - driving the
@@ -457,7 +470,7 @@ module spk_capture_tb;
         // -- 6. DATIO(B) RMW: the read half must not strobe, the write half
         //    must strobe exactly once (the CLAUDE.md RMW rule).
         port_strobes = 0;
-        bus_rmw_word(16'o177714, 16'o017417);
+        bus_rmw_word(16'o177714, 16'o017417, 16'o000000);  // sticks idle here
         expect_port(16'o017417, 1'b1, 2'b11, 1, "DATIO RMW write half");
 
         // -- 7. everything that must NOT strobe
@@ -472,7 +485,7 @@ module spk_capture_tb;
             $display("AUDIO-ERROR 177712 write produced a port strobe");
             errors = errors + 1;
         end
-        bus_read(16'o177714, 16'o000000, "177714 DATI reads 0");
+        bus_read(16'o177714, 16'o000000, "177714 DATI: sticks idle, reads 0");
         if (port_strobes != 0) begin
             $display("AUDIO-ERROR a DATI from 177714 produced a WRITE strobe");
             errors = errors + 1;
@@ -499,6 +512,59 @@ module spk_capture_tb;
         expect_port(16'o004100, 1'b1, 2'b11, 1,   //   pattern on 177716
                     "bk11: bit-11 word write still captured on 177714");
         model_bk11 = 1'b0;
+
+        // ==== 10. the 0177714 READ merge: the joystick word ===============
+        // The write capture above and this read are the two DIRECTIONS of the
+        // same register; the point of this section is that they do not
+        // interfere. 0177714 already replied both ways via sel_io before the
+        // joysticks existed, so the merge is a data mux and nothing else -
+        // no new decode, no new reply, no new output enable.
+
+        // -- 10a. sticks idle -> 0. THE BYTE-IDENTICAL GUARD: this is exactly
+        //    what 0177714 read before bk_joystick existed, which is why the
+        //    merge leaves every timing golden in the tree untouched.
+        joy_word = 16'o000000;
+        bus_read(16'o177714, 16'o000000, "10a: idle sticks read 0");
+
+        // -- 10b. a pattern whose two bytes are distinct and non-symmetric:
+        //    player 1 in the low byte, player 2 in the high byte.
+        joy_word = 16'o052125;
+        bus_read(16'o177714, 16'o052125, "10b: the joystick word reaches the bus");
+
+        // -- 10c. nSEL2 selects the register for BOTH its bytes, so an odd-byte
+        //    read of 0177715 gets the full word too (the CPU extracts the byte).
+        bus_read(16'o177715, 16'o052125, "10c: 177715 gets the full word");
+
+        // -- 10d. the OTHER nSEL register must not see any of it: nSEL1 wins
+        //    the ternary, so no joystick bit may appear in the 177716 word.
+        //    Self-contained: the write sets the write-flag, the first read
+        //    returns and clears it, the second is the steady value.
+        bus_write_word(16'o177716, 16'o000100);
+        bus_read(16'o177716, 16'o100104, "10d: 177716 = vector|wflag|kbd, no joystick");
+        bus_read(16'o177716, 16'o100100, "10d: ...and again, flag cleared");
+
+        // -- 10e. DATIO(B) on 0177714 (the CLAUDE.md RMW rule): the read half
+        //    returns the joystick word and the write half still reaches the
+        //    Covox/AY seam with exactly one strobe, under ONE SYNC.
+        port_strobes = 0;
+        bus_rmw_word(16'o177714, 16'o017417, 16'o052125);
+        expect_port(16'o017417, 1'b1, 2'b11, 1,
+                    "10e: DATIO read half = joystick, write half = the seam");
+
+        // -- 10f. released again, so nothing after this section is perturbed.
+        joy_word = 16'o000000;
+        bus_read(16'o177714, 16'o000000, "10f: released again");
+
+        // THE !sel2_n GATE IS NOT CHECKED HERE, and the reason is structural.
+        // io_word is rd_romio and rd_romio is OR-ed into rdata at EVERY reply
+        // point, so an ungated else-leg would leak the joystick word into the
+        // SMK I/O-page overlay merge and the IDE task file. Every address that
+        // could show that also takes the mem-region ROM leg, whose reply is
+        // done-gated on an SDRAM fetch - and this tb has no SDRAM model, so
+        // such a read would simply hang. sim/smk owns the gate instead: its
+        // section 2 reads 0177714 (merge = BIOS | joystick), 0177776 (BIOS
+        // ONLY - the gate) and 0177716 (nSEL1 wins) against a non-zero
+        // joy_word on a full SoC with real SDRAM. See gen_smk_test.py.
 
         if (errors == 0) $display("COSIM PASS");
         else             $display("COSIM FAIL (%0d errors)", errors);

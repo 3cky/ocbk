@@ -65,9 +65,10 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   emitting no event (CMT tape mode moved to DIP 4), parity-error and
   stale-prefix recovery.
 - `sim/run_audio.sh` — the Phase-10 audio oracles, **four legs, mutation-tested
-  ×28** (23 at Phase 10; Phase 11 added A1/A2 — the TurboSound slot-pack
+  ×32** (23 at Phase 10; Phase 11 added A1/A2 — the TurboSound slot-pack
   orientation and the SPK_LVL multiple-of-1024 rule; Phase 12 added A3/A4/A5 —
-  the Covox slot-pack orientation, its mute enable and its 5/8 slot gain);
+  the Covox slot-pack orientation, its mute enable and its 5/8 slot gain; the
+  joysticks added Q6–Q9 on the 177714 READ merge);
   `sim/audio/README.md` carries the pinned contract and the written
   justification for the resolution claim (the `sim/evnt/README.md` precedent).
   **Leg 3 `audio_ns6_tb` is the one that matters**: it proves the DC **identity**
@@ -101,7 +102,12 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   8/8 would read 40). **Leg 2
   `spk_capture_tb`** keeps the 177716 bit-6/7 captures and gains the **177714
   (nSEL2) port-write capture**, whose load-bearing case is the WTBT
-  discriminator (see the audio bullet).
+  discriminator (see the audio bullet), and — since the joysticks — **section
+  10, the 177714 READ merge** (`Q6`–`Q9`): the word on the bus, 177715 getting
+  the full word, 177716 staying clean, and the DATIO(B) leg where the read half
+  returns the sticks while the write half still strobes the seam exactly once.
+  See the `sim/joystick` bullet for why the `!sel2_n` gate is pinned in
+  `sim/smk` instead.
 - `sim/ts/run.sh` — the Phase-11 **TurboSound** oracles, two legs,
   mutation-tested x16; `sim/ts/README.md` carries the pinned contract.
   **Leg 1 `ym2149_equiv_tb` is the authority and the reason this increment is
@@ -159,6 +165,31 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   simulable, so a second instance pins the shipped parameter DEFAULTS while a
   scaled instance pins the BEHAVIOUR — a mutation of either dies, of both
   together would not.
+- `sim/joystick/run.sh` — the **joystick** oracle, **one leg,
+  mutation-tested x15**; `sim/joystick/README.md` carries the pinned contract.
+  Same division of labour as `sim/covox` and `sim/ts` — device here, bus side
+  elsewhere. **Its sharpest section is the first one**: `bk_joystick` has no
+  reset by design, so the only thing making 0177714 read 0 before the first
+  clock edge is the sync chain's declaration-time initial values, and section 1
+  checks that BEFORE any edge — it is what the ten `joy_word` tie-offs in the
+  SoC testbenches rest on. Also pinned: the MSX active-low → BkEmu active-high
+  inversion, a **per-control walk of all twelve inputs** onto their BK bits (the
+  MSX direction nibble is U,D,L,R and the BK's is U,R,D,L, so a pass-through is
+  wrong in a way that still "works" for UP), the two ports landing in their own
+  bytes, START/SELECT having no DE-9 source, and the synchroniser being
+  **exactly two deep** in both directions.
+  **The bus side is split across two oracles, deliberately.** `spk_capture_tb`
+  section 10 (`Q6`–`Q9`) pins the merge against the real `qbus_mem`: the word
+  reaching the bus, 0177715 getting the full word, 0177716 staying clean, and
+  the **DATIO(B)** leg where the read half returns the sticks while the write
+  half still produces exactly one Covox/AY strobe under one SYNC. It cannot pin
+  the **`!sel2_n` gate**, because every address that could show a leak also
+  takes the mem-region ROM leg, whose reply is done-gated on an SDRAM fetch that
+  leg 2 has no model for. `sim/smk` owns the gate instead: its section 2 reads
+  0177714 (= BIOS | joystick), 0177776 (= BIOS **alone**) and 0177716 (nSEL1
+  wins) against a non-zero `joy_word` on a full SoC with real SDRAM, and both
+  mutations — merge dropped, gate dropped — are recorded in its runner header
+  as verified by hand.
 - `sim/run_clkgen.sh` — the Phase-7 `cpu_clkgen` unit oracle: BK-0010 (/32)
   mode **bit-identical** to a replica of the pre-Phase-7 `divc[4]` tap
   (enables included), the /24 BK-0011M rate exact, and a retarget sweep (no
@@ -216,7 +247,10 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   no-commit-without-arm, the BIOS windows (one image both windows, writes →
   trap 4, 177130/177132 reads replied everywhere — the КНГМД stub: BIOS
   word merged under SYS, 0 elsewhere), the I/O-page
-  OR-merge (177714 pure-BIOS, 177776 BIOS-only, 177716 masked-merged) with
+  OR-merge — **also the joystick oracle's gate leg**: with a non-zero
+  `joy_word` tied on, 177714 must read BIOS **|** the joystick word, 177776
+  BIOS **alone** (that is the `!sel2_n` gate on `io_word`) and 177716
+  masked-merged from the nSEL1 arm — with
   the kbd (177660 → trap 4) and vm1-internal (177712 self-served, X-monitor
   tripwire) carve-outs, SYS/RAM10 fill/verify with cross-mode aliasing, the
   ALL +4 rotation over all 8 segs, pages 2 and 8 end-to-end, **executing

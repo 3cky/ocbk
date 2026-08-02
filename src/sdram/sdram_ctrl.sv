@@ -120,6 +120,17 @@ module sdram_ctrl #(
     localparam int WW     = $clog2(RUN_MAX+1);
     logic [WCW-1:0] init_cnt;    // ST_INIT_WAIT only (wide; gates a state only)
     logic [WW-1:0]  wait_cnt;    // all runtime waits (narrow; off the output regs)
+    // ...and the SAME argument one step further. Narrowing the counter was not
+    // enough: `wait_cnt == 0` still sat INSIDE the enable cone of s_addr / s_dqm
+    // / dq_out, which are I/O-ring registers, so the compare paid the full
+    // logic->ring routing delay and the cone stayed the design's setup-critical
+    // one. wait_zero carries the same predicate in a FLOP, computed on the load
+    // path (`== 1` before the decrement, a compile-time constant on every load),
+    // so the output registers see one register output and nothing else.
+    // Cycle behaviour is bit-identical BY CONSTRUCTION: every wait_cnt
+    // assignment below has a mirrored wait_zero assignment, so the invariant
+    // wait_zero == (wait_cnt == 0) holds on every clock. Keep them paired.
+    logic           wait_zero;
     logic [3:0]     ref_cnt;     // init-refresh countdown
     logic           in_init;     // init vs runtime refresh
     logic [RFW-1:0] refi_tmr;    // refresh-interval countdown
@@ -149,6 +160,7 @@ module sdram_ctrl #(
             init_done   <= 1'b0;
             init_cnt    <= WCW'(INIT_CYC);
             wait_cnt    <= '0;
+            wait_zero   <= 1'b1;
             ref_cnt     <= 4'(NUM_INIT_REF);
             in_init     <= 1'b1;
             refi_tmr    <= RFW'(REFI_CYC);
@@ -192,6 +204,7 @@ module sdram_ctrl #(
                     cmd      <= CMD_PRE;
                     s_addr   <= A10_HIGH;            // precharge all banks
                     wait_cnt <= WW'(TRP_CYC);
+                    wait_zero <= (TRP_CYC == 0);
                     ref_cnt  <= 4'(NUM_INIT_REF);
                     in_init  <= 1'b1;
                     state    <= ST_REF_WAIT;         // tRP, then first refresh
@@ -199,16 +212,18 @@ module sdram_ctrl #(
                 ST_REF: begin
                     cmd      <= CMD_REF;
                     wait_cnt <= WW'(TRFC_CYC);
+                    wait_zero <= (TRFC_CYC == 0);
                     state    <= ST_REF_WAIT;
                 end
                 ST_REF_WAIT: begin
-                    if (wait_cnt == 0) begin
+                    if (wait_zero) begin
                         if (in_init) begin
                             if (ref_cnt == 0) begin
                                 cmd      <= CMD_LMR;
                                 s_ba     <= '0;
                                 s_addr   <= MODE_REG;
                                 wait_cnt <= WW'(TMRD_CYC);
+                                wait_zero <= (TMRD_CYC == 0);
                                 state    <= ST_LMR_WAIT;
                             end else begin
                                 ref_cnt <= ref_cnt - 1'b1;
@@ -219,16 +234,18 @@ module sdram_ctrl #(
                             state       <= ST_IDLE;
                         end
                     end else begin
-                        wait_cnt <= wait_cnt - 1'b1;
+                        wait_cnt  <= wait_cnt - 1'b1;
+                        wait_zero <= (wait_cnt == 1);
                     end
                 end
                 ST_LMR_WAIT: begin
-                    if (wait_cnt == 0) begin
+                    if (wait_zero) begin
                         init_done <= 1'b1;
                         in_init   <= 1'b0;
                         state     <= ST_IDLE;
                     end else begin
-                        wait_cnt <= wait_cnt - 1'b1;
+                        wait_cnt  <= wait_cnt - 1'b1;
+                        wait_zero <= (wait_cnt == 1);
                     end
                 end
 
@@ -252,10 +269,11 @@ module sdram_ctrl #(
                     s_ba     <= req_ba;
                     s_addr   <= req_row;
                     wait_cnt <= WW'(TRCD_CYC);
+                    wait_zero <= (TRCD_CYC == 0);
                     state    <= ST_RW;
                 end
                 ST_RW: begin
-                    if (wait_cnt == 0) begin
+                    if (wait_zero) begin
                         // Column phase with auto-precharge (A10=1)
                         s_ba   <= req_ba;
                         s_addr <= ROW_BITS'(req_col) | A10_HIGH;
@@ -265,19 +283,25 @@ module sdram_ctrl #(
                             dq_oe    <= 1'b1;
                             s_dqm    <= ~req_be;       // mask = inverse of byte-enable
                             wait_cnt <= WW'(RW_WR_WAIT);
+                            wait_zero <= (RW_WR_WAIT == 0);
                         end else begin
                             cmd        <= CMD_READ;
                             issue_read <= 1'b1;
                             wait_cnt   <= WW'(RW_RD_WAIT);
+                            wait_zero  <= (RW_RD_WAIT == 0);
                         end
                         state <= ST_RW_WAIT;
                     end else begin
-                        wait_cnt <= wait_cnt - 1'b1;
+                        wait_cnt  <= wait_cnt - 1'b1;
+                        wait_zero <= (wait_cnt == 1);
                     end
                 end
                 ST_RW_WAIT: begin
-                    if (wait_cnt == 0) state <= ST_IDLE;
-                    else               wait_cnt <= wait_cnt - 1'b1;
+                    if (wait_zero) state <= ST_IDLE;
+                    else begin
+                        wait_cnt  <= wait_cnt - 1'b1;
+                        wait_zero <= (wait_cnt == 1);
+                    end
                 end
                 default: state <= ST_INIT_WAIT;
             endcase
