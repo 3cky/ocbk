@@ -40,6 +40,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE src/peripheral/ps2_rx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/peripheral/kbd_ps2bk.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/peripheral/bk_kbd014.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/peripheral/bk_evnt.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/peripheral/bk_joystick.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/bus/bk_rply.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/sdram/epcs_boot.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/sdram/ram_init.sv
@@ -118,6 +119,27 @@ set_location_assignment PIN_66 -to pSd_Dt[2]
 # PS/2 keyboard (esemsx3 emsx_top_common.qsf: pPs2Dat=PIN_67, pPs2Clk=PIN_68)
 set_location_assignment PIN_67 -to pPs2Dat
 set_location_assignment PIN_68 -to pPs2Clk
+
+# MSX joystick ports (esemsx3 emsx_top_common.qsf pins 1-8, 11-16) -> the BK's
+# 0177714 joystick word. The index is the DE-9 order the board wires up:
+#   [0]=UP(pin 1) [1]=DOWN(2) [2]=LEFT(3) [3]=RIGHT(4) [4]=TRG_A(6) [5]=TRG_B(7)
+# The FPGA pin numbers zig-zag because they follow the connector's two rows.
+# pStrA (PIN_6) and pStrB (PIN_15) - DE-9 pin 8, the MSX strobe output - are
+# deliberately NOT assigned: a plain digital pad does not use them, so they stay
+# reserved as tri-stated inputs and remain free for a later mouse/paddle.
+set_location_assignment PIN_1  -to pJoyA[0]
+set_location_assignment PIN_3  -to pJoyA[1]
+set_location_assignment PIN_5  -to pJoyA[2]
+set_location_assignment PIN_7  -to pJoyA[3]
+set_location_assignment PIN_2  -to pJoyA[4]
+set_location_assignment PIN_4  -to pJoyA[5]
+set_location_assignment PIN_8  -to pJoyB[0]
+set_location_assignment PIN_12 -to pJoyB[1]
+set_location_assignment PIN_14 -to pJoyB[2]
+set_location_assignment PIN_16 -to pJoyB[3]
+set_location_assignment PIN_11 -to pJoyB[4]
+set_location_assignment PIN_13 -to pJoyB[5]
+
 # VGA sync (copied from ocb-test / esemsx3: pVideoVS_n=PIN_74, pVideoHS_n=PIN_75)
 set_location_assignment PIN_74 -to pVideoVS_n
 set_location_assignment PIN_75 -to pVideoHS_n
@@ -230,6 +252,30 @@ set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pPs2Clk
 set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pPs2Clk
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pPs2Dat
 set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pPs2Dat
+
+# MSX joystick inputs, exactly esemsx3's treatment of these twelve pins. The
+# WEAK PULL-UP IS LOAD-BEARING, not a formality: a pad is a passive switch to
+# GND, so the pull-up is what makes a released control read 1 - and what makes
+# an UNPLUGGED connector read all-released, i.e. 0177714 reads 0 as it did
+# before the joysticks existed. PCI_IO is the Cyclone I clamp that gives these
+# 3.3 V pads their 5 V tolerance; written per bit because that is the only
+# form PCI_IO is used in on a bus here (the pDip block above).
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pJoyA
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pJoyA
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pJoyB
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pJoyB
+set_instance_assignment -name PCI_IO ON -to pJoyA[0]
+set_instance_assignment -name PCI_IO ON -to pJoyA[1]
+set_instance_assignment -name PCI_IO ON -to pJoyA[2]
+set_instance_assignment -name PCI_IO ON -to pJoyA[3]
+set_instance_assignment -name PCI_IO ON -to pJoyA[4]
+set_instance_assignment -name PCI_IO ON -to pJoyA[5]
+set_instance_assignment -name PCI_IO ON -to pJoyB[0]
+set_instance_assignment -name PCI_IO ON -to pJoyB[1]
+set_instance_assignment -name PCI_IO ON -to pJoyB[2]
+set_instance_assignment -name PCI_IO ON -to pJoyB[3]
+set_instance_assignment -name PCI_IO ON -to pJoyB[4]
+set_instance_assignment -name PCI_IO ON -to pJoyB[5]
 
 # VGA sync outputs (24 mA, fast slew; mirrors ocb-test / esemsx3)
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pVideoVS_n

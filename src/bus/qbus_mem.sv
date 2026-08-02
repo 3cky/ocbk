@@ -35,10 +35,13 @@
 //   177716 = SYS_START | bit-2 write-flag (set on write, cleared after read;
 //            INIT-keyed, as every BK peripheral register) | bit-6 = any-key-
 //            down from the keyboard translator, ACTIVE LOW (1 = no key held);
-//   177714 = reply, read 0; writes are CAPTURED (see the port_wr seam below)
-//            and consumed by the sound devices - bk_turbosound and bk_covox -
-//            which are ocbk_top siblings, not part of this module. The read
-//            side is still unmodelled: both devices are write-only.
+//   177714 = reply both directions. WRITES are CAPTURED (see the port_wr seam
+//            below) and consumed by the sound devices - bk_turbosound and
+//            bk_covox - which are ocbk_top siblings, not part of this module.
+//            READS return the joystick word (bk_joystick, another sibling;
+//            0 with nothing held, which is what this address read before the
+//            joysticks existed). The two directions never meet: the read is a
+//            leg of io_word, the write is its own sclk block.
 // nSEL covers BOTH bytes of its register (the CPU decodes addr[3:1]), so odd-
 // byte accesses (177715/177717) are served with the full register word too.
 // Exception: in BK-0011M mode a WRITE to 177662 (video page/palette
@@ -85,6 +88,15 @@ module qbus_mem #(
     // merge latch below (gated on sel_ide, so a tie-to-0 in non-SMK tbs is
     // behaviour-identical). The device itself never drives ad_n/rply_n.
     input  logic [15:0] ide_rdata,
+
+    // ---- 0177714 joystick read word ---------------------------------------
+    // bk_joystick's BK-true word (active high, [7:0] = MSX port A, [15:8] =
+    // port B), already synchronised to THIS module's cpu_clk by the sibling -
+    // the tape_in precedent in ocbk_top. All-zero = everything released, which
+    // is exactly what this address read before the joysticks existed, so every
+    // timing golden stays byte-identical with it tied off. It must never be
+    // left floating in a testbench: an X here poisons rdata.
+    input  logic [15:0] joy_word,
 
     // ---- SDRAM domain ---------------------------------------------------
     input  logic        sclk,       // sys_clk (96.65 MHz)
@@ -288,7 +300,8 @@ module qbus_mem #(
     // trap); keep that hook on upstream re-syncs.
     //   nSEL1 (177716, either byte): io_word = SYS_START | write-flag | kbd
     //                                          | tape-in (bit 5).
-    //   nSEL2 (177714, either byte): reply, read 0, writes ignored.
+    //   nSEL2 (177714, either byte): reply, read = the joystick word, writes
+    //                                captured by the port_wr seam below.
     // Everything ELSE is UNDECODED: no reply -> the CPU's qbto timer expires
     // (56..63 clocks) -> trap 4. That is authentic BkEmu behaviour (it times
     // out on ALL undecoded addresses, not just the system page) and subsumes
@@ -386,12 +399,25 @@ module qbus_mem #(
     // nSEL1 selects the register for BOTH its bytes, so a byte read of 177717
     // gets the full word too (the CPU extracts the byte; BkEmu semantics) -
     // and its driven-low bit 15 agrees with the 037's start-vector AD15 assist
-    // instead of fighting it.
+    // instead of fighting it. The same holds for nSEL2/177715.
+    //
+    // THE !sel2_n GATE ON THE JOYSTICK LEG IS LOAD-BEARING, not cosmetic.
+    // io_word is rd_romio, and rd_romio is OR-ed into rdata at EVERY reply
+    // point below - including the SMK I/O-page overlay merge (io_word | the
+    // fetched SDRAM word, for the whole 177600-177777 page) and the sel_ide /
+    // sel_fdd replies. An unconditional else-leg would leak joystick bits into
+    // SMK BIOS reads and IDE task-file reads. Gated, the joystick word reaches
+    // exactly the register the CPU's own nSEL2 pin selects.
+    //
+    // Nothing else changes: sel_io already covers !sel2_n in BOTH directions,
+    // so `selected`, the wcnt load, drive_data, ad_oe and mem_ready are
+    // untouched - this is a data mux, never a reply or an output-enable term.
     wire [15:0] io_word  =
         !sel1_n ? ((model_bk11 ? SYS_START11 : SYS_START)
                              | (sel1_wflag ? 16'o000004 : 16'o0)
                              | (kbd_down   ? 16'o0 : 16'o000100)
                              | (tape_in    ? 16'o000040 : 16'o0)) :
+        !sel2_n ? joy_word :
         16'o000000;
     // ROM read data rides the SDRAM datapath (u_dp drives ad_n); this FSM only
     // latches/drives I/O read data.
@@ -885,11 +911,14 @@ module qbus_mem #(
     // 177714 write also broadcast-posts to SMK RAM; the device seeing it too is
     // BkEmu's memory-then-device order).
     //
-    // The READ side is deliberately NOT merged here: both shipped devices are
-    // write-only (bk_covox never reads; bk_turbosound leaves the core's DO
-    // unconnected), while a read merge
-    // would reach into the reply/OE cone that this write capture carefully
-    // avoids. If a device ever needs it, follow the ide_rdata pattern exactly.
+    // The READ side is NOT here, and deliberately so: it is a leg of io_word
+    // above (the joystick word, gated on !sel2_n), which keeps the two
+    // directions structurally apart. Both sound devices are write-only anyway
+    // (bk_covox never reads; bk_turbosound leaves the core's DO unconnected),
+    // so nothing on this side has read data to contribute. The read merge did
+    // NOT have to touch the reply/OE cone this capture carefully avoids -
+    // 177714 already replies both ways via sel_io - so it stayed a pure data
+    // mux. A device that ever needs more than that follows ide_rdata instead.
     wire port_dout = !sync_n && !dout_n && !sel2_n;
     always_ff @(posedge sclk) begin
         port_wr <= 1'b0;

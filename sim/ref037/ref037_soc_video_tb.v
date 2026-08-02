@@ -225,6 +225,8 @@ module ref037_soc_video_tb;
         .cpu_clk  (~clk),            // as ocbk_top: FSM on the inverted CPU clock
         .reset    (~dclo),
         .ide_rdata(16'h0000),  // no SMK IDE device in this tb
+        .joy_word(16'o000000), // no joysticks here; never leave it
+                               // floating - an X poisons rdata
         .init_n   (init),            // peripheral-register reset (Phase 6)
         .kbd_down (1'b0),            // no keyboard in this oracle
         .tape_in  (1'b0),            // no tape signal in this oracle

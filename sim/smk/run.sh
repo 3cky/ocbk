@@ -59,6 +59,13 @@
 #     read - the exact pad fight the inhibit prevents);
 #   * cpu_sdram_dp sel_ramw dropped from is_write -> FAIL (the HLT10 extent
 #     write is replied but never posted; the ALL-alias readback catches it);
+#   * qbus_mem's 0177714 joystick merge dropped (`!sel2_n ? joy_word` back to
+#     a hard 0) -> FAIL (section 2's 177714 compare); and the !sel2_n GATE
+#     dropped (the else-leg made unconditional) -> FAIL (section 2's 177776
+#     compare, where io_word must contribute NOTHING). BOTH VERIFIED BY HAND
+#     2026-08-02. This oracle owns that gate because it is the only place with
+#     a real SDRAM behind the I/O-page overlay: leg 2 of sim/run_audio.sh pins
+#     the merge itself (Q6-Q9) but cannot reach an overlay read at all.
 #   * qbus_mem kbd_blk read carve-out dropped -> FAIL (the 177660
 #     expect-trap-4 check: the overlay must not reply there);
 #   * qbus_mem `selected` without the write-side ~m_smk_ro -> FAIL (was the

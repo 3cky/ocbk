@@ -1,4 +1,4 @@
-# Peripherals — keyboard and the cartridge slot
+# Peripherals — keyboard, joysticks and the cartridge slot
 
 `src/peripheral/` minus the SMK512 storage devices ([smk512.md](smk512.md)) and
 `bk_evnt.sv` ([video.md](video.md)); sound devices live in
@@ -49,6 +49,82 @@
     the 177660 **write** reply is combinational (`wr_fast`) — both pinned by
     `golden_kbd.txt`; vm1 slaves must hold read data past DIN release (the
     IAK vector capture relies on it — bus-charge physics on the real board).
+
+## Joysticks
+
+**CONFIRMED ON HARDWARE 2026-08-02** — a two-player game runs off both pads on
+the board, which is the acceptance that matters: it exercises the inversion, the
+direction remap and *both* byte lanes at once, and a wrong bit anywhere would be
+immediately visible as a stuck or crossed control.
+
+The board's **two MSX DE-9 ports** are read as the BK's joystick word at
+**0177714** (the CPU's nSEL2 register — the same address the Covox and the
+TurboSound decode for *writes*). `src/peripheral/bk_joystick.sv` is a pure
+level translator: no bus, no state the CPU can see, no reset. Oracle:
+`sim/joystick/README.md` (device) + `sim/audio`'s `spk_capture_tb` section 10
+(the bus side) + `sim/smk` section 2 (the gate, below).
+
+- **The remap is the whole error surface.** MSX DE-9 order is U,D,L,R; the BK's
+  is U,R,D,L — different permutations, so a pass-through is wrong in a way that
+  still "works" for UP. Pads are **active low** (a passive switch to GND against
+  the pads' weak pull-ups), the BK word is **active high**:
+
+  | DE-9 pin | MSX index | control | BK bit | BK mask |
+  |---|---|---|---|---|
+  | 1 | `pJoy[0]` | UP | 0 | `0o001` |
+  | 2 | `pJoy[1]` | DOWN | 2 | `0o004` |
+  | 3 | `pJoy[2]` | LEFT | 3 | `0o010` |
+  | 4 | `pJoy[3]` | RIGHT | 1 | `0o002` |
+  | 6 | `pJoy[4]` | TRIGGER A | 5 | `0o040` |
+  | 7 | `pJoy[5]` | TRIGGER B | 6 | `0o100` |
+
+  Reference: BkEmu's `PeripheralPort.read()` (returns the state verbatim, **no**
+  inversion — unlike the write-side devices, which each do their own `~value`)
+  and `JoystickManager`'s masks. Pins: `pJoyA` = PIN_1/3/5/7/2/4, `pJoyB` =
+  PIN_8/12/14/16/11/13, all with `WEAK_PULL_UP_RESISTOR` + `PCI_IO` (the 5 V
+  clamp) — esemsx3's exact treatment. `pStrA`/`pStrB` (DE-9 pin 8, PIN_6/PIN_15)
+  are left reserved-tristated: a digital pad does not use them, and they stay
+  free for a later mouse/paddle.
+- **Joystick 2 is the UPPER byte**, same layout shifted by 8. BkEmu models one
+  joystick and leaves `[15:8]` at 0, so nothing in the reference pins the high
+  byte — but **real two-player BK software does read it**, which is what the
+  2026-08-02 hardware run demonstrated, and that is the authority here rather
+  than the emulator's single-pad model. The cost is explicit and worth knowing:
+  software reading 0177714 **word-wide** (`TST`, not `TSTB`) sees player 2 as
+  well as player 1.
+- **START (bit 4) and SELECT (bit 7) are tied 0** — a DE-9 digital pad has no
+  source for them. Deliberately *not* an A+B chord (a heuristic; the standing
+  answer to those here is a hard user-selected mode, never a guess) and *not*
+  PS/2 keys OR-ed in (phantom presses during ordinary typing).
+- **The `!sel2_n` gate on the merge is load-bearing.** The read is a leg of
+  `qbus_mem`'s `io_word`, and `io_word` is `rd_romio`, which is OR-ed into
+  `rdata` at *every* reply point — including the SMK I/O-page overlay merge for
+  the whole 0177600–0177777 page and the `sel_ide`/`sel_fdd` replies. An ungated
+  else-leg leaks joystick bits into SMK BIOS and IDE task-file reads. This is
+  the one fact a future editor will get wrong; `sim/smk` section 2 exists to
+  catch it (0177714 = BIOS | joystick, 0177776 = BIOS **alone**).
+- **The merge did not touch the reply/OE cone**, which is why it closed the
+  deferred item cheaply: `sel_io` already replied at 0177714 in **both**
+  directions, so `selected`, the `wcnt` load, `drive_data`, `ad_oe` and
+  `mem_ready` are all unchanged. With the sticks idle the word is 0 — exactly
+  what the address read before — so every timing golden stayed byte-identical.
+- **No debounce.** The MSX PSG debounces nothing, BkEmu returns the state
+  verbatim, and the BK's 0177714 is a passive buffer — there is no debouncing
+  element in the real path. Games poll at frame rate and take a snapshot, so a
+  bouncing contact costs at most one frame, as on real hardware. The two flops
+  are a **metastability synchroniser** on `cpu_clk_n` (the clock `qbus_mem`'s
+  read FSM runs on — the `tape_in` resync precedent in `ocbk_top`), not a
+  debouncer.
+- **No reset.** BkEmu's reset-to-0 is an artifact of a model that holds state;
+  the hardware path is a buffer with no reset pin. Zeroing the sync chain is
+  invisible (it reloads on the next edge) and would cost a 24-flop reset cone.
+  Same class as the never-reset 0177714 write latch — one step further, since a
+  joystick has no latch at all. The power-on word is pinned by the sync chain's
+  declaration-time initial values, which is also what makes an **unplugged
+  connector** read 0.
+- **No enable DIP**, deliberately: with nothing plugged in the ports read 0, so
+  there is nothing to disable. `pDip[6]` is the recorded escape hatch if
+  hardware bring-up ever finds a conflict (see [open-items.md](open-items.md)).
 
 ## Cartridge slot
 

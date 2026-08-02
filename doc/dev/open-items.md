@@ -49,22 +49,26 @@ budget arithmetic in `bk_audio`'s slot-map comment — at 12288 the sum would be
 from x15 to x12 to pay for it.
 
 **The margin, before anything else**
-- **sys_clk setup is +0.471 ns, TNS 0 — met, and better than Phase 12 left
-  it.** The Covox's own STA chase was found and cured structurally (see the
-  audio file), so the new logic is off the critical path entirely; that build
-  ended at **+0.102** on the chronic pre-existing cone that +268 LE re-placed
-  (`ram_init|filling → sdram_arbiter|cmd_addr[*]` at +0.102,
-  `mem_mapper|mon_en → cpu_sdram_dp|addr_o[*]` at +0.148, both +0.528 before
-  the increment and neither touched by it). The Covox **arming fix** then
-  re-placed them again — +33 LE, a shorter `cx_en` cone, and **+0.471**, with
-  the worst path now `sd_backend|st.A_TAIL → st.S_CSD_DATA`. So the chase has
-  not had to happen yet; it is placement, and it can come back.
-  **The next increment still starts here.** The documented cure is to re-register
-  the quasi-static high-fanout selector (`fill_active`) locally — but note it
-  shifts the port-0 handover by a cycle, so it needs `sim/raminit` re-run and
-  a boot check, not a drive-by edit. **Never an SDC exception, never SEED 3**,
-  and re-run a hardware boot: this design has been STA-clean and non-booting
-  once before.
+- **sys_clk setup is +0.254 ns, TNS 0 — met, and BOOT-CONFIRMED 2026-08-02.**
+  The chase that "had not had to
+  happen yet" through Phase 12 **happened with the joysticks**, and it landed on
+  the worst possible cone: +23 LE / +12 pins re-placed the fitter into
+  **−0.121, TNS −0.361** on `sdram_ctrl|wait_cnt → s_addr`, the Phase-7
+  no-boot cone. Cured structurally with the `wait_zero` flop (the compare moved
+  out of an I/O-ring register's enable cone and onto the counter's load path) —
+  the full trace, the general rule and the cycle-identity proof are in
+  [gotchas.md](gotchas.md). The critical path is now
+  `va_037_sync|A[13] → mem_mapper|ext7_w` at +0.254 with **zero clock skew**,
+  i.e. ordinary logic-to-logic, and `sdram_ctrl` is off the top-5 entirely.
+  The chronic pre-existing cones (`ram_init|filling → sdram_arbiter|cmd_addr[*]`,
+  `mem_mapper|mon_en → cpu_sdram_dp|addr_o[*]`) did not surface this time.
+  **The next increment still starts here**, and the two documented cures remain:
+  re-register the quasi-static high-fanout selector (`fill_active`) locally —
+  note it shifts the port-0 handover by a cycle, so it needs `sim/raminit` re-run
+  and a boot check, not a drive-by edit — and, more generally, get compares out
+  of pad-register enable cones. **Never an SDC exception, never SEED 3**, and
+  re-run a hardware boot: this design has been STA-clean and non-booting once
+  before, on this exact cone.
 
 **Fidelity, measurable**
 - **The Phase-10 >6-bit audio resolution claim is CONFIRMED ON HARDWARE
@@ -213,14 +217,34 @@ from x15 to x12 to pay for it.
   burst, exactly as it did before and as it would on a real board with a Covox
   hanging off the same connector. The trace and the rejected alternatives are
   in `audio.md`'s Covox section.
-- **The 177714 READ merge is not implemented.** The Phase-10 seam captures
-  WRITES only, deliberately: a write capture is provably reply-inert (177714
-  already replies via `sel_io`), while a read merge reaches into the reply/OE
-  cone that this change carefully avoids. Covox is write-only, and BkEmu's
-  `Ay8910` does not override `read` either (it returns 0), so neither Phase 11
-  nor Phase 12 needed one — `bk_turbosound` leaves the core's `DO`
-  unconnected and `bk_covox` never reads at all. If a read is ever wanted,
-  follow the `ide_rdata` pattern exactly.
+- **The 177714 READ merge is DONE and CONFIRMED ON HARDWARE (2026-08-02, the
+  joysticks — a two-player game runs off both pads).** It is the
+  joystick word, and it did **not** have to reach the reply/OE cone this item
+  spent three phases avoiding: `sel_io` already replied at 177714 in *both*
+  directions, so the whole change is one extra leg of `io_word` — a data mux.
+  `selected`, the `wcnt` load, `drive_data`, `ad_oe` and `mem_ready` are
+  untouched, and with the sticks idle the word is 0, i.e. the pre-joystick
+  value, so every timing golden stayed byte-identical. The `ide_rdata` pattern
+  this item pointed at is still the right answer for a device that needs more
+  than that. The one new sharp edge is the **`!sel2_n` gate** on that leg —
+  `io_word` is `rd_romio` and reaches every reply point — see
+  [peripherals.md](peripherals.md).
+- **START (bit 4) and SELECT (bit 7) of the joystick word have no source.** An
+  MSX DE-9 digital pad has two triggers and nothing else, so those two bits are
+  tied 0. Both alternatives were considered and rejected: an A+B chord is a
+  heuristic (the standing answer here is a hard user-selected mode, never a
+  guess), and OR-ing in PS/2 keys would inject phantom presses during ordinary
+  typing. If a game is ever found that needs START, the honest fix is a
+  user-selected mapping, not an invented one.
+- **No joystick-disable DIP is shipped**, deliberately: with nothing plugged in
+  the ports read all-released and 177714 reads 0, so there is nothing to
+  disable, and a toggle is one more piece of hidden state to get wrong (the
+  Covox precedent above). The exposure it *would* fix is real but narrow — a
+  parallel-port/printer driver polling 177714 for a status line would see
+  joystick bits while a control is actually held. Hardware bring-up found no
+  conflict, so this stands. **`pDip[6]` is the reserved escape hatch** if one
+  ever turns up; the decision and the pin are written down here so it is a
+  five-minute change, not a redesign.
 - **Tape-out is single-bit.** A real BK mixes write bits 6+5 resistively into a
   3-level record waveform; bit 6 alone (the dominant component) is shipped. See
   the tape bullet. **Phase 10 deliberately did NOT change this** — tape-out is a

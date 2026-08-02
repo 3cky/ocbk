@@ -373,6 +373,8 @@ module boot_check_tb;
         .cpu_clk  (~clk),
         .reset    (~dclo),
         .ide_rdata(ide_rdata),
+        .joy_word(16'o000000), // no joysticks here; never leave it
+                               // floating - an X poisons rdata
         .init_n   (init),            // peripheral-register reset (Phase 6)
         .kbd_down (1'b0),            // keyboard idle in the boot smoke
         .tape_in  (1'b0),            // no tape signal in this oracle

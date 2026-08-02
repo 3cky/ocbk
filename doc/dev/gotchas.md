@@ -93,6 +93,33 @@
   a 1-cycle latency provably cannot matter: verify the signal changes only
   while the consumer is in reset / the CPU is parked, and keep the raw
   signal on any cone whose oracle compares combinationally after a flip.
+- **A COMPARE inside the enable cone of an I/O-ring register pays the full
+  logic→ring route** (the joysticks, fixed 2026-08-02) — and the cone it bit is
+  the dangerous one. +23 LE / +12 pins re-placed the fitter and took sys_clk
+  setup **+0.471 → −0.121, TNS −0.361** on
+  `sdram_ctrl|wait_cnt[1:0] → s_addr[6:4]`: the *same* cone as the Phase-7
+  no-boot regression, where a setup violation corrupts the SDRAM ROM write and
+  the board simply does not start — with `boot_ok` still green, because that is
+  a flash checksum and not an SDRAM readback. **Narrowing the counter in Phase 7
+  was necessary but not sufficient.** Even a 3-bit `wait_cnt == 0` was still
+  *inside* the enable cone of `s_addr` / `s_dqm` / `dq_out`, which are I/O-ring
+  registers placed far from the logic, so the compare paid the whole route.
+  **Cure: move the predicate into its own flop.** `wait_zero` mirrors
+  `wait_cnt == 0` but is computed on the **load** path — `(wait_cnt == 1)`
+  before each decrement, a compile-time constant on every load — so the output
+  registers see one register output and no logic at all. Cycle-identical **by
+  construction**: every `wait_cnt` assignment has a mirrored `wait_zero`
+  assignment, and the pairing is the invariant to preserve when editing that
+  FSM. Result **+0.254, TNS 0**, and the critical path left `sdram_ctrl`
+  entirely (`va_037_sync|A[13] → mem_mapper|ext7_w`, zero skew). Proof of
+  cycle-identity: the 14 `ref037` golden legs byte-identical, `qbus_sdram`
+  cosim latencies unchanged, and `sim/smktime` / `sim/vregtime` returning the
+  *same measured numbers to the cycle* (21167 / 856.1 Hz, 28032 / 287.3 Hz).
+  **CONFIRMED ON HARDWARE 2026-08-02** — the board boots and runs a game, which
+  is the check this cone actually needs: last time it failed, STA was clean and
+  the machine simply did not start.
+  **The general rule: an `== 0` on a counter is cheap; an `== 0` in the enable
+  cone of a pad register is not.**
 - **A SINGLE-driver open-collector `tri1` net degenerates to stuck-ASSERTED in
   Quartus** (Cyclone I has no internal tri-state/pull-up). This bit the Phase-6
   keyboard on hardware: `bk_kbd014` was the *only* nVIRQ source, driving

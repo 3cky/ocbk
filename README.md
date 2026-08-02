@@ -22,6 +22,8 @@ Everything below is confirmed running on the device.
   Russian/Latin and case triggers, СУ/АР2/НР modifiers and СТОП.
 - **Sound** - the 1-bit speaker, **TurboSound** (2x YM2149) and a stereo
   **Covox** 8-bit DAC.
+- **Joysticks** - both MSX joystick ports drive the BK's joystick register:
+  four directions and two buttons each, so two-player games work.
 - **Tape** - the right audio jack doubles as the cassette port. Load real BK
   tape recordings from a PC, and save back to one.
 - **SMK512** - the 512 KB RAM extension, its BIOS, and an IDE drive backed by
@@ -63,6 +65,11 @@ Everything below is confirmed running on the device.
 
 Turbo and the display mode are remembered across the reset button; they reset
 only on power-off.
+
+### Joysticks
+
+Both MSX joystick ports are live. Plug in any standard MSX or Atari-style
+digital pad - four directions and two fire buttons are read.
 
 ### LEDs
 
@@ -122,7 +129,7 @@ something broken.
 
 ## Under the hood
 
-It fits in **8,485 of 12,060 logic elements (70 %)**, 3 memory blocks and the
+It fits in **8,518 of 12,060 logic elements (71 %)**, 3 memory blocks and the
 board's single PLL.
 
 Developer documentation is in **[doc/dev/](doc/dev/)**, one file per subsystem -

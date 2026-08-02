@@ -53,6 +53,7 @@ src/peripheral/ps2_rx.sv
 src/peripheral/kbd_ps2bk.sv
 src/peripheral/bk_kbd014.sv
 src/peripheral/bk_evnt.sv
+src/peripheral/bk_joystick.sv
 
 // --- audio subsystem (src/audio) ---
 src/audio/audio_ns6.sv

@@ -203,6 +203,8 @@ module bk11_soc_tb;
         .cpu_clk  (~clk),            // as ocbk_top: FSM on the inverted CPU clock
         .reset    (~dclo),
         .ide_rdata(16'h0000),  // no SMK IDE device in this tb
+        .joy_word(16'o000000), // no joysticks here; never leave it
+                               // floating - an X poisons rdata
         .init_n   (init),
         .kbd_down (1'b0),
         .tape_in  (1'b0),
