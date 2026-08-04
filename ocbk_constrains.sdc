@@ -22,6 +22,20 @@ if {[get_collection_size $cpu_div] > 0 && [get_collection_size $vco] > 0} {
     create_generated_clock -name cpu_clk -source $vco -divide_by 16 $cpu_div
 }
 
+# USB host clock: the same fabric-divider chain, /8 of the 96.65 MHz VCO =
+# 12.08 MHz (cpu_clkgen's usb_clk_r). A CLOCK, not a clock enable, because the
+# vendored usb_hid_host core's Fmax on this part is 79 MHz - it cannot ride
+# sys_clk. This is a clock DEFINITION, not a timing exception: usb_clk and
+# cpu_clk free-run from one reset release and their edges coincide every 8 or
+# 24 sys_clk, so the (slow) crossing analyses on its own. If TimeQuest ever
+# wants a false_path here, fix the crossing structurally instead - an SDC
+# exception is a fitter input and has broken the SEED-3 boot before.
+# ----------------------------------------------------------------------------
+set usb_div [get_registers {*u_clkgen|usb_clk_r}]
+if {[get_collection_size $usb_div] > 0 && [get_collection_size $vco] > 0} {
+    create_generated_clock -name usb_clk -source $vco -divide_by 8 $usb_div
+}
+
 # Q-bus address latch: qbus_sdram captures the bus address transparently on the
 # SYNC strobe (as real multiplexed-bus peripherals do), so SYNC is a slow, logic-
 # derived clock (period = one CPU cycle, 165.6 ns at the fastest 6.04 MHz turbo

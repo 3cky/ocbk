@@ -54,6 +54,9 @@ src/peripheral/kbd_ps2bk.sv
 src/peripheral/bk_kbd014.sv
 src/peripheral/bk_evnt.sv
 src/peripheral/bk_joystick.sv
+// USB HID host (vendored, plain Verilog): microcode ROM before its user.
+src/peripheral/usb_hid_host_rom.v
+src/peripheral/usb_hid_host.v
 
 // --- audio subsystem (src/audio) ---
 src/audio/audio_ns6.sv

@@ -116,6 +116,19 @@ module ocbk_top (
     inout  wire         pPs2Clk,
     inout  wire         pPs2Dat,
 
+    // ---- USB HID host (the side USB-A port) ------------------------------
+    // Low-speed (1.5 Mb/s) D+/D-, driven straight from the pads by the
+    // vendored usb_hid_host core. The board wires this connector as a real
+    // host: 10k pull-downs and 33R series resistors on both lines, VBUS on
+    // +5V. These are the ONLY nets here that must NOT get the .qsf's usual
+    // weak pull-up - the internal ~25k against the board's 10k would idle the
+    // pin at ~0.94 V, above LVTTL's 0.8 V VIL, and an empty port would read
+    // indeterminate instead of the SE0 the core needs to see "disconnected".
+    // The tri-state stays at the pad (these nets have no other fanout) - the
+    // third intentional pad tri-state after pDac_SR and the SD pins.
+    inout  wire         pUsbP,     // USBP2 = D+ (PIN_239)
+    inout  wire         pUsbN,     // USBN2 = D- (PIN_238)
+
     // ---- MSX joystick ports -> the BK's 0177714 read word ----------------
     // Two DE-9 pads, ACTIVE LOW, in the board's index order:
     //   [0] = UP  [1] = DOWN  [2] = LEFT  [3] = RIGHT  [4] = TRG_A  [5] = TRG_B
@@ -184,6 +197,7 @@ module ocbk_top (
     logic cpu_clk;          // 3.02 / 4.03 MHz CPU clock -> pin_clk_p
     logic cpu_clk_n;        // inverted CPU clock      -> pin_clk_n
     logic dot_ena;          // 12.08 MHz enable strobe (spare)
+    logic usb_clk;          // 12.08 MHz 50% duty clock -> usb_hid_host
     logic en_pos, en_neg;   // ÷16 037 CLKIN enables (on CPU edges in /32 mode;
                             // see va_037_sync and cpu_clkgen)
     logic dclo_n;           // CPU reset  (active low) - released first
@@ -284,6 +298,7 @@ module ocbk_top (
         .cpu_clk    (cpu_clk),
         .cpu_clk_n  (cpu_clk_n),
         .dot_ena    (dot_ena),
+        .usb_clk    (usb_clk),
         .en_pos     (en_pos),
         .en_neg     (en_neg)
     );
@@ -1174,6 +1189,58 @@ module ocbk_top (
         .pSltBdir_n()
     );
 
+    // ---- USB HID host (vendored; the side USB-A port) --------------------
+    // Runs in its own 12.08 MHz domain (see cpu_clkgen's usb_clk): the core's
+    // Fmax on this part is 79 MHz, so it cannot be a clock-enabled block in
+    // sys_clk. Reset is POWER-ON ONLY (vid_rst_n), like the audio and video
+    // sides: a warm reset must not drop the USB link and force the device to
+    // re-enumerate. Hot-plug is handled by the core's own watchdog, not by a
+    // reset.
+    //
+    // Nothing consumes these outputs yet - this increment only proves the port
+    // enumerates on hardware. The BK-visible consumers (a gamepad OR'd into
+    // the 0177714 joystick word, a mouse presented as Марсианка) come next,
+    // and will need the usual 2-FF sync into cpu_clk.
+    logic [1:0]  usb_typ;
+    logic        usb_report, usb_conerr, usb_connected;
+    logic [7:0]  usb_key_mod, usb_key1, usb_key2, usb_key3, usb_key4;
+    logic [7:0]  usb_mouse_btn;
+    logic signed [7:0] usb_mouse_dx, usb_mouse_dy;
+    logic        usb_g_l, usb_g_r, usb_g_u, usb_g_d;
+    logic        usb_g_a, usb_g_b, usb_g_x, usb_g_y, usb_g_sel, usb_g_sta;
+    logic [63:0] usb_report_bytes;
+    logic [55:0] usb_enum_regs;
+
+    usb_hid_host u_usb (
+        .usbclk        (usb_clk),
+        .usbrst_n      (vid_rst_n),
+        .usb_dp        (pUsbP),
+        .usb_dm        (pUsbN),
+        .typ           (usb_typ),
+        .report        (usb_report),
+        .conerr        (usb_conerr),
+        .key_modifiers (usb_key_mod),
+        .key1          (usb_key1),
+        .key2          (usb_key2),
+        .key3          (usb_key3),
+        .key4          (usb_key4),
+        .mouse_btn     (usb_mouse_btn),
+        .mouse_dx      (usb_mouse_dx),
+        .mouse_dy      (usb_mouse_dy),
+        .game_l        (usb_g_l),
+        .game_r        (usb_g_r),
+        .game_u        (usb_g_u),
+        .game_d        (usb_g_d),
+        .game_a        (usb_g_a),
+        .game_b        (usb_g_b),
+        .game_x        (usb_g_x),
+        .game_y        (usb_g_y),
+        .game_sel      (usb_g_sel),
+        .game_sta      (usb_g_sta),
+        .dbg_hid_report(usb_report_bytes),
+        .dbg_regs      (usb_enum_regs),
+        .dev_connected (usb_connected)
+    );
 
     // Free-running PLL counter - the boot-fail blink source for pLedPwr; only
     // the hb[22] blink tap is used (pLed[7] is the drive-access indicator).
@@ -1223,7 +1290,51 @@ module ocbk_top (
     // into "the digital side says the level overflowed", which is otherwise
     // indistinguishable from an analog fault. Neither should ever light in
     // normal use - the gain budget, not the saturator, is the mixing strategy.
-    assign pLed    = {ide_led, cmt_mode, turbo_eff, ts_act,
-                      ts_dual, snd_clip, snd_sat, spk_active};
+    // ===================================================================
+    //  INCREMENT-0 DIAGNOSTIC - DO NOT SHIP. Remove with this whole block
+    //  and restore the shipped assignment below it. A debug feature does not
+    //  ship; this exists only to answer "does a USB device enumerate on the
+    //  side port", and to capture the raw report layout and the enumeration
+    //  registers of whatever is plugged in (the gamepad decode is heuristic,
+    //  so those captures are what the consumer increments are written from).
+    //
+    //  The view is selected LIVE (combinational pin -> LED, no latch, no
+    //  reset) by DIP switches 7,6,5,4 = pDip[6:3], MSB first. ON pulls the
+    //  pin low, so the selector is the INVERTED nibble and a switch ON reads
+    //  as a 1:
+    //
+    //     sel = 8*DIP7 + 4*DIP6 + 2*DIP5 + 1*DIP4        (ON = 1)
+    //       0     all four OFF - status: {conerr, 0000, connected, typ[1:0]}
+    //               typ = 1 keyboard, 2 mouse, 3 gamepad, 0 unclassified
+    //       1-8   dbg_hid_report byte 0..7
+    //       9-15  the enumeration registers: VID_L VID_H PID_L PID_H
+    //             bInterfaceClass bInterfaceSubClass bInterfaceProtocol
+    //
+    //  DIP 1 (model) and DIP 8 (SMK) are deliberately NOT in the selector -
+    //  they configure the machine and must stay free while probing. Of the
+    //  four that are, DIP 6 and 7 are unused by the design; DIP 4 (CMT tape
+    //  mode) and DIP 5 (Covox mono) are live reads, so cycling views does
+    //  flip those two - harmless at the bench, and the point of putting the
+    //  status view at the all-OFF resting position.
+    //
+    //  pLedPwr keeps its normal boot-status duty - while probing you want to
+    //  know the board booted; conerr lives in the status view instead.
+    wire [3:0]  usb_dbg_sel = ~pDip[6:3];
+    // sel-1 indexes both banks: 0..7 = report bytes, 8..14 = the registers,
+    // so one offset serves and bit 3 picks the bank.
+    wire [3:0]  usb_dbg_idx = usb_dbg_sel - 4'd1;
+    wire [5:0]  usb_dbg_ofs = {usb_dbg_idx[2:0], 3'b000};
+    logic [7:0] usb_dbg;
+    always_comb begin
+        if (usb_dbg_sel == 4'd0)      usb_dbg = {usb_conerr, 4'b0000,
+                                                 usb_connected, usb_typ};
+        else if (!usb_dbg_idx[3])     usb_dbg = usb_report_bytes[usb_dbg_ofs +: 8];
+        else                          usb_dbg = usb_enum_regs   [usb_dbg_ofs +: 8];
+    end
+    assign pLed = usb_dbg;
+    // The shipped assignment, restored when the diagnostic block goes:
+    // assign pLed = {ide_led, cmt_mode, turbo_eff, ts_act,
+    //                ts_dual, snd_clip, snd_sat, spk_active};
+    // ===================================================================
 
 endmodule

@@ -41,6 +41,9 @@ set_global_assignment -name SYSTEMVERILOG_FILE src/peripheral/kbd_ps2bk.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/peripheral/bk_kbd014.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/peripheral/bk_evnt.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/peripheral/bk_joystick.sv
+# USB HID host (vendored, plain Verilog): microcode ROM before its user.
+set_global_assignment -name VERILOG_FILE src/peripheral/usb_hid_host_rom.v
+set_global_assignment -name VERILOG_FILE src/peripheral/usb_hid_host.v
 set_global_assignment -name SYSTEMVERILOG_FILE src/bus/bk_rply.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/sdram/epcs_boot.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/sdram/ram_init.sv
@@ -119,6 +122,12 @@ set_location_assignment PIN_66 -to pSd_Dt[2]
 # PS/2 keyboard (esemsx3 emsx_top_common.qsf: pPs2Dat=PIN_67, pPs2Clk=PIN_68)
 set_location_assignment PIN_67 -to pPs2Dat
 set_location_assignment PIN_68 -to pPs2Clk
+
+# USB HID host - the side USB-A port (esemsx3 calls these pUsbP2/pUsbN2; the
+# other pair, PIN_236/237, has no connector on this board). Wired as a real
+# host: 10k pull-downs and 33R series resistors on D+/D-, VBUS on +5V.
+set_location_assignment PIN_239 -to pUsbP
+set_location_assignment PIN_238 -to pUsbN
 
 # MSX joystick ports (esemsx3 emsx_top_common.qsf pins 1-8, 11-16) -> the BK's
 # 0177714 joystick word. The index is the DE-9 order the board wires up:
@@ -252,6 +261,17 @@ set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pPs2Clk
 set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pPs2Clk
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pPs2Dat
 set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pPs2Dat
+
+# USB D+/D-: 4 mA like the other esemsx3 pins, and DELIBERATELY NO WEAK PULL-UP
+# - the one place in this file where the convention is wrong. The board already
+# pulls both lines down with 10k (that is what makes an empty port read SE0 =
+# "disconnected", and a device's own 1.5k pull-up on D- read as "attached").
+# The FPGA's internal ~25k pull-up would fight it to ~0.94 V, above LVTTL's
+# 0.8 V VIL max, so an unplugged port would sit at an indeterminate level and
+# the core would never see a clean SE0. Do not "fix" these two lines to match
+# the pins above them.
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pUsbP
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pUsbN
 
 # MSX joystick inputs, exactly esemsx3's treatment of these twelve pins. The
 # WEAK PULL-UP IS LOAD-BEARING, not a formality: a pad is a passive switch to
