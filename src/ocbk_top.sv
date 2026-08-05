@@ -822,13 +822,27 @@ module ocbk_top (
     // 2-FF sync onto cpu_clk_n - the same clock and the same reasoning as the
     // tape_sr resync above, and the clock qbus_mem's read FSM runs on. No
     // reset: a passive switch matrix has none. See bk_joystick.sv.
-    wire [15:0] joy_word;
+    wire [15:0] joy_pads;
     bk_joystick u_joy (
         .clk      (cpu_clk_n),
         .pad_a_n  (pJoyA),
         .pad_b_n  (pJoyB),
-        .joy_word (joy_word)
+        .joy_word (joy_pads)
     );
+
+    // The 0177714 read word is the pads OR the Марсианка mouse (u_mouse, below
+    // the USB host - it needs that block's signals). With no USB mouse
+    // enumerated mouse_word is 0, so this is transparent: the pads read exactly
+    // as they did before the mouse existed, and qbus_mem is untouched. A pad on
+    // DE-9 port B and a USB mouse can therefore be used at once; the mouse's
+    // buttons do land on port A's trigger bits, which is unavoidable because on
+    // a real BK it is the same connector.
+    // Both are driven by the USB block further down (u_usb / u_mouse), which
+    // has to sit after the signals it consumes; declared here because the read
+    // word and the Covox mute are both needed above it.
+    wire [15:0] mouse_word;
+    wire        cx_mouse_mute;
+    wire [15:0] joy_word = joy_pads | mouse_word;
 
     // ---- SMK512 IDE controller --------------------------------------------
     // A sibling peripheral like u_kbd: it snoops the shared bus itself and
@@ -1041,7 +1055,7 @@ module ocbk_top (
         .port_wr   (snd_port_wr),
         .port_data (snd_port_data),
         .mono      (cx_mono),
-        .psg_act   (ts_snd),
+        .psg_act   (ts_snd | cx_mouse_mute),   // see the mouse note above
         .cx_l      (cx_l),
         .cx_r      (cx_r),
         .cx_en     (cx_en)
@@ -1248,6 +1262,36 @@ module ocbk_top (
         .dbg_regs      (usb_enum_regs),
         .dev_connected (usb_connected)
     );
+
+    // ---- Марсианка mouse: the USB mouse as the BK's 0177714 read word ------
+    // Schematic-derived (УВК-01), not GID-derived: the read is always live, so
+    // there is no arming, and СБРОС is a LEVEL that holds the four direction
+    // latches cleared - the program's 177714 bit 3, inverted by the port. It
+    // powers up at 0, which holds the mouse in reset, so nothing here disturbs a
+    // machine that never drives it. See bk_mouse.sv for the full derivation.
+    bk_mouse u_mouse (
+        .usb_clk    (usb_clk),
+        .hid_report (usb_report),
+        .hid_btn    (usb_mouse_btn),
+        .hid_dx     (usb_mouse_dx),
+        .hid_dy     (usb_mouse_dy),
+        .hid_typ    (usb_typ),
+        .clk        (cpu_clk_n),
+        .port_data  (snd_port_data),
+        .mouse_word (mouse_word),
+        .mouse_active ()
+    );
+
+    // A mouse owns 0177714's WRITE side too: its poll loop pulses СБРОС, and
+    // that is exactly the "the port is being modulated" condition the Covox arms
+    // on, so an unmuted Covox would buzz at the poll rate. GID's own docs record
+    // the same conflict from the other side ("Autodetect AY/COVOX ... не
+    // работает с Менестрелем и мышью"). psg_act is named for TurboSound but its
+    // role is "another 0177714 owner is active", so the mute request joins it
+    // there rather than growing bk_covox a second port and churning its oracle.
+    logic [1:0] cx_mouse_sr = '0;
+    always_ff @(posedge sys_clk) cx_mouse_sr <= {cx_mouse_sr[0], usb_typ == 2'd2};
+    assign cx_mouse_mute = cx_mouse_sr[1];
 
     // Free-running PLL counter - the boot-fail blink source for pLedPwr; only
     // the hb[22] blink tap is used (pLed[7] is the drive-access indicator).

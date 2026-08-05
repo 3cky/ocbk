@@ -186,6 +186,62 @@ a mouse as `typ`=2 on the OneChipBook's side USB-A port.
   the `ug <= 9` typo) are enumerated in the file header — read it before a
   re-sync.
 
+## Марсианка mouse
+
+`src/peripheral/bk_mouse.sv` — a USB HID mouse presented as the BK's **УВК-01
+«Марсианка»** on **0177714**. The first consumer of the USB host. Oracle:
+`sim/mouse/README.md`.
+
+**This is the one subsystem where BkEmu has nothing and GID is not the
+authority.** BkEmu does not implement the mouse; GID's is the only software
+implementation and its own docs disavow it (*«Работает отвратительно»*). The
+contract is therefore derived from the **УВК-01 schematic sheets** — two axes ×
+two phases of АЛ107Б/ФД-265 optopairs, each sliced by a К561ЛП2 XOR (1.5 MΩ
+feedback = hysteresis) clocking one half of a К561ТМ2, two flip-flops per axis,
+`Q`/`/Q` buffered by a К561ПУ4 (six channels = four `Q` + two `/Q`) and
+cross-combined by four КМ133ЛА15 NANDs. Sheet 2's connector table is the pinout:
+`1 = вверх`, `2 = вправо`, `3 = вниз`, `4 = влево`, `5/6 = КН1/КН2`,
+**`9 = СБРОС`**, `10 = +5В`, `7,8 = Общ.`
+
+- **Read word** = the joystick layout, so it needs no new bus path at all:
+  bit 0 UP, 1 RIGHT, 2 DOWN, 3 LEFT, 5 = КН1, 6 = КН2. `mouse_word` is OR-ed into
+  `joy_word` **at the top level**, so `qbus_mem` is untouched and every one of its
+  goldens stays byte-identical — the same trick that made the joystick cheap.
+- **Two GID behaviours are rejected as emulator artifacts**, and the oracle
+  asserts the opposite of both. There is **no arming**: the NAND outputs sit on
+  the connector unconditionally, so nothing gates a read. And **СБРОС is a LEVEL**,
+  not an edge — pin 9 wires straight to the ТМ2 `R` inputs with `S` grounded, so
+  while it is asserted the latches are *held* cleared and movement is lost rather
+  than queued. (GID clears on a wall-clock timer that is 10 ms at one call site
+  and 40 ms at another, which is what first suggested it was not real.)
+- **Polarity, and why the default is safe.** The 0177714 output port is
+  physically inverted (the same `~port_data` the Covox and TurboSound apply) and
+  СБРОС is active high at the ТМ2, so the latches are held cleared while the
+  program's bit 3 is **0**. `port_data` powers up at 0 and MONITOR's lone
+  `CLR @#177714` writes 0 — so a machine that never drives the mouse holds it in
+  reset and reads no movement.
+- **`STEP` models the encoder's resolution, and it is the one real constant.** The
+  sticky bits are binary, so pointer speed is set by the software's poll rate, not
+  by how fast the mouse moves — except through how often a poll sees any movement,
+  which is the encoder resolution. A Марсианка is coarse (~100 dpi) and a modern
+  optical mouse reports 8–16× more counts, so the deltas are divided down.
+  `STEP_SHIFT = 3` is a starting point wanting a board calibration.
+  **Only the sub-step remainder carries** — an early version kept a multi-step
+  backlog and a single flick then re-latched for eight polls, surfacing as a
+  phantom DOWN on X-only motion. See the oracle README.
+- **Gated on `typ == 2`** (a USB mouse is enumerated), decoded *before* the
+  synchroniser because `typ` is two bits and 1→2 flips both. With a pad, a
+  keyboard or an empty port it contributes 0, so the DE-9 pads behave exactly as
+  before; a DE-9 pad on port B and a USB mouse work at once.
+- **Covox interlock**, at the top level: a poll loop pulses СБРОС, which is
+  exactly the "port is being modulated" condition the Covox arms on, so
+  `mouse_active` joins `psg_act` (named for TurboSound, but its role is "another
+  0177714 owner is active"). GID's docs record the same conflict from the other
+  side — *«Autodetect AY/COVOX … не работает с Менестрелем и мышью»*.
+- **Which write bit is СБРОС is not proven.** The sheets give pin 9 but not the
+  cable's mapping onto the port's output bits; bit 3 is GID's and the only
+  evidence. It is the `RST_BIT` parameter.
+
 ## Cartridge slot
 
 - Cartridge-slot Q-bus is a **forward seam**: `src/bus/qbus_slot.sv`, default

@@ -222,6 +222,29 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   there is nothing to assert), the single-flop pad sample, and the `ukpstb`
   phase *within* a byte — that last one is genuinely unobservable, the same
   shape of finding as `N_VREG`, so `U12` targets the byte alignment instead.
+- `sim/mouse/run.sh` — the **Марсианка mouse** oracle, **five legs,
+  mutation-tested x13**; `sim/mouse/README.md` carries the pinned contract. The
+  one oracle in the tree whose reference is a **schematic** rather than an
+  emulator: BkEmu has no mouse and GID's implementation is disavowed by its own
+  documentation, so the УВК-01 sheets decide. It asserts the OPPOSITE of GID on
+  two points — nothing arms a read (the NAND outputs are unconditional), and
+  СБРОС is a **level** that holds the latches cleared rather than an edge.
+  Legs: `sticky`, `reset`, `step`, `buttons`, `gate`.
+  **It has already earned its keep.** The first version of the step divider
+  carried a multi-step accumulator backlog; because a binary sticky latch cannot
+  tell five encoder transitions from one, that made a single flick keep
+  re-latching for eight polls and it surfaced as a **phantom DOWN on an X-only
+  movement**. The `step` leg now pins both halves — the sub-step remainder IS
+  kept, and a large delta leaves NO backlog. The same pass found the `~rst_lvl`
+  guard on the latch sets to be dead code (the trailing level clear is a later
+  assignment and always wins, exactly as the ТМ2's async R beats its clock).
+  **The bus side is deliberately elsewhere**: `mouse_word` is OR-ed into
+  `joy_word` at the TOP level, so `qbus_mem` is untouched by the feature and its
+  goldens stay byte-identical; the read path stays pinned by `spk_capture_tb`
+  section 10 and `sim/smk` section 2. Also not pinned here, and said so in the
+  README: which write bit is СБРОС (the sheets give connector pin 9, not the
+  cable's mapping onto port output bits — `RST_BIT`), and the *feel* of `STEP`,
+  which is a hardware calibration rather than a contract.
 - `sim/run_clkgen.sh` — the Phase-7 `cpu_clkgen` unit oracle: BK-0010 (/32)
   mode **bit-identical** to a replica of the pre-Phase-7 `divc[4]` tap
   (enables included), the /24 BK-0011M rate exact, and a retarget sweep (no

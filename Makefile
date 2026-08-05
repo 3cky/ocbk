@@ -37,6 +37,7 @@ sim:
 	./sim/covox/run.sh
 	./sim/joystick/run.sh
 	./sim/usb/run.sh
+	./sim/mouse/run.sh
 	./sim/run_sdram_arbiter.sh
 	./sim/run_sdram_cosim.sh
 	./sim/run_video.sh
