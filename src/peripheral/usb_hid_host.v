@@ -7,7 +7,52 @@
 // D+ and GND, D- and GND. Then provide a 12Mhz clock through usbclk.
 //
 // See https://github.com/nand2mario/usb_hid_host
-// 
+//
+// ============================================================================
+//  VENDORED into ocbk. Upstream: https://github.com/nand2mario/usb_hid_host
+//  (nand2mario, 8/2023, after hi631 and the UKP in FPGA pc8001). Re-sync from
+//  upstream is fine, but re-apply the marked local hooks and re-run
+//  sim/usb/run.sh afterwards.
+//
+//  HOW IT IS CLOCKED HERE. usbclk is cpu_clkgen's usb_clk: a 50% duty 12.08 MHz
+//  fabric clock, 96.6477/8, i.e. the spec's 12 MHz +0.674% - the design's usual
+//  error and far inside low-speed's +/-1.5% tolerance. It is a CLOCK and not
+//  the spare dot_ena enable strobe at the same rate because this core's Fmax on
+//  the EP1C12Q240C8 measures 79.4 MHz: as a clock-enabled block in sys_clk it
+//  would have put a -2.25 ns path into the 96.65 MHz domain. In its own domain
+//  it closes with ~63 ns of slack instead. See doc/dev/peripherals.md.
+//
+//  usbrst_n is vid_rst_n - POWER-ON ONLY. A warm reset must not drop the USB
+//  link and force the device to re-enumerate; hot-plug is handled by ukp's own
+//  watchdog (conct), not by a reset.
+//
+//  LOCAL HOOKS - all mechanical, no logic change, each marked at its site:
+//    H1  usb_hid_host_rom's microcode path is a parameter (see that file)
+//    H2  dbg_regs is upstream's own commented-out export, made real
+//    H3  dev_connected exports ukp's connect flag
+//
+//  TWO UPSTREAM PROPERTIES DELIBERATELY LEFT ALONE:
+//
+//   1. ukp samples the pads with a SINGLE flop (`dpi <= usb_dp; dmi <= usb_dm`)
+//      - no metastability hardening on an asynchronous input. A second stage is
+//      NOT a safe blind fix: it would shift the sample point relative to the
+//      `timing` counter that positions the mid-bit strobe, so it has to be
+//      added together with a re-tuned `sample` constant and re-measured.
+//      Upstream is field-proven on several boards and the port enumerates
+//      keyboards and mice here, so this is documented, not "fixed".
+//
+//   2. `ug <= 9;` on a 1-bit reg (in ukp, the op=4 branch) is an upstream typo
+//      that means `ug <= 1`. Harmless. Left verbatim so a re-sync diff stays
+//      clean - do not "correct" it into something that changes behaviour.
+//
+//  DEVICE SUPPORT IS LOW-SPEED ONLY, and that is a real limitation rather than
+//  a detail: a low-speed device announces itself with a 1.5k pull-up on D-, a
+//  full-speed one pulls up D+ instead, and this core only ever watches D-. A
+//  full-speed device is therefore not misclassified but INVISIBLE - `connected`
+//  never asserts. Measured here: a Sony pad (054c:0cda) is full-speed and does
+//  not appear at all, while USB keyboards and mice enumerate normally. There is
+//  no hub support either (also needs full speed).
+// ============================================================================
 
 module usb_hid_host (
     input  usbclk,		            // 12MHz clock
@@ -246,7 +291,8 @@ module ukp(
             pc <= 0; connected <= 0; cond <= 0; inst_ready <= 0; state <= S_OPCODE; timing <= 0; 
             mbit <= 0; bitadr <= 0; nak <= 1; ug <= 0;
         end else begin
-            dpi <= usb_dp; dmi <= usb_dm;
+            dpi <= usb_dp; dmi <= usb_dm;   // single-flop pad sample - see the
+                                            // header note 1 before touching
             save <= 0;		// ensure pulse
             if (inst_ready) begin
                 // Instruction decoding
@@ -255,7 +301,9 @@ module ukp(
                         insth <= inst;
                         if(inst==1) state <= S_LDI0;						// op=ldi
                         if(inst==3) begin sadr <= 3; state <= S_S0; end		// op=out4
-                        if(inst==4) begin ug <= 9; up <= 0; um <= 0; end
+                        if(inst==4) begin ug <= 9; up <= 0; um <= 0; end // 9 on a
+                                            // 1-bit reg = 1: upstream typo, left
+                                            // verbatim (header note 2)
                         if(inst==5) begin ug <= 0; end
                         if(inst==6) begin sadr <= 7; state <= S_S0; end		// op=outb
                         if (inst[3:2]==2'b10) begin							// op=10xx(BZ,BC,BNAK,DJNZ)

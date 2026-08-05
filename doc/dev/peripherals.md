@@ -126,6 +126,66 @@ level translator: no bus, no state the CPU can see, no reset. Oracle:
   there is nothing to disable. `pDip[6]` is the recorded escape hatch if
   hardware bring-up ever finds a conflict (see [open-items.md](open-items.md)).
 
+## USB HID host
+
+`src/peripheral/usb_hid_host.v` + `usb_hid_host_rom.v` (vendored from
+[nand2mario/usb_hid_host](https://github.com/nand2mario/usb_hid_host)), a
+CPU-less **low-speed** USB host: a 16-instruction microcode engine (`ukp`) plus a
+536×4 microcode ROM in one M4K, classifying the device from
+`bInterfaceClass/SubClass/Protocol` and exposing keyboard, mouse and gamepad
+report fields. Oracle: `sim/usb/README.md`.
+
+**CONFIRMED ON HARDWARE 2026-08-05** — a USB keyboard enumerates as `typ`=1 and
+a mouse as `typ`=2 on the OneChipBook's side USB-A port.
+
+- **The port was already wired as a real host**, it just never had firmware:
+  D− on **PIN_238** (esemsx3's `pUsbN2`), D+ on **PIN_239** (`pUsbP2`), **10 kΩ
+  pull-downs**, **33 Ω series resistors**, VBUS on +5 V. The other pair
+  (PIN_236/237) has no connector on this board, so there is **one port** and
+  therefore one device at a time — the core has no hub support.
+  10 kΩ is outside the spec's 14.25–24.8 kΩ but harmless: against a device's
+  1.5 kΩ pull-up, D− idles at ≈2.87 V (2.61 V worst case), far above LVTTL V<sub>IH</sub>.
+- **These two pins must NOT get the `.qsf`'s usual weak pull-up** — the one place
+  the convention is wrong, and the `.qsf` says so inline. The internal ~25 kΩ
+  against the board's 10 kΩ idles the pin at ≈0.94 V, above LVTTL's 0.8 V
+  V<sub>IL</sub> max, so an empty port would read indeterminate instead of the
+  SE0 the core's connect detect and watchdog need.
+- **Its own 12.08 MHz clock (`usb_clk`), not the same-rate `dot_ena` enable.**
+  Measured standalone on this part, the core's **Fmax is 79.4 MHz** — as a
+  clock-enabled block in `sys_clk` it would inject a −2.25 ns path into the
+  96.65 MHz domain. In its own domain it closes with ~63 ns of slack, i.e. the
+  USB core contributes nothing to the fast-domain critical path; its cost is
+  placement pressure only (+261 LE, 71 % → 73 %, sys_clk +0.254 → +0.161).
+  `usb_clk_r` is a toggle register in `cpu_clkgen` off the existing `divc`, so
+  the SDC needs one `create_generated_clock` and **no exception** — one counter,
+  one reset, edges coincident with `cpu_clk` every 8 (/16, /32) or 24 (/24)
+  sys_clk. It takes a global line (it landed on GCLK3, displacing `dclo_n`'s
+  promotion), and the design is now at 8/8 globals.
+- **Reset is `vid_rst_n`, power-on only** — the audio/video precedent. A warm
+  reset must not drop the USB link and force re-enumeration; hot-plug is the
+  core's own watchdog.
+- **LOW-SPEED ONLY, and that is a device-availability limitation, not a detail.**
+  A low-speed device announces itself with a 1.5 kΩ pull-up on **D−**, a
+  full-speed one pulls up **D+**, and this core only ever watches D−: a
+  full-speed device is not misclassified but **invisible** (`connected` never
+  asserts). Measured — a Sony pad (**054c:0cda**) does not appear at all, while
+  keyboards and mice enumerate normally. Since most modern gamepads are
+  full-speed, **a USB gamepad may be no easier to obtain than an MSX DE-9 pad**,
+  which was the motivation; the gamepad consumer is therefore gated on having a
+  pad that enumerates. Full-speed support is not a reparameterisation: 48 MHz
+  sampling would fit under the 79 MHz Fmax, but every timing constant and the
+  microcode assume 1.5 Mb/s.
+- **The microcode is fully hard-coded** — every token and DATA0 packet is a
+  literal byte string with a pre-computed CRC5/CRC16 (`src/firmware/ukp.s`
+  upstream, with a Python assembler). The host never computes or checks a CRC.
+  Its enumeration is: wait for the D− pull-up → 200 ms → bus reset → GET_DESCRIPTOR
+  (configuration, wLength 24) drained by three IN(0,0)+ACK pairs which `save`
+  the class/subclass/protocol bytes → bus reset → SET_ADDRESS(1) →
+  SET_CONFIGURATION(1) → then IN(1,1) interrupt polls every ~10 ms.
+- **Vendored hooks and two deliberate non-fixes** (the single-flop pad sample,
+  the `ug <= 9` typo) are enumerated in the file header — read it before a
+  re-sync.
+
 ## Cartridge slot
 
 - Cartridge-slot Q-bus is a **forward seam**: `src/bus/qbus_slot.sv`, default

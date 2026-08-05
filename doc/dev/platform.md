@@ -94,6 +94,7 @@ the 177662 register specifically; `doc/bk0011m.sch` is the real board.
 | clk0 | ÷2 | **96.65 MHz** | `sys_clk`: SDRAM controller + the chip clock (`extclk0` → `pMemClk`, phase-matched) |
 | clk1 | ÷3 | **64.43 MHz** | `pix_clk`: 1024×768@60 readout |
 | (enable) | 96.65 ÷8 | **12.08 MHz** | BK dot clock; 037 CLKIN = ÷2 = 6.04 MHz |
+| clock | 96.65 ÷8 | **12.08 MHz** | `usb_clk`: the USB HID host (a real clock, not the enable — see peripherals) |
 
 CPU clock = a fabric divider of `sys_clk` in `src/sys/cpu_clkgen.sv`: **/32 =
 3.02 MHz (BK-0010), /24 = 4.03 MHz (BK-0011M), /16 = 6.04 MHz (turbo)**. All

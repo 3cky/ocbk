@@ -72,7 +72,8 @@ Each of these has cost a build, a boot or a day. The named file explains why.
 - **Never leave a lone Z-idle tri-state driving internal logic.** Cyclone I has
   no internal tri-state: Quartus ties the idle Z to 0, i.e. stuck-asserted, and
   every sim still passes (the `virq_n` trap). A lone open-collector source must
-  be push-pull. The only intentional pad tri-states are `pDac_SR` and the SD
+  be push-pull. The only intentional pad tri-states are `pDac_SR`, the USB
+  `pUsbP`/`pUsbN` pair (whose nets must have no other fanout) and the SD
   pins. → gotchas
 - **The references, in order:** the vendored netlists (`va_037.v`, `vp_014.v`,
   the `ym2149` reference) win every dispute with our models; **BkEmu** is the
