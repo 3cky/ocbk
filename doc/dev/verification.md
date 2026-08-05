@@ -190,6 +190,38 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   wins) against a non-zero `joy_word` on a full SoC with real SDRAM, and both
   mutations — merge dropped, gate dropped — are recorded in its runner header
   as verified by hand.
+- `sim/usb/run.sh` — the **USB HID host** oracle, **six legs,
+  mutation-tested x14**; `sim/usb/README.md` carries the pinned contract. The
+  vendored low-speed host runs at its real 12.081 MHz rate against
+  `usb_ls_device.v`, a behavioural low-speed HID device (line states, NRZI, bit
+  stuffing, CRC5/CRC16, the SETUP/IN/DATA/handshake script). Legs: `kbd`,
+  `mouse`, `pad`, `nak`, `unplug`, and `slow`.
+  **Its sharpest property is one the design cannot check anywhere else.** The
+  host computes no CRC and verifies none — every token and DATA0 it sends is a
+  literal byte string with a pre-computed CRC in the 536×4 microcode ROM, and it
+  ignores the device's CRC16 entirely. The model therefore checks *the host's*
+  CRCs, which makes this the only thing in the tree that can notice a corrupted
+  or mis-copied `mem/usb_hid_host_rom.hex`: all three token CRC5s and all four
+  DATA0 CRC16s are verified (both need a bit-reversal against the register
+  value, because USB sends a CRC MSB-first — established by computing all seven
+  literals independently, so the reversal is the wire convention and not a fudge
+  factor).
+  **Two contracts for the consumers came out of building it.** `mouse_dx/dy` are
+  valid only **at** the report pulse — the wrapper zeroes them the cycle after —
+  so the Марсианка adapter must accumulate at the strobe, while `mouse_btn` is a
+  level and does not clear; both directions are pinned, and mutation `U7`
+  guards it. And `MS_TICKS` (hook H6, the "1 ms" tick lifted to a parameter so
+  the legs do not each cost 250 ms of simulated time) **must be odd**: the tick
+  is one clock wide but `ukp` evaluates an instruction every *second* clock, so
+  an even value phase-locks and a `wait` sits through hundreds of ticks —
+  upstream's 12001 is odd for exactly this reason. The `slow` leg runs at that
+  real value so the scaling in the other five is never taken on trust.
+  **What it deliberately does not pin** is in its README: the pads (hardware,
+  checked by increment 0's LED diagnostic on the board), full-speed rejection (a
+  full-speed device pulls up D+ and is invisible rather than mishandled, so
+  there is nothing to assert), the single-flop pad sample, and the `ukpstb`
+  phase *within* a byte — that last one is genuinely unobservable, the same
+  shape of finding as `N_VREG`, so `U12` targets the byte alignment instead.
 - `sim/run_clkgen.sh` — the Phase-7 `cpu_clkgen` unit oracle: BK-0010 (/32)
   mode **bit-identical** to a replica of the pre-Phase-7 `divc[4]` tap
   (enables included), the /24 BK-0011M rate exact, and a retarget sweep (no

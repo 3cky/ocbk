@@ -30,6 +30,10 @@
 //    H1  usb_hid_host_rom's microcode path is a parameter (see that file)
 //    H2  dbg_regs is upstream's own commented-out export, made real
 //    H3  dev_connected exports ukp's connect flag
+//    H4  dpi/dmi/ukprdyd/nakd moved above their uses (Icarus rejects
+//        declaration-after-use; Quartus accepts it)
+//    H5  power-up initialisers for the wrapper's un-reset output registers
+//    H6  the hard-coded 12001-cycle "1 ms" tick lifted to a parameter
 //
 //  TWO UPSTREAM PROPERTIES DELIBERATELY LEFT ALONE:
 //
@@ -54,7 +58,13 @@
 //  no hub support either (also needs full speed).
 // ============================================================================
 
-module usb_hid_host (
+// LOCAL HOOK H6: MS_TICKS is upstream's hard-coded 12001-cycle "1 ms" tick,
+// lifted to a parameter. The default is the real value and the build uses it; a
+// testbench scales it down so the microcode's 200 ms attach wait plus its
+// 10 ms + 40 ms bus reset do not cost a quarter-second of simulated time per
+// leg (~3M clocks). sim/usb runs its functional legs scaled and keeps ONE slow
+// leg at the real value to pin the tick itself.
+module usb_hid_host #(parameter MS_TICKS = 12001) (
     input  usbclk,		            // 12MHz clock
     input  usbrst_n,	            // reset
     inout  usb_dm, usb_dp,          // USB D- and D+
@@ -99,7 +109,7 @@ wire [3:0] save_r;      // which register to save to
 wire [3:0] save_b;      // dat[b]
 wire connected;
 
-ukp ukp(
+ukp #(.MS_TICKS(MS_TICKS)) ukp(
     .usbrst_n(usbrst_n), .usbclk(usbclk),
     .usb_dp(usb_dp), .usb_dm(usb_dm), .usb_oe(),
     .ukprdy(data_rdy), .ukpstb(data_strobe), .ukpdat(ukpdat), .save(save), .save_r(save_r), .save_b(save_b),
@@ -121,6 +131,21 @@ assign dev_connected = connected;
 // assign dbg_dev = dev;
 
 reg valid = 0;		    // whether current gamepad report is valid
+
+// LOCAL HOOK H5: power-up values for the wrapper's output registers. The two
+// wrapper always blocks have NO reset - upstream relies on the FPGA powering
+// registers up at 0, which Cyclone I does, so this is not a logic change and
+// adds no reset cone. Without it every one of these simulates as X until the
+// first enumeration, and `typ` in particular would poison any consumer that
+// muxes on it - X that a board would never show. Same hook class as
+// ym2149.sv's group C.
+initial begin
+    typ = 2'd0; report = 1'b0;
+    key_modifiers = 8'h00; key1 = 8'h00; key2 = 8'h00; key3 = 8'h00; key4 = 8'h00;
+    mouse_btn = 8'h00; mouse_dx = 8'sh00; mouse_dy = 8'sh00;
+    game_l = 0; game_r = 0; game_u = 0; game_d = 0;
+    game_a = 0; game_b = 0; game_x = 0; game_y = 0; game_sel = 0; game_sta = 0;
+end
 
 always @(posedge usbclk) begin : process_in_data
     data_rdy_r <= data_rdy; data_strobe_r <= data_strobe;
@@ -223,7 +248,7 @@ end
 
 endmodule
 
-module ukp(
+module ukp #(parameter MS_TICKS = 12001) (
     input usbrst_n,
     input usbclk,				// 12MHz clock
     inout usb_dp, usb_dm,		// D+, D-
@@ -255,6 +280,9 @@ module ukp(
     // reg connected = 0;
     reg inst_ready = 0, up = 0, um = 0, cond = 0, nak = 0, dmis = 0;
     reg ug, ugw, nrzon;					// ug=1: output enabled, 0: hi-Z
+    reg dpi, dmi;						// hook H4: moved up from the module foot
+    reg ukprdyd;						// (Icarus rejects declaration-after-use)
+    reg nakd;
     reg bank = 0, record1 = 0;
     reg [1:0] mbit = 0;					// 1: out4/outb is transmitting
     reg [3:0] state = 0, stated;
@@ -268,7 +296,7 @@ module ukp(
     reg [6:0] bitadr = 0;				// 0~127
     reg [7:0] data = 0;					// received data
     reg [2:0] nrztxct, nrzrxct;			// NRZI trans/recv count for bit stuffing
-    wire interval_cy = interval == 12001;
+    wire interval_cy = interval == MS_TICKS;   // hook H6
     wire next = ~(state == S_OPCODE & (
         inst ==2 & dmi |								// start
         (inst==4 || inst==5) & timing != 0 |			// out0/hiz
@@ -423,8 +451,9 @@ module ukp(
     assign sample = inst_ready & state == S_OPCODE & inst == 4'b1101 & timing == 4; // IN
     assign record = connected & ~nak;
     assign ukpstb = ~nrzon & ukprdy & (bitadr[2:0] == 3'b100) & (timing == 2);
-    reg    dpi, dmi; 
-    reg    ukprdyd;
-    reg    nakd;
+    // LOCAL HOOK H4: dpi/dmi/ukprdyd/nakd were DECLARED HERE, after their uses
+    // above. Quartus accepts that; Icarus does not ("declaration after use"), so
+    // the four moved up to the other reg declarations at the head of ukp. Purely
+    // a move - no logic change, and the same hook class ym2149.sv needed.
 endmodule
 
