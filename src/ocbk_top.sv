@@ -830,7 +830,7 @@ module ocbk_top (
         .joy_word (joy_pads)
     );
 
-    // The 0177714 read word is the pads OR the Марсианка mouse (u_mouse, below
+    // The 0177714 read word is the pads OR the Marsianka mouse (u_mouse, below
     // the USB host - it needs that block's signals). With no USB mouse
     // enumerated mouse_word is 0, so this is transparent: the pads read exactly
     // as they did before the mouse existed, and qbus_mem is untouched. A pad on
@@ -1211,17 +1211,10 @@ module ocbk_top (
     // re-enumerate. Hot-plug is handled by the core's own watchdog, not by a
     // reset.
     //
-    // Nothing consumes these outputs yet, deliberately: this increment lands
-    // the host and its oracle, and the branch does not merge until a consumer
-    // exists. They all prune, so the fit cost here is the core alone. The
-    // BK-visible consumers come next and will each need the usual 2-FF sync
-    // into cpu_clk:
-    //   - a mouse presented as Марсианка on 0177714 (FIRST - the capability
-    //     the machine cannot otherwise have, and mice enumerate here);
-    //   - the keyboard, via a HID->PS/2 shim into the existing kbd_ps2bk;
-    //   - a gamepad OR'd into the 0177714 joystick word - GATED on finding a
-    //     LOW-SPEED pad. Full-speed pads (all Sony ones, and most modern
-    //     ones) are invisible to this core, see its header.
+    // BK-visible consumers:
+    //   - a mouse presented as Marsianka on 0177714 (see bk_mouse.sv);
+    //   - the keyboard, via a HID->PS/2 shim into the existing kbd_ps2bk (TODO);
+    //   - a gamepad OR'd into the 0177714 joystick word (TODO).
     logic [1:0]  usb_typ;
     logic        usb_report, usb_conerr, usb_connected;
     logic [7:0]  usb_key_mod, usb_key1, usb_key2, usb_key3, usb_key4;
@@ -1263,13 +1256,8 @@ module ocbk_top (
         .dev_connected (usb_connected)
     );
 
-    // ---- Марсианка mouse: the USB mouse as the BK's 0177714 read word ------
-    // Schematic-derived (УВК-01), not GID-derived: the read is always live, so
-    // there is no arming, and СБРОС is a LEVEL that holds the four direction
-    // latches cleared - the program's 177714 bit 3, inverted by the port. It
-    // powers up at 0, which holds the mouse in reset, so nothing here disturbs a
-    // machine that never drives it. See bk_mouse.sv for the full derivation.
-    bk_mouse u_mouse (
+    // ---- Marsianka mouse: the USB mouse as the BK's 0177714 read word ------
+        bk_mouse u_mouse (
         .usb_clk    (usb_clk),
         .hid_report (usb_report),
         .hid_btn    (usb_mouse_btn),
@@ -1282,13 +1270,7 @@ module ocbk_top (
         .mouse_active ()
     );
 
-    // A mouse owns 0177714's WRITE side too: its poll loop pulses СБРОС, and
-    // that is exactly the "the port is being modulated" condition the Covox arms
-    // on, so an unmuted Covox would buzz at the poll rate. GID's own docs record
-    // the same conflict from the other side ("Autodetect AY/COVOX ... не
-    // работает с Менестрелем и мышью"). psg_act is named for TurboSound but its
-    // role is "another 0177714 owner is active", so the mute request joins it
-    // there rather than growing bk_covox a second port and churning its oracle.
+    // Mute Covox as it conflicts with the mouse when connected.
     logic [1:0] cx_mouse_sr = '0;
     always_ff @(posedge sys_clk) cx_mouse_sr <= {cx_mouse_sr[0], usb_typ == 2'd2};
     assign cx_mouse_mute = cx_mouse_sr[1];
