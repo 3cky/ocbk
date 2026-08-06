@@ -132,6 +132,14 @@ module sdram_ctrl #(
     // wait_zero == (wait_cnt == 0) holds on every clock. Keep them paired.
     logic           wait_zero;
     logic [3:0]     ref_cnt;     // init-refresh countdown
+    // ref_zero is wait_zero's argument applied to the OTHER counter, for the same
+    // reason and after the same symptom: `ref_cnt == 0` decides whether ST_REF_WAIT
+    // loads s_addr with MODE_REG, so the compare sat in the enable cone of the
+    // pMemAdr pad registers and paid the whole logic->ring route (4.953 ns of a
+    // 9.580 ns path; -0.011 ns, the Phase-7 no-boot cone again). Same construction,
+    // same invariant: every ref_cnt assignment has a mirrored ref_zero assignment,
+    // so ref_zero == (ref_cnt == 0) on every clock. Keep them paired.
+    logic           ref_zero;
     logic           in_init;     // init vs runtime refresh
     logic [RFW-1:0] refi_tmr;    // refresh-interval countdown
     logic                          refresh_due;
@@ -162,6 +170,7 @@ module sdram_ctrl #(
             wait_cnt    <= '0;
             wait_zero   <= 1'b1;
             ref_cnt     <= 4'(NUM_INIT_REF);
+            ref_zero    <= (NUM_INIT_REF == 0);
             in_init     <= 1'b1;
             refi_tmr    <= RFW'(REFI_CYC);
             refresh_due <= 1'b0;
@@ -206,6 +215,7 @@ module sdram_ctrl #(
                     wait_cnt <= WW'(TRP_CYC);
                     wait_zero <= (TRP_CYC == 0);
                     ref_cnt  <= 4'(NUM_INIT_REF);
+                    ref_zero <= (NUM_INIT_REF == 0);
                     in_init  <= 1'b1;
                     state    <= ST_REF_WAIT;         // tRP, then first refresh
                 end
@@ -218,7 +228,7 @@ module sdram_ctrl #(
                 ST_REF_WAIT: begin
                     if (wait_zero) begin
                         if (in_init) begin
-                            if (ref_cnt == 0) begin
+                            if (ref_zero) begin
                                 cmd      <= CMD_LMR;
                                 s_ba     <= '0;
                                 s_addr   <= MODE_REG;
@@ -226,8 +236,9 @@ module sdram_ctrl #(
                                 wait_zero <= (TMRD_CYC == 0);
                                 state    <= ST_LMR_WAIT;
                             end else begin
-                                ref_cnt <= ref_cnt - 1'b1;
-                                state   <= ST_REF;
+                                ref_cnt  <= ref_cnt - 1'b1;
+                                ref_zero <= (ref_cnt == 1);
+                                state    <= ST_REF;
                             end
                         end else begin
                             refresh_due <= 1'b0;

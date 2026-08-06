@@ -44,6 +44,7 @@ phase-by-phase narrative if the history is ever wanted.)
 | **11** TurboSound | `src/audio/bk_turbosound.sv` + the vendored `ym2149.sv`: **2x YM2149 on 0177714**, the first consumer of the Phase-10 seam. BkEmu `Ay8910` protocol, ACB pan folded to two mixer slots, the speaker ducked ~11.8 dB to make room | sim ✅ (15 mutations, incl. a cycle-exact diff of the adapted core against the vendored reference); **+1,182 LE (68 %), sys_clk +0.528 ns after an STA chase**; ✅ HW 2026-07-31 (real AY/TurboSound demos play on the board) |
 | **12** Covox | `src/audio/bk_covox.sv`: an **8-bit DAC on 0177714**, the second consumer of the Phase-10 seam. BkEmu `Covox` map transcribed 1:1 (the scale is one `SLOT_GAIN` nibble), per-lane hold instead of BkEmu's zero-fill, **DIP 5 = mono/stereo** instead of its autodetect, and an automatic mute so the PSGs and the Covox — which share the address — never sound together. **The arming rule was fixed after a board listen**: `live` means the port is being *modulated* (a write that CHANGES the code, inside a running one-shot), because MONITOR's lone `CLR @#177714` unmuted the slot onto full positive scale several times per boot — **that fix is CONFIRMED ON HARDWARE 2026-08-01**, the rest of the Covox acceptance is not | sim ✅ (19 mutations, + D13–D15 on `sim/ts` and A3/A4/A5 on `sim/run_audio.sh`); **+301 LE (8,485, 70 %), sys_clk +0.471 ns** after an STA chase on the increment's own new path (−0.639 → +0.102) and the later arming fix (+0.102 → +0.471); ✅ HW 2026-08-01 (real Covox demos play on the board) |
 | **13** Joysticks | `src/peripheral/bk_joystick.sv`: the board's **two MSX DE-9 ports** as the BK's **0177714 read** — port A in the low byte, port B in the high byte. Closes the 177714 READ merge deferred since Phase 10, and cheaply: `sel_io` already replied there both ways, so it is one `!sel2_n`-gated leg of `io_word` and **every timing golden stayed byte-identical**. BkEmu `PeripheralPort`/`JoystickManager` bit order (the MSX direction nibble is U,D,L,R and the BK's is U,R,D,L — the whole error surface); START/SELECT tied 0, no debounce, no reset, no enable DIP, all argued from the references | sim ✅ (15 mutations + `Q6`–`Q9` on `sim/run_audio.sh`; the `!sel2_n` gate is pinned by `sim/smk` §2, which `spk_capture_tb` structurally cannot reach); **+33 LE (8,518, 71 %), 110/173 pins, sys_clk +0.254 ns** after an STA chase that landed on the **Phase-7 no-boot cone** (`sdram_ctrl|wait_cnt → s_addr`, −0.121) and was cured with the `wait_zero` flop; ✅ HW 2026-08-02 (a two-player game runs off both pads) |
+| **14** USB HID + Марсианка mouse | The vendored `usb_hid_host` (nand2mario) in **its own 12.08 MHz clock domain** — a real clock off `cpu_clkgen`, not the same-rate `dot_ena` enable, because the core's Fmax measures 79.4 MHz and as an enabled block in `sys_clk` it would inject −2.25 ns; reset is `vid_rst_n`, **power-on only**, so a warm reset cannot drop the link. **LOW SPEED ONLY** and that is a device-availability limit, not a detail: a full-speed device pulls up D+ and is *invisible*, not misclassified. Its first consumer is `src/peripheral/bk_mouse.sv`, a USB mouse as the BK's **УВК-01 «Марсианка» on 0177714** — **schematic-derived, and it overrules GID on both points** (nothing arms a read; СБРОС is a *level*, so movement during it is lost, not queued). `mouse_word` is OR-ed into `joy_word` at the **top level**, so `qbus_mem` is untouched and every golden stayed byte-identical — the Phase-13 trick again; the Covox is muted while a mouse is live, since a poll loop *is* the "port is being modulated" condition it arms on. **Microcode hook F1 (`SET_PROTOCOL`) was added after the first board run**: without it a device stays in *report* protocol and sends whatever its descriptor declares, while the wrapper decodes boot-protocol offsets — three mice, three different wrong behaviours. The microcode source and its assembler are now in-tree | sim ✅ `sim/usb` 8 legs / 14 RTL mutations **+ `F1`, the first mutation that reaches the ROM image** (it reassembles a mutated microcode source — no RTL rewrite could express this bug), `sim/mouse` 5 legs / 13 mutations; **+261 LE for the host (71 % → 73 %), 9,058 LE (75 %) with the mouse**, 4/52 M4K, 112/173 pins, sys_clk +0.254 → **+0.146 ns** TNS 0 — **no STA chase needed**, the only increment since Phase 10 that cost none; ✅ HW 2026-08-05 (keyboards enumerate `typ`=1, mice `typ`=2), ✅ HW 2026-08-06 (four mice drive real Марсианка software, `STEP_SHIFT` and `RST_BIT` at their defaults — which closes both constants the mouse shipped as unproven) |
 
 ## Platform & system map
 
@@ -94,6 +95,7 @@ the 177662 register specifically; `doc/bk0011m.sch` is the real board.
 | clk0 | ÷2 | **96.65 MHz** | `sys_clk`: SDRAM controller + the chip clock (`extclk0` → `pMemClk`, phase-matched) |
 | clk1 | ÷3 | **64.43 MHz** | `pix_clk`: 1024×768@60 readout |
 | (enable) | 96.65 ÷8 | **12.08 MHz** | BK dot clock; 037 CLKIN = ÷2 = 6.04 MHz |
+| clock | 96.65 ÷8 | **12.08 MHz** | `usb_clk`: the USB HID host (a real clock, not the enable — see peripherals) |
 
 CPU clock = a fabric divider of `sys_clk` in `src/sys/cpu_clkgen.sv`: **/32 =
 3.02 MHz (BK-0010), /24 = 4.03 MHz (BK-0011M), /16 = 6.04 MHz (turbo)**. All
@@ -192,6 +194,9 @@ ps2_rx.sv           PS/2 frame receiver           kbd_ps2bk.sv  scan -> BK codes
 bk_kbd014.sv        1801ВП1-014 equivalent (177660-663, VIRQ/IAK)
 bk_evnt.sv          the real 0011M D28+D3:B EVNT/IRQ2 missing-pulse detector
 bk_joystick.sv      the two MSX pads -> the 0177714 joystick read word
+usb_hid_host.v      vendored CPU-less LOW-SPEED USB HID host (ukp + wrapper)
+usb_hid_host_rom.v  its 668x4 microcode ROM (one M4K; depth tracks the image)
+bk_mouse.sv         a USB mouse as the УВК-01 «Марсианка» on 0177714
 smk_ide.sv          SMK512 IDE task file + ATA engine + tier-1 prefetch
 sd_backend.sv       SPI-mode SD host serving the smk_ide sector port
 --- src/audio/ (audio_* = generic infra, bk_* = BK-specific; SOUND
@@ -211,6 +216,8 @@ turbo_ctl.sv        bus-idle-qualified turbo level (the reply-owner swap guard)
 mem/gen_mem.py      ROM test-program assembler + the test picture
 mem/gen_boot_blob.py boot-blob builder (header/checksum + the COF hex pages)
 mem/gen_ide_image.py synthetic AltPro HDD image (also the dd-able ide_image.bin)
+mem/gen_usb_rom.py  UKP microcode assembler -> mem/usb_hid_host_rom.hex
+mem/usb_hid_host_rom.s  its source: upstream ukp.s + hook F1 (SET_PROTOCOL)
 mem/gen_*_test.py   the per-oracle SoC test programs
 mem/roms/           BK-0010.01 + BK-0011M ROM sets + the SMK BIOS (from BkEmu)
 test/               the sndtest* tone programs (.mac source / .bin image /

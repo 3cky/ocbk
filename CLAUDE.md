@@ -72,7 +72,8 @@ Each of these has cost a build, a boot or a day. The named file explains why.
 - **Never leave a lone Z-idle tri-state driving internal logic.** Cyclone I has
   no internal tri-state: Quartus ties the idle Z to 0, i.e. stuck-asserted, and
   every sim still passes (the `virq_n` trap). A lone open-collector source must
-  be push-pull. The only intentional pad tri-states are `pDac_SR` and the SD
+  be push-pull. The only intentional pad tri-states are `pDac_SR`, the USB
+  `pUsbP`/`pUsbN` pair (whose nets must have no other fanout) and the SD
   pins. → gotchas
 - **The references, in order:** the vendored netlists (`va_037.v`, `vp_014.v`,
   the `ym2149` reference) win every dispute with our models; **BkEmu** is the
@@ -111,12 +112,23 @@ The constraints that shape every decision; details and the reasoning in
   is the root reason the arbiter / done-gate machinery exists.
 - **The panel is standard-VESA-only**, so the output is 1024×768@60 and the
   48.83→60 Hz gap is bridged in the framebuffer.
-- **Current fit: 8,518 / 12,060 LE (71 %)**, 3/52 M4K, 110/173 pins, one PLL,
-  sys_clk setup +0.254 ns, TNS 0. Still thin, and it moves with placement: the
+- **Current fit: 9,065 / 12,060 LE (75 %)**, 4/52 M4K, 112/173 pins, one PLL,
+  sys_clk setup +0.118 ns, TNS 0. Still thin, and it moves with placement: the
   Phase-12 Covox left it at +0.102 on the `ram_init|filling` /
   `mem_mapper|mon_en` cone and the arming fix bought it back for +33 LE; the
   joysticks then drove it to **−0.121** on `sdram_ctrl|wait_cnt → s_addr` — the
-  Phase-7 no-boot cone — and the `wait_zero` flop bought it back.
+  Phase-7 no-boot cone — and the `wait_zero` flop bought it back. Phase 14's USB
+  host cost +261 LE and took it from +0.254 to +0.161 without a chase. Then a
+  two-build chase off a single leaf parameter (2026-08-06): retuning
+  `bk_mouse`'s `STEP_SHIFT` cost +15 LE and hit **−0.015** on
+  `fb_video|f_req → sdram_arbiter|cmd_wdata` — the enable-cone rule a fifth
+  time, in a module neither end of the edit touched — and ungating the arbiter's
+  payload load from `any` bought it back; reverting the parameter then hit
+  **−0.011** on `sdram_ctrl|ref_cnt → s_addr`, the same rule a sixth time and
+  the no-boot cone again, cured by `ref_zero` (the `wait_zero` idiom on the
+  other counter). **Read that pair as one lesson: the same tree measured +0.405
+  and −0.011 depending only on an unrelated parameter.** One build's slack is a
+  sample, not a property — judge a fix by whether the cone left the report.
   → audio, gotchas
 
 ## Source tree

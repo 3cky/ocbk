@@ -190,6 +190,80 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   wins) against a non-zero `joy_word` on a full SoC with real SDRAM, and both
   mutations — merge dropped, gate dropped — are recorded in its runner header
   as verified by hand.
+- `sim/usb/run.sh` — the **USB HID host** oracle, **eight legs,
+  mutation-tested x14 plus one ROM-image mutation**; `sim/usb/README.md` carries
+  the pinned contract. The vendored low-speed host runs at its real 12.081 MHz
+  rate against `usb_ls_device.v`, a behavioural low-speed HID device (line
+  states, NRZI, bit stuffing, CRC5/CRC16, the SETUP/IN/DATA/handshake script).
+  Legs: `kbd`, `mouse`, `setproto`, `stallproto`, `pad`, `nak`, `unplug`, and
+  `slow`.
+  **`setproto` is the one that came from a board run, and it is the model for
+  how a field bug should land here.** Three mice misbehaved three different ways
+  because the host left them in *report* protocol while the wrapper decodes
+  boot-protocol offsets; the leg sends a Report-ID-prefixed report until
+  `SET_PROTOCOL` arrives, and on the pre-fix image it reproduces the exact
+  symptom (`mouse_btn` = the ID, `dx` = the button byte). `stallproto` guards the
+  fix's own hazard: `nak` cannot tell a STALL from a NAK, so the status stage is
+  unrolled rather than looped, and `n_reset` staying at 2 asserts that no
+  watchdog re-enumeration happened.
+  **Mutation `F1` is the only one in the tree that reaches a ROM image** — it
+  rewrites `mem/usb_hid_host_rom.s` and reassembles. Worth copying wherever a
+  generated image carries behaviour: no rewrite of any line of Verilog could
+  have expressed this defect, so the RTL mutations were all green while the
+  firmware was wrong.
+  **Its sharpest property is one the design cannot check anywhere else.** The
+  host computes no CRC and verifies none — every token and DATA0 it sends is a
+  literal byte string with a pre-computed CRC in the 668×4 microcode ROM, and it
+  ignores the device's CRC16 entirely. The model therefore checks *the host's*
+  CRCs, which makes this the only thing in the tree that can notice a corrupted
+  or mis-assembled `mem/usb_hid_host_rom.hex`. Every packet the host actually
+  emits is checked on the wire — three token CRC5s (addr0/ep0, addr1/ep0,
+  addr1/ep1) and four DATA0 CRC16s (GET_DESCRIPTOR config, SET_ADDRESS,
+  SET_CONFIGURATION, SET_PROTOCOL); the fifth DATA0 literal in the image,
+  GET_DESCRIPTOR(device), sits behind a commented-out call and was matched by
+  independent computation instead. Both CRCs need a bit-reversal against the
+  register value, because USB sends a CRC MSB-first — established by computing
+  every literal independently, so the reversal is the wire convention and not a
+  fudge factor.
+  **Two contracts for the consumers came out of building it.** `mouse_dx/dy` are
+  valid only **at** the report pulse — the wrapper zeroes them the cycle after —
+  so the Марсианка adapter must accumulate at the strobe, while `mouse_btn` is a
+  level and does not clear; both directions are pinned, and mutation `U7`
+  guards it. And `MS_TICKS` (hook H6, the "1 ms" tick lifted to a parameter so
+  the legs do not each cost 250 ms of simulated time) **must be odd**: the tick
+  is one clock wide but `ukp` evaluates an instruction every *second* clock, so
+  an even value phase-locks and a `wait` sits through hundreds of ticks —
+  upstream's 12001 is odd for exactly this reason. The `slow` leg runs at that
+  real value so the scaling in the other five is never taken on trust.
+  **What it deliberately does not pin** is in its README: the pads (hardware,
+  checked by increment 0's LED diagnostic on the board), full-speed rejection (a
+  full-speed device pulls up D+ and is invisible rather than mishandled, so
+  there is nothing to assert), the single-flop pad sample, and the `ukpstb`
+  phase *within* a byte — that last one is genuinely unobservable, the same
+  shape of finding as `N_VREG`, so `U12` targets the byte alignment instead.
+- `sim/mouse/run.sh` — the **Марсианка mouse** oracle, **five legs,
+  mutation-tested x13**; `sim/mouse/README.md` carries the pinned contract. The
+  one oracle in the tree whose reference is a **schematic** rather than an
+  emulator: BkEmu has no mouse and GID's implementation is disavowed by its own
+  documentation, so the УВК-01 sheets decide. It asserts the OPPOSITE of GID on
+  two points — nothing arms a read (the NAND outputs are unconditional), and
+  СБРОС is a **level** that holds the latches cleared rather than an edge.
+  Legs: `sticky`, `reset`, `step`, `buttons`, `gate`.
+  **It has already earned its keep.** The first version of the step divider
+  carried a multi-step accumulator backlog; because a binary sticky latch cannot
+  tell five encoder transitions from one, that made a single flick keep
+  re-latching for eight polls and it surfaced as a **phantom DOWN on an X-only
+  movement**. The `step` leg now pins both halves — the sub-step remainder IS
+  kept, and a large delta leaves NO backlog. The same pass found the `~rst_lvl`
+  guard on the latch sets to be dead code (the trailing level clear is a later
+  assignment and always wins, exactly as the ТМ2's async R beats its clock).
+  **The bus side is deliberately elsewhere**: `mouse_word` is OR-ed into
+  `joy_word` at the TOP level, so `qbus_mem` is untouched by the feature and its
+  goldens stay byte-identical; the read path stays pinned by `spk_capture_tb`
+  section 10 and `sim/smk` section 2. Also not pinned here, and said so in the
+  README: which write bit is СБРОС (the sheets give connector pin 9, not the
+  cable's mapping onto port output bits — `RST_BIT`), and the *feel* of `STEP`,
+  which is a hardware calibration rather than a contract.
 - `sim/run_clkgen.sh` — the Phase-7 `cpu_clkgen` unit oracle: BK-0010 (/32)
   mode **bit-identical** to a replica of the pre-Phase-7 `divc[4]` tap
   (enables included), the /24 BK-0011M rate exact, and a retarget sweep (no

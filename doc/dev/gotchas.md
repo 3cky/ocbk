@@ -120,6 +120,54 @@
   the machine simply did not start.
   **The general rule: an `== 0` on a counter is cheap; an `== 0` in the enable
   cone of a pad register is not.**
+- **The enable-cone rule bit a FIFTH time, and this one needed no pad at all**
+  (`sdram_arbiter`, fixed 2026-08-06). Retuning `bk_mouse`'s `STEP_SHIFT` 3 → 2
+  — a parameter in a leaf peripheral, +15 LE — took sys_clk setup
+  **+0.146 → −0.015** on `fb_video|f_req → sdram_arbiter|cmd_wdata[0]`, a cone
+  neither module is part of. The arbiter loaded its whole command payload
+  (`cmd_addr` + `cmd_wdata` + `cmd_be` + `cmd_we` + `cur`, 42 flops) under
+  `state == A_IDLE && any`, and `any = |(p_req & ~served)` includes port 3 =
+  `fb_video`'s `f_req`. So a request line from the far side of the die sat in
+  the clock-enable of 42 registers: 5 logic levels, **8.365 of the 10.382 ns
+  pure interconnect**, LEs strung across X22..X29 / Y20..Y23. Note this cone
+  reaches no pad — the earlier three cases all ended at an I/O-ring or exported
+  register, and that is not the load-bearing part of the rule. **Cure: drop the
+  `any` term from the payload load only.** The command registers are don't-care
+  unless `cmd_req` goes with them, and `cmd_req <= any` still carries it, so
+  enabling the payload on `state == A_IDLE` alone is behaviour-identical (`cur`
+  and `cmd_we` are read only after the A_ISSUE transition, which only happens
+  with `any`) and leaves the enable local to the arbiter. **−0.015 → +0.405 ns,
+  −5 LE, TNS 0**, and `f_req` disappears from the timing report entirely.
+  Cycle-identity: `make sim` green including `run_sdram_arbiter` and
+  `run_sdram_cosim`. **The lesson to carry: the trigger and the fix live in
+  different modules.** The peripheral parameter was not the bug — it was the
+  +15 LE that exposed a latent enable cone, exactly as the "budget for an STA
+  chase somewhere else" rule predicts. Chase the cone STA names, not the
+  module you just edited.
+- **…and a SIXTH time on the very next build, back on the pad cone**
+  (`sdram_ctrl|ref_cnt`, fixed 2026-08-06). Reverting `STEP_SHIFT` to 3 while
+  KEEPING the arbiter fix landed at **−0.011 ns, TNS −0.016** on
+  `sdram_ctrl|ref_cnt[0] → s_addr[5]` — the Phase-7 no-boot cone for the third
+  time, now via the *other* counter. `ref_cnt == 0` decides whether ST_REF_WAIT
+  loads `s_addr <= MODE_REG`, so the compare sat in the pad register's
+  `outclkena` and paid the whole logic→ring hop: **4.953 ns of the 9.580 in ONE
+  route**, LC_X31_Y16 → IOC_X6_Y27. Cure: `ref_zero`, the exact `wait_zero`
+  idiom applied to `ref_cnt` — mirrored on all three assignment sites (reset,
+  ST_PRE_ALL, the decrement), `== 1` before the decrement and a compile-time
+  constant on the two loads. **−0.011 → +0.118 ns, TNS 0, +4 LE**, and `s_addr`
+  fell to +2.860. Cycle-identity is free here beyond the usual argument:
+  `ref_cnt` is read only while `in_init`, so nothing after `init_done` can see
+  it. **Two lessons.** First: **fixing one cone re-rolls the dice on every
+  other** — the arbiter fix measured +0.405 at `STEP_SHIFT=2` and −0.011 at 3,
+  from the same source tree. A single build's slack is a sample, not a
+  property; at 75 % LE, judge a structural fix by whether the *cone* left the
+  report, not by the headline number. Second: **when a counter compare shows up
+  in a pad enable, grep the module for its SIBLINGS before rebuilding.**
+  `wait_cnt` was fixed in Phase 7 and again for the joysticks, and `ref_cnt`
+  sat one screen away in the same file with the same defect, waiting for a
+  placement roll. `init_cnt` and `refi_tmr` are the remaining `== 0` compares
+  in `sdram_ctrl`; both currently gate a state only, never a pad register — if
+  either ever reaches `s_addr` / `s_dqm` / `dq_out`, it gets the same flop.
 - **A SINGLE-driver open-collector `tri1` net degenerates to stuck-ASSERTED in
   Quartus** (Cyclone I has no internal tri-state/pull-up). This bit the Phase-6
   keyboard on hardware: `bk_kbd014` was the *only* nVIRQ source, driving

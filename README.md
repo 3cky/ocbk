@@ -24,6 +24,7 @@ Everything below is confirmed running on the device.
   **Covox** 8-bit DAC.
 - **Joysticks** - both MSX joystick ports drive the BK's joystick register:
   four directions and two buttons each, so two-player games work.
+- **Mouse** - connected USB 1.1 mouse acts as the BK's **UVK-01 "Marsianka"** mouse.
 - **Tape** - the right audio jack doubles as the cassette port. Load real BK
   tape recordings from a PC, and save back to one.
 - **SMK512** - the 512 KB RAM extension, its BIOS, and an IDE drive backed by
@@ -70,6 +71,11 @@ only on power-off.
 
 Both MSX joystick ports are live. Plug in any standard MSX or Atari-style
 digital pad - four directions and two fire buttons are read.
+
+### Mouse
+
+A USB 1.1 mouse connected to the side USB-A port appears to the BK
+as a UVK-01 "Marsianka" mouse. While a mouse is connected the Covox output is muted.
 
 ### LEDs
 
@@ -129,7 +135,7 @@ something broken.
 
 ## Under the hood
 
-It fits in **8,518 of 12,060 logic elements (71 %)**, 3 memory blocks and the
+It fits in **9,058 of 12,060 logic elements (75 %)**, 4 memory blocks and the
 board's single PLL.
 
 Developer documentation is in **[doc/dev/](doc/dev/)**, one file per subsystem -
@@ -148,3 +154,5 @@ the index and the list of rules a change must not break.
 - The board bring-up (clocking, SDRAM, VGA) builds on **esemsx3** from
   [ocm-pld-dev](https://github.com/gnogni/ocm-pld-dev), the 1chipMSX firmware
   project.
+- The USB side is **[usb_hid_host](https://github.com/nand2mario/usb_hid_host)**
+  by nand2mario.

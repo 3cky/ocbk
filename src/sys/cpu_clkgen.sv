@@ -7,6 +7,14 @@
 //    037 CLKIN enables en_pos/en_neg (96.65/16 = 6.04 MHz; see va_037_sync).
 //    Model-independent - the 037 is BK-0010 video either way.
 //
+//  - usb_clk: the same /8 rate as dot_ena but a 50% duty CLOCK, for the USB
+//    HID host core (12.08 MHz = the spec's 12 MHz +0.674%, the design's usual
+//    error and far inside low-speed's +/-1.5%). It is a clock and not the
+//    dot_ena enable because the vendored core's Fmax on this part is 79 MHz -
+//    it cannot ride sys_clk. Its own toggle register rather than a divc tap:
+//    that keeps a counter bit off a global clock line and gives the SDC a
+//    clean generated-clock anchor, exactly as cpu_clk_r does.
+//
 //  - the CPU clock: a toggle divider, 50% duty, model-selected rate:
 //      model_bk11 = 0  toggle every 16 sys_clk  -> /32 = 3.02 MHz (BK-0010)
 //      model_bk11 = 1  toggle every 12 sys_clk  -> /24 = 4.03 MHz (BK-0011M)
@@ -39,6 +47,7 @@ module cpu_clkgen (
     output logic cpu_clk,     // 50% duty CPU clock  -> vm1 pin_clk_p
     output logic cpu_clk_n,   // anti-phase pair     -> vm1 pin_clk_n
     output logic dot_ena,     // 12.08 MHz 1-in-8 enable strobe (spare)
+    output logic usb_clk,     // 12.08 MHz 50% duty clock -> usb_hid_host
     output logic en_pos,      // 037 "posedge CLKIN" enable (/16)
     output logic en_neg       // 037 "negedge CLKIN" enable (/16)
 );
@@ -53,6 +62,20 @@ module cpu_clkgen (
     assign dot_ena = (divc[2:0] == 3'b000);
     assign en_pos  = (divc == 4'd15);   // "posedge CLKIN" (divc -> 0)
     assign en_neg  = (divc == 4'd7);    // "negedge CLKIN" (divc -> 8)
+
+    // --- USB host clock: /8 of sys_clk, 50% duty ---------------------------
+    // Same /8 rate as dot_ena, half a period out of phase with it (nothing
+    // depends on which). Both dividers free-run from the same reset release,
+    // so usb_clk's edges are deterministic against cpu_clk and coincide with
+    // it every 8 (/16, /32) or 24 (/24) sys_clk - which is why the crossing
+    // needs no SDC exception. Reads divc but never disturbs it: the /32 and
+    // /24 CPU waveforms stay bit-identical (sim/run_clkgen.sh).
+    logic usb_clk_r;                    // the SDC generated-clock anchor
+    always_ff @(posedge sys_clk or negedge rst_n) begin
+        if (!rst_n)               usb_clk_r <= 1'b0;
+        else if (divc[1:0] == 2'b11) usb_clk_r <= ~usb_clk_r;
+    end
+    assign usb_clk = usb_clk_r;
 
     // --- programmable CPU-clock toggle divider ----------------------------
     logic [3:0] cdiv;
