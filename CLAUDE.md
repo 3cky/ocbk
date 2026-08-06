@@ -112,12 +112,13 @@ The constraints that shape every decision; details and the reasoning in
   is the root reason the arbiter / done-gate machinery exists.
 - **The panel is standard-VESA-only**, so the output is 1024×768@60 and the
   48.83→60 Hz gap is bridged in the framebuffer.
-- **Current fit: 8,518 / 12,060 LE (71 %)**, 3/52 M4K, 110/173 pins, one PLL,
-  sys_clk setup +0.254 ns, TNS 0. Still thin, and it moves with placement: the
+- **Current fit: 9,058 / 12,060 LE (75 %)**, 4/52 M4K, 112/173 pins, one PLL,
+  sys_clk setup +0.146 ns, TNS 0. Still thin, and it moves with placement: the
   Phase-12 Covox left it at +0.102 on the `ram_init|filling` /
   `mem_mapper|mon_en` cone and the arming fix bought it back for +33 LE; the
   joysticks then drove it to **−0.121** on `sdram_ctrl|wait_cnt → s_addr` — the
-  Phase-7 no-boot cone — and the `wait_zero` flop bought it back.
+  Phase-7 no-boot cone — and the `wait_zero` flop bought it back. Phase 14's USB
+  host cost +261 LE and took it from +0.254 to +0.161 without a chase.
   → audio, gotchas
 
 ## Source tree

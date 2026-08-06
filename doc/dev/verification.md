@@ -190,22 +190,41 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   wins) against a non-zero `joy_word` on a full SoC with real SDRAM, and both
   mutations — merge dropped, gate dropped — are recorded in its runner header
   as verified by hand.
-- `sim/usb/run.sh` — the **USB HID host** oracle, **six legs,
-  mutation-tested x14**; `sim/usb/README.md` carries the pinned contract. The
-  vendored low-speed host runs at its real 12.081 MHz rate against
-  `usb_ls_device.v`, a behavioural low-speed HID device (line states, NRZI, bit
-  stuffing, CRC5/CRC16, the SETUP/IN/DATA/handshake script). Legs: `kbd`,
-  `mouse`, `pad`, `nak`, `unplug`, and `slow`.
+- `sim/usb/run.sh` — the **USB HID host** oracle, **eight legs,
+  mutation-tested x14 plus one ROM-image mutation**; `sim/usb/README.md` carries
+  the pinned contract. The vendored low-speed host runs at its real 12.081 MHz
+  rate against `usb_ls_device.v`, a behavioural low-speed HID device (line
+  states, NRZI, bit stuffing, CRC5/CRC16, the SETUP/IN/DATA/handshake script).
+  Legs: `kbd`, `mouse`, `setproto`, `stallproto`, `pad`, `nak`, `unplug`, and
+  `slow`.
+  **`setproto` is the one that came from a board run, and it is the model for
+  how a field bug should land here.** Three mice misbehaved three different ways
+  because the host left them in *report* protocol while the wrapper decodes
+  boot-protocol offsets; the leg sends a Report-ID-prefixed report until
+  `SET_PROTOCOL` arrives, and on the pre-fix image it reproduces the exact
+  symptom (`mouse_btn` = the ID, `dx` = the button byte). `stallproto` guards the
+  fix's own hazard: `nak` cannot tell a STALL from a NAK, so the status stage is
+  unrolled rather than looped, and `n_reset` staying at 2 asserts that no
+  watchdog re-enumeration happened.
+  **Mutation `F1` is the only one in the tree that reaches a ROM image** — it
+  rewrites `mem/usb_hid_host_rom.s` and reassembles. Worth copying wherever a
+  generated image carries behaviour: no rewrite of any line of Verilog could
+  have expressed this defect, so the RTL mutations were all green while the
+  firmware was wrong.
   **Its sharpest property is one the design cannot check anywhere else.** The
   host computes no CRC and verifies none — every token and DATA0 it sends is a
-  literal byte string with a pre-computed CRC in the 536×4 microcode ROM, and it
+  literal byte string with a pre-computed CRC in the 668×4 microcode ROM, and it
   ignores the device's CRC16 entirely. The model therefore checks *the host's*
   CRCs, which makes this the only thing in the tree that can notice a corrupted
-  or mis-copied `mem/usb_hid_host_rom.hex`: all three token CRC5s and all four
-  DATA0 CRC16s are verified (both need a bit-reversal against the register
-  value, because USB sends a CRC MSB-first — established by computing all seven
-  literals independently, so the reversal is the wire convention and not a fudge
-  factor).
+  or mis-assembled `mem/usb_hid_host_rom.hex`. Every packet the host actually
+  emits is checked on the wire — three token CRC5s (addr0/ep0, addr1/ep0,
+  addr1/ep1) and four DATA0 CRC16s (GET_DESCRIPTOR config, SET_ADDRESS,
+  SET_CONFIGURATION, SET_PROTOCOL); the fifth DATA0 literal in the image,
+  GET_DESCRIPTOR(device), sits behind a commented-out call and was matched by
+  independent computation instead. Both CRCs need a bit-reversal against the
+  register value, because USB sends a CRC MSB-first — established by computing
+  every literal independently, so the reversal is the wire convention and not a
+  fudge factor.
   **Two contracts for the consumers came out of building it.** `mouse_dx/dy` are
   valid only **at** the report pulse — the wrapper zeroes them the cycle after —
   so the Марсианка adapter must accumulate at the strobe, while `mouse_btn` is a

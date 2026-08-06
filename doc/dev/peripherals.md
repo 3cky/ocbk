@@ -131,7 +131,7 @@ level translator: no bus, no state the CPU can see, no reset. Oracle:
 `src/peripheral/usb_hid_host.v` + `usb_hid_host_rom.v` (vendored from
 [nand2mario/usb_hid_host](https://github.com/nand2mario/usb_hid_host)), a
 CPU-less **low-speed** USB host: a 16-instruction microcode engine (`ukp`) plus a
-536×4 microcode ROM in one M4K, classifying the device from
+668×4 microcode ROM in one M4K, classifying the device from
 `bInterfaceClass/SubClass/Protocol` and exposing keyboard, mouse and gamepad
 report fields. Oracle: `sim/usb/README.md`.
 

@@ -13,7 +13,7 @@ This file is about what the oracle does and does not pin.
 
 The host's own microcode is the contract, and it is unusually rigid: **every
 token and DATA0 packet is a literal byte string with a pre-computed CRC** in the
-536×4 microcode ROM (upstream `src/firmware/ukp.s`). There is no descriptor
+668×4 microcode ROM (`mem/usb_hid_host_rom.s`). There is no descriptor
 parsing and no CRC arithmetic anywhere in the hardware. So the device model does
 not have to be a general USB device — it has to answer exactly this script:
 
@@ -78,8 +78,10 @@ The host verifies no CRC at all — its own are literals, and it ignores the
 device's CRC16 entirely (it reads a fixed 8 payload bytes and stops). So the
 model checking them is **the only thing in the tree that can notice a corrupted
 `mem/usb_hid_host_rom.hex`**. All three token CRC5s (addr0/ep0, addr1/ep0,
-addr1/ep1) and all four DATA0 CRC16s in the image are verified, including the
-GET_DESCRIPTOR(device) packet the microcode currently has commented out.
+addr1/ep1) and all four DATA0 CRC16s the host emits are verified on the wire —
+GET_DESCRIPTOR(configuration), SET_ADDRESS, SET_CONFIGURATION and SET_PROTOCOL.
+The fifth DATA0 literal in the image, GET_DESCRIPTOR(device), sits behind a
+commented-out call and so was matched by independent computation instead.
 
 Both need a bit-reversal against the register value, because USB sends a CRC
 MSB-first. That was established by computing all seven literals independently and

@@ -39,8 +39,11 @@
 # every token and DATA0 it sends is a literal byte string with a pre-computed
 # CRC5/CRC16 baked into the microcode ROM, and it ignores the device's CRC16
 # entirely. So the model checking them is the only thing in the tree that can
-# notice a corrupted or mis-copied mem/usb_hid_host_rom.hex. All three token
-# CRC5s and all four DATA0 CRC16s in the image are verified.
+# notice a corrupted or mis-assembled mem/usb_hid_host_rom.hex. Every packet the
+# host actually emits is checked on the wire: three token CRC5s and four DATA0
+# CRC16s (GET_DESCRIPTOR config, SET_ADDRESS, SET_CONFIGURATION, SET_PROTOCOL).
+# The fifth DATA0 literal, GET_DESCRIPTOR(device), sits behind a commented-out
+# call and was matched by independent computation instead.
 #
 # WHAT NOTHING HERE TESTS, DELIBERATELY. The pads themselves - the 33R series
 # resistors, the board's 10k pull-downs, and the .qsf's DELIBERATE ABSENCE of a
