@@ -24,8 +24,7 @@ Everything below is confirmed running on the device.
   **Covox** 8-bit DAC.
 - **Joysticks** - both MSX joystick ports drive the BK's joystick register:
   four directions and two buttons each, so two-player games work.
-- **Mouse** - a USB mouse in the side USB-A port acts as the BK's **УВК-01
-  "Марсианка"**, the period Soviet mouse, for software that knows about it.
+- **Mouse** - connected USB 1.1 mouse acts as the BK's **UVK-01 "Marsianka"** mouse.
 - **Tape** - the right audio jack doubles as the cassette port. Load real BK
   tape recordings from a PC, and save back to one.
 - **SMK512** - the 512 KB RAM extension, its BIOS, and an IDE drive backed by
@@ -75,21 +74,8 @@ digital pad - four directions and two fire buttons are read.
 
 ### Mouse
 
-Plug a USB mouse into the **USB-A port on the side**. It appears to the BK as a
-**УВК-01 "Марсианка"** - the mouse sold for these machines - on the same
-register the joysticks use, so software written for one works unmodified. Both
-buttons are live. A pad in a DE-9 port and the mouse can be used at the same
-time.
-
-There is **one port, so one device at a time**, and it is **USB low-speed only**:
-mice and keyboards are almost always low-speed and work, but a device that does
-nothing at all - no reaction whatsoever - is most likely a full-speed one, which
-this firmware cannot see. (The USB keyboard is not wired to the BK's keyboard
-yet; use the built-in one.)
-
-While a mouse is connected the **Covox output is muted**, because a Марсианка
-poll and Covox playback are the same writes to the same register and the machine
-cannot tell them apart. Unplug the mouse to get the Covox back.
+A USB 1.1 mouse connected to the side USB-A port appears to the BK
+as a UVK-01 "Marsianka" mouse. While a mouse is connected the Covox output is muted.
 
 ### LEDs
 
@@ -169,7 +155,4 @@ the index and the list of rules a change must not break.
   [ocm-pld-dev](https://github.com/gnogni/ocm-pld-dev), the 1chipMSX firmware
   project.
 - The USB side is **[usb_hid_host](https://github.com/nand2mario/usb_hid_host)**
-  by nand2mario - a CPU-less low-speed USB host in a microcode engine and one
-  memory block, after work by hi631 and the UKP from FPGA pc8001. Its microcode
-  carries one local addition here, a `SET_PROTOCOL` during enumeration, which
-  [m1nl's fork](https://github.com/m1nl/usb_hid_host) arrived at independently.
+  by nand2mario.
