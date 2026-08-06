@@ -3,7 +3,7 @@
 # USB HID host oracle: the vendored low-speed USB host against a behavioural
 # low-speed HID device (usb_ls_device.v).
 #
-# SIX LEGS:
+# EIGHT LEGS:
 #   kbd     A boot keyboard (class 3 / sub 1 / proto 1) enumerates end to end -
 #           two bus resets, three descriptor reads, address 1, SET_CONFIGURATION -
 #           classifies as typ=1, and its report fields decode. Also asserts that
@@ -12,11 +12,20 @@
 #   mouse   proto 2 -> typ=2; buttons decode; and the delta contract: dx/dy are
 #           valid AT the report pulse and self-clear the cycle after it, while
 #           mouse_btn is a level and does not.
+#   setproto  THE REGRESSION LEG for microcode hook F1. A mouse that sends a
+#           Report-ID-prefixed report until SET_PROTOCOL(boot) arrives. Without
+#           the hook the wrapper decodes the ID as a held КН1 and reads the
+#           button byte as dx - exactly what two of three mice did on the board.
+#   stallproto  A device that STALLs SET_PROTOCOL must not take the host down:
+#           ukp's `nak` flag cannot tell STALL from NAK, so the status stage is
+#           unrolled rather than a retry loop. n_reset staying at 2 is the
+#           assertion that no watchdog re-enumeration happened.
 #   pad     A non-boot HID interface -> typ=3, with the axis/button decode the
 #           wrapper assumes. Kept even though no low-speed pad has been found on
 #           hardware - the typ=3 branch is part of the vendored contract, and the
 #           model presents its own descriptors. Its report also carries 0xff, so
-#           this is the leg that exercises BIT STUFFING.
+#           this is the leg that exercises BIT STUFFING. It also STALLs
+#           SET_PROTOCOL, which is what a non-boot interface really does.
 #   nak     The device NAKs every descriptor read three times and then NAKs the
 #           interrupt endpoint: the host must retry (bnak) and still enumerate,
 #           and a NAK must never be mistaken for a report.
@@ -24,7 +33,7 @@
 #           is re-classified.
 #   slow    The kbd leg again at the REAL 12001-cycle "1 ms" tick instead of the
 #           scaled 61. ~12 s, and it is the leg that proves the scaling in the
-#           other five hides nothing about the timer itself.
+#           other seven hides nothing about the timer itself.
 #
 # WHY THE CRC CHECKS EARN THEIR KEEP. The host computes no CRC and verifies none:
 # every token and DATA0 it sends is a literal byte string with a pre-computed
@@ -42,7 +51,8 @@
 #
 # --mutate  rewrites one property of a COPY of the real RTL (the sim/evnt idiom -
 #           no inline replica to drift) and requires the named leg to break.
-#           14 mutations, U1-U14.
+#           14 mutations, U1-U14, plus F1 which mutates the MICROCODE SOURCE and
+#           rebuilds the ROM image - the one artifact no RTL mutation can reach.
 #
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -62,10 +72,10 @@ build() {   # build <out> <host.v> [extra iverilog args...]
 
 pass() { vvp -n "$1" "+leg=$2" | grep -q '^COSIM PASS$'; }
 
-# ---- the five fast legs + the slow one ------------------------------------
+# ---- the seven fast legs + the slow one ------------------------------------
 if [ "$MODE" != "--mutate" ]; then
     build "$SP/usb.vvp" "$HOST"
-    for leg in kbd mouse pad nak unplug; do
+    for leg in kbd mouse setproto stallproto pad nak unplug; do
         echo "=== leg $leg ==="
         pass "$SP/usb.vvp" "$leg" || { echo "usb oracle: FAIL ($leg)"; exit 1; }
     done
@@ -120,5 +130,37 @@ run_mut U11 kbd    's/if(bitadr==24) ukprdy <= 1;/if(bitadr==32) ukprdy <= 1;/' 
 run_mut U12 kbd    's/(bitadr\[2:0\] == 3'"'"'b100) \& (timing == 2)/(bitadr[2:0] == 3'"'"'b000) \& (timing == 2)/' || fails=1
 run_mut U13 nak    's/if (bitadr == 8) nak <= dmi;/if (bitadr == 8) nak <= ~dmi;/' || fails=1
 run_mut U14 pad    's/if(nrzrxct!=6)/if(nrzrxct!=7)/'                          || fails=1
+
+# --- the microcode image ----------------------------------------------------
+# Everything above mutates Verilog, and the defect that put this leg here was
+# not in any line of Verilog: the host left mice in report protocol because its
+# ROM lacked SET_PROTOCOL. The image is a separate artifact assembled from
+# mem/usb_hid_host_rom.s, so mutate the SOURCE and rebuild it. The ROM's memory
+# depth follows the assembled size, hence the second sed.
+run_mut_rom() {   # run_mut_rom <name> <leg> <sed-expr on the microcode source>
+    local name="$1" leg="$2" expr="$3"
+    local src=../../mem/usb_hid_host_rom.s
+    sed "$expr" "$src" > "$SP/mut.s"
+    if cmp -s "$SP/mut.s" "$src"; then
+        echo "  $name: SED DID NOT MATCH - fix the mutation"; return 1
+    fi
+    python3 ../../mem/gen_usb_rom.py "$SP/mut.s" "$SP/mut.hex" > /dev/null || {
+        echo "  $name: killed (does not assemble)"; return 0; }
+    local depth; depth=$(( $(wc -l < "$SP/mut.hex") - 1 ))
+    sed "s|\.\./\.\./mem/usb_hid_host_rom.hex|$SP/mut.hex|" usb_hid_host_tb.v > "$SP/mut_tb.v"
+    sed "s/mem \[0:[0-9]*\]/mem [0:$depth]/" "$ROM" > "$SP/mut_rom.v"
+    iverilog -g2012 -o "$SP/mutrom.vvp" -s usb_hid_host_tb \
+        "$HOST" "$SP/mut_rom.v" usb_ls_device.v "$SP/mut_tb.v" 2>/dev/null || {
+        echo "  $name: killed (does not compile)"; return 0; }
+    if pass "$SP/mutrom.vvp" "$leg"; then
+        echo "  $name: SURVIVED on leg $leg - the leg does not pin this"; return 1
+    fi
+    echo "  $name: killed (leg $leg)"
+}
+
+# F1 is the hook itself: drop the SET_PROTOCOL call from the mainline and the
+# device stays in report protocol, which is the shipped-and-broken behaviour the
+# board showed - a Report ID decoded as a held КН1 and both axes gone.
+run_mut_rom F1 setproto '/^\tjmp  setproto$/d'                                || fails=1
 
 [ "$fails" = 0 ] && echo "usb mutations: PASS" || { echo "usb mutations: FAIL"; exit 1; }

@@ -9,7 +9,13 @@
 //   attach (pull-up on D-) -> 200 ms -> bus reset -> SETUP+DATA0
 //   GET_DESCRIPTOR(configuration, wLength 24) -> three IN(0,0)+ACK pairs that
 //   drain 24 bytes -> bus reset -> SET_ADDRESS(1) -> SET_CONFIGURATION(1) ->
-//   IN(1,1) interrupt polls
+//   SET_PROTOCOL(boot) -> IN(1,1) interrupt polls
+//
+// SET_PROTOCOL is microcode hook F1, not upstream: without it a device stays in
+// report protocol and sends whatever its report descriptor declares, which for
+// most mice is not the 3-byte layout the wrapper decodes. The model therefore
+// tracks it (boot_proto, so a caller can change its report layout on it) and can
+// STALL it (stall_proto), which is what a non-boot device does.
 //
 // LOW-SPEED POLARITY, the easy thing to get backwards: for low speed J (idle) is
 // D- HIGH / D+ low and K is D+ HIGH / D- low - the inverse of full speed. The
@@ -52,14 +58,21 @@ module usb_ls_device #(
     input  wire [63:0] report,          // the 8 report bytes, byte 0 in [7:0]
     input  wire        report_valid,    // 0 = NAK the interrupt IN
     input  wire [7:0]  nak_setup,       // NAK each descriptor IN this many times
+    input  wire        stall_proto,     // 1 = STALL SET_PROTOCOL's status stage,
+                                        //     i.e. a device that does not
+                                        //     support the request
 
     output reg  [7:0]  dev_addr,        // current device address
     output reg         configured,      // SET_CONFIGURATION seen
+    output reg         boot_proto,      // SET_PROTOCOL(0) accepted - the caller
+                                        //   switches its report layout on this
     output reg  [7:0]  n_reset,         // bus resets seen
     output reg  [7:0]  n_setup,         // SETUP tokens seen
+    output reg  [7:0]  n_set_proto,     // SET_PROTOCOL requests received
     output reg  [7:0]  n_desc_in,       // descriptor IN(0,0) reads answered
     output reg  [7:0]  n_report_in,     // interrupt IN(1,1) reads answered
     output reg  [7:0]  n_nak,           // NAKs we sent
+    output reg  [7:0]  n_stall,         // STALLs we sent
     output reg  [7:0]  n_crc_err,       // host packets with a bad CRC5/CRC16
     output reg  [7:0]  n_prot_err       // anything we could not parse
 );
@@ -67,7 +80,8 @@ module usb_ls_device #(
     // ---- PIDs, in the byte form the host's microcode uses (LSB sent first) ---
     localparam [7:0] PID_SETUP = 8'h2d, PID_IN    = 8'h69,
                      PID_DATA0 = 8'hc3, PID_DATA1 = 8'h4b,
-                     PID_ACK   = 8'hd2, PID_NAK   = 8'h5a;
+                     PID_ACK   = 8'hd2, PID_NAK   = 8'h5a,
+                     PID_STALL = 8'h1e;
 
     // ---- line drive ------------------------------------------------------
     // Three states, so SE0 is expressible: 0 = SE0, 1 = J (D- high), 2 = K.
@@ -254,6 +268,8 @@ module usb_ls_device #(
             if (se0_at >= 0.0 && ($realtime - se0_at) > 10.0*BIT_NS) begin
                 dev_addr   = 8'h00;
                 configured = 1'b0;
+                boot_proto = 1'b0;      // a bus reset returns a HID device to
+                                        // report protocol (HID 1.11 7.2.6)
                 n_reset    = n_reset + 1;
             end
             se0_at = -1.0;
@@ -263,8 +279,17 @@ module usb_ls_device #(
     // ======================================================================
     //  The control / interrupt script
     // ======================================================================
-    reg [7:0] setup_req, setup_val, desc_idx, nak_left, tok_addr, tok_ep;
+    reg [7:0] setup_type, setup_req, setup_val, desc_idx, nak_left;
+    reg [7:0] tok_addr, tok_ep;
     reg       data1_next;
+
+    // SET_PROTOCOL is a class request to an interface, so it is bmRequestType
+    // 0x21 / bRequest 0x0b - the type byte matters because bRequest numbering
+    // is per-type and 0x0b is GET_INTERFACE among the standard requests.
+    // A reg set in the same blocking sequence as setup_type/setup_req, not a
+    // continuous assign: the SETUP handler tests it in the delta it decodes
+    // them, where an `assign` would still hold the previous request's value.
+    reg is_set_proto;
 
     // The 24 bytes the host asks for: a 9-byte configuration descriptor, a
     // 9-byte interface descriptor carrying the class triple, and the head of a
@@ -291,9 +316,10 @@ module usb_ls_device #(
     endfunction
 
     initial begin
-        dev_addr = 0; configured = 0; n_reset = 0; n_setup = 0; n_desc_in = 0;
-        n_report_in = 0; n_nak = 0; n_crc_err = 0; n_prot_err = 0;
-        setup_req = 0; setup_val = 0; desc_idx = 0; nak_left = 0;
+        dev_addr = 0; configured = 0; boot_proto = 0;
+        n_reset = 0; n_setup = 0; n_set_proto = 0; n_desc_in = 0;
+        n_report_in = 0; n_nak = 0; n_stall = 0; n_crc_err = 0; n_prot_err = 0;
+        setup_type = 0; is_set_proto = 0; setup_req = 0; setup_val = 0; desc_idx = 0; nak_left = 0;
         tok_addr = 0; tok_ep = 0; data1_next = 0;
         forever begin
             rx_packet();
@@ -329,12 +355,21 @@ module usb_ls_device #(
                                 desc_idx = desc_idx + 1;
                                 nak_left = nak_setup;
                             end
+                        end else if (is_set_proto && stall_proto) begin
+                            // A device that does not support SET_PROTOCOL.
+                            // The host must survive this and go on polling: its
+                            // `nak` flag cannot tell STALL from NAK (both are
+                            // handshake PIDs), so an unbounded bnak retry here
+                            // would spin until the watchdog reset it.
+                            n_stall = n_stall + 1;
+                            tx_handshake(PID_STALL);
                         end else begin
-                            // status stage of SET_ADDRESS / SET_CONFIGURATION:
-                            // a zero-length DATA1
+                            // status stage of SET_ADDRESS / SET_CONFIGURATION /
+                            // SET_PROTOCOL: a zero-length DATA1
                             tx_data(PID_DATA1, 64'h0, 0);
                             if (setup_req == 8'h05) dev_addr   = setup_val;
                             if (setup_req == 8'h09) configured = 1'b1;
+                            if (is_set_proto)       boot_proto = (setup_val == 0);
                         end
                     end
                 end
@@ -345,11 +380,15 @@ module usb_ls_device #(
                                          rx[4], rx[3], rx[2], rx[1]}, 8)
                             !== {rx[10], rx[9]})
                             n_crc_err = n_crc_err + 1;
-                        setup_req = rx[2];
-                        setup_val = rx[3];
+                        setup_type   = rx[1];
+                        setup_req    = rx[2];
+                        setup_val    = rx[3];
+                        is_set_proto = (setup_type == 8'h21) &&
+                                       (setup_req  == 8'h0b);
                         if (setup_req == 8'h06) begin
                             desc_idx = 0; nak_left = nak_setup;
                         end
+                        if (is_set_proto) n_set_proto = n_set_proto + 1;
                         tx_handshake(PID_ACK);
                     end else n_prot_err = n_prot_err + 1;
                 end

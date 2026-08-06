@@ -36,21 +36,33 @@ module usb_hid_host_tb;
     reg  [7:0]  i_subclass   = 8'h01;
     reg  [7:0]  i_protocol   = 8'h01;
     reg  [63:0] report       = 64'h0;
+    reg  [63:0] report_rp    = 64'h0;   // what the device sends BEFORE it is put
+                                        // into boot protocol (see the setproto
+                                        // leg); ignored while it is 0
     reg         report_valid = 0;
     reg  [7:0]  nak_setup    = 8'h00;
+    reg         stall_proto  = 0;
 
-    wire [7:0] dev_addr, n_reset, n_setup, n_desc_in, n_report_in;
-    wire [7:0] n_nak, n_crc_err, n_prot_err;
-    wire       configured;
+    wire [7:0] dev_addr, n_reset, n_setup, n_set_proto, n_desc_in, n_report_in;
+    wire [7:0] n_nak, n_stall, n_crc_err, n_prot_err;
+    wire       configured, boot_proto;
+
+    // The device's report layout follows its protocol state, exactly as a real
+    // one does: report protocol until SET_PROTOCOL(boot) lands, boot layout
+    // after. report_rp = 0 means "this leg does not care", i.e. boot layout all
+    // along - which is how a mouse whose descriptor happens to match behaves.
+    wire [63:0] dev_report = (boot_proto || report_rp == 0) ? report : report_rp;
 
     usb_ls_device #(.BIT_NS(BIT_NS)) dev (
         .dp(dp), .dm(dm),
         .plugged(plugged),
         .i_class(i_class), .i_subclass(i_subclass), .i_protocol(i_protocol),
-        .report(report), .report_valid(report_valid), .nak_setup(nak_setup),
-        .dev_addr(dev_addr), .configured(configured),
-        .n_reset(n_reset), .n_setup(n_setup), .n_desc_in(n_desc_in),
-        .n_report_in(n_report_in), .n_nak(n_nak),
+        .report(dev_report), .report_valid(report_valid), .nak_setup(nak_setup),
+        .stall_proto(stall_proto),
+        .dev_addr(dev_addr), .configured(configured), .boot_proto(boot_proto),
+        .n_reset(n_reset), .n_setup(n_setup), .n_set_proto(n_set_proto),
+        .n_desc_in(n_desc_in),
+        .n_report_in(n_report_in), .n_nak(n_nak), .n_stall(n_stall),
         .n_crc_err(n_crc_err), .n_prot_err(n_prot_err)
     );
 
@@ -218,6 +230,8 @@ module usb_hid_host_tb;
             ck(dev_connected === 1'b1, "connected");
             ck_eq(typ, 2'd2, "typ = 2 (mouse)");
             ck_eq(n_crc_err, 8'd0, "host CRC5/CRC16 all valid");
+            ck_eq(n_set_proto, 8'd1, "SET_PROTOCOL issued exactly once");
+            ck(boot_proto === 1'b1,   "the device is in boot protocol");
 
             // buttons = left|right, dx = +5, dy = -3
             report = {8'h00, 8'h00, 8'h00, 8'h00,
@@ -240,6 +254,12 @@ module usb_hid_host_tb;
             // contract, and the model presents its own descriptors.
             $display("=== leg pad: a non-boot HID device is a gamepad ===");
             i_class = 3; i_subclass = 0; i_protocol = 0;
+            // A non-boot interface STALLs SET_PROTOCOL - it is a boot-device
+            // request. The host sends it unconditionally (the microcode cannot
+            // branch on the saved class triple), so this leg is also where the
+            // gamepad path proves it survives the STALL; `stallproto` asserts
+            // the survival directly.
+            stall_proto = 1;
             plugged = 1;
             wait_enum(4000*TSCALE);
             ck(dev_connected === 1'b1, "connected");
@@ -262,6 +282,70 @@ module usb_hid_host_tb;
             ck(game_y === 1'b1, "d[5][7] -> Y");
             ck(game_sel === 1'b1, "d[6][4] -> SELECT");
             ck(game_sta === 1'b1, "d[6][5] -> START");
+        end
+        // ==================================================================
+        "setproto": begin
+            // THE REGRESSION LEG FOR THE HARDWARE BUG (microcode hook F1).
+            // Three mice were tried on the board and two misbehaved, because
+            // the host left them in report protocol and the wrapper decodes
+            // boot-protocol offsets. This device sends the layout that produced
+            // the worst of the three (0000:3825): a Report ID byte in front, so
+            // byte 0 reads as a permanently pressed КН1 and both axes are gone.
+            $display("=== leg setproto: report protocol is switched to boot ===");
+            i_class = 3; i_subclass = 1; i_protocol = 2;
+            // report protocol: [ID=1, buttons=middle, X=+7, Y=-7, 0...]
+            report_rp = {8'h00, 8'h00, 8'h00, 8'h00,
+                         8'hf9, 8'h07, 8'h04, 8'h01};
+            // boot protocol: [buttons=middle, X=+7, Y=-7] - the same motion,
+            // one byte earlier
+            report    = {8'h00, 8'h00, 8'h00, 8'h00,
+                         8'h00, 8'hf9, 8'h07, 8'h04};
+            plugged = 1;
+            wait_enum(4000*TSCALE);
+            ck_eq(typ, 2'd2, "typ = 2 (mouse)");
+            ck_eq(n_set_proto, 8'd1, "SET_PROTOCOL issued exactly once");
+            ck_eq(n_crc_err, 8'd0, "including its CRC5 and CRC16");
+            ck(boot_proto === 1'b1, "the device switched to boot protocol");
+
+            report_valid = 1;
+            wait_reports(1, 2000*TSCALE);
+            // The whole point: these are the BOOT values. On the pre-F1
+            // microcode the device stays in report protocol and the wrapper
+            // reads btn=0x01 (the ID), dx=0x04 (the button byte) and dy=+7 (X) -
+            // the stuck button and the swapped axis seen on the board.
+            ck_eq(lat_btn, 8'h04, "mouse_btn = middle, NOT the report ID");
+            ck_eq({{56{lat_dx[7]}}, lat_dx},  64'sd7, "mouse_dx = +7");
+            ck_eq({{56{lat_dy[7]}}, lat_dy}, -64'sd7, "mouse_dy = -7");
+            ck_eq(dbg_hid_report[7:0], 8'h04,
+                  "report byte 0 is the button byte, not an ID");
+        end
+        // ==================================================================
+        "stallproto": begin
+            // A device that does not support SET_PROTOCOL must not take the
+            // host down with it. ukp's `nak` flag is set by ANY handshake PID -
+            // it samples the first PID bit, which is 0 for ACK/NAK/STALL and 1
+            // for DATA0/DATA1 - so a STALL is indistinguishable from a NAK and
+            // an unbounded `bnak` retry on the status stage would spin until the
+            // 1.4 s watchdog reset pc, re-enumerating for ever. n_reset staying
+            // at 2 is what proves that did not happen.
+            $display("=== leg stallproto: a STALLed SET_PROTOCOL is survived ===");
+            i_class = 3; i_subclass = 1; i_protocol = 2;
+            stall_proto = 1;
+            plugged = 1;
+            wait_enum(4000*TSCALE);
+            ck(dev_connected === 1'b1, "connected despite the STALL");
+            ck_eq(typ, 2'd2, "typ = 2 (mouse)");
+            ck(n_stall >= 8'd1, "the device did STALL SET_PROTOCOL");
+            ck(boot_proto === 1'b0, "and stayed in report protocol");
+
+            report = {8'h00, 8'h00, 8'h00, 8'h00,
+                      8'h00, 8'h02, 8'h01, 8'h01};
+            report_valid = 1;
+            wait_reports(2, 3000*TSCALE);
+            ck(n_pulses >= 2, "reports still arrive");
+            ck_eq(lat_btn, 8'h01, "and still decode");
+            ck_eq(n_reset, 8'd2, "no watchdog re-enumeration (still 2 resets)");
+            ck_eq(n_prot_err, 8'd0, "no protocol errors");
         end
         // ==================================================================
         "nak": begin

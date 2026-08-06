@@ -44,7 +44,7 @@ sim:
 	./sim/run_epcs_boot.sh
 
 # --- FPGA build -----------------------------------------------------------
-compile: mem/ram_test.hex mem/boot_blob.hex mem/boot_blob11.hex
+compile: mem/ram_test.hex mem/boot_blob.hex mem/boot_blob11.hex mem/usb_hid_host_rom.hex
 	@echo ">> Phase 1 - Analysis & Synthesis"
 	$(QUARTUS_MAP) $(PROJECT).qpf
 	@echo ">> Phase 2 - Fitter (Place & Route)"
@@ -66,6 +66,13 @@ compile: mem/ram_test.hex mem/boot_blob.hex mem/boot_blob11.hex
 
 mem/ram_test.hex: mem/gen_mem.py
 	cd mem && python3 gen_mem.py ram_test.hex
+
+# The USB host's UKP microcode. Upstream ships only the assembled image; this
+# tree carries the source because the image is no longer upstream's (hook F1,
+# SET_PROTOCOL). The nibble count the script prints must match the memory depth
+# declared in src/peripheral/usb_hid_host_rom.v.
+mem/usb_hid_host_rom.hex: mem/usb_hid_host_rom.s mem/gen_usb_rom.py
+	python3 mem/gen_usb_rom.py mem/usb_hid_host_rom.s mem/usb_hid_host_rom.hex
 
 # EPCS boot blobs: Phase-5 bk10 (BK-0010.01 MONITOR + BASIC Vilnius) at flash
 # offset 0x40000 + Phase-7 bk11 (BASIC/EXT window banks, BOS, MSTD) at

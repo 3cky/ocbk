@@ -136,7 +136,10 @@ CPU-less **low-speed** USB host: a 16-instruction microcode engine (`ukp`) plus 
 report fields. Oracle: `sim/usb/README.md`.
 
 **CONFIRMED ON HARDWARE 2026-08-05** — a USB keyboard enumerates as `typ`=1 and
-a mouse as `typ`=2 on the OneChipBook's side USB-A port.
+a mouse as `typ`=2 on the OneChipBook's side USB-A port. **Hook F1
+(`SET_PROTOCOL`) CONFIRMED ON HARDWARE 2026-08-06** — the four mice below all
+report correctly with it; before it, three of four were wrong in three different
+ways.
 
 - **The port was already wired as a real host**, it just never had firmware:
   D− on **PIN_238** (esemsx3's `pUsbN2`), D+ on **PIN_239** (`pUsbP2`), **10 kΩ
@@ -176,12 +179,44 @@ a mouse as `typ`=2 on the OneChipBook's side USB-A port.
   sampling would fit under the 79 MHz Fmax, but every timing constant and the
   microcode assume 1.5 Mb/s.
 - **The microcode is fully hard-coded** — every token and DATA0 packet is a
-  literal byte string with a pre-computed CRC5/CRC16 (`src/firmware/ukp.s`
-  upstream, with a Python assembler). The host never computes or checks a CRC.
-  Its enumeration is: wait for the D− pull-up → 200 ms → bus reset → GET_DESCRIPTOR
-  (configuration, wLength 24) drained by three IN(0,0)+ACK pairs which `save`
-  the class/subclass/protocol bytes → bus reset → SET_ADDRESS(1) →
-  SET_CONFIGURATION(1) → then IN(1,1) interrupt polls every ~10 ms.
+  literal byte string with a pre-computed CRC5/CRC16. The host never computes or
+  checks a CRC. Its enumeration is: wait for the D− pull-up → 200 ms → bus reset
+  → GET_DESCRIPTOR (configuration, wLength 24) drained by three IN(0,0)+ACK pairs
+  which `save` the class/subclass/protocol bytes → bus reset → SET_ADDRESS(1) →
+  SET_CONFIGURATION(1) → **SET_PROTOCOL(boot)** → then IN(1,1) interrupt polls
+  every ~10 ms.
+- **The microcode source is in-tree and the image is ours** —
+  `mem/usb_hid_host_rom.s` assembled by `mem/gen_usb_rom.py` (both vendored from
+  upstream's `src/firmware/`, the assembler adapted to take paths) into
+  `mem/usb_hid_host_rom.hex`, with a Makefile rule. Assembling upstream's
+  unmodified `ukp.s` with that script reproduces the previously vendored image
+  byte for byte, so hook F1 below is the only difference. **The memory depth in
+  `usb_hid_host_rom.v` must equal the nibble count the script prints** (668
+  now, 1024 = one M4K is the ceiling).
+- **MICROCODE HOOK F1 — SET_PROTOCOL(boot), and why it is not optional.** The
+  wrapper decodes a mouse report at boot-protocol offsets (byte 0 buttons, 1 dx,
+  2 dy), but HID 1.11 §7.2.6 says a device powers up in **report** protocol,
+  sending whatever its report descriptor declares. Only the plainest mice match
+  boot layout by accident. Measured on the board, all three `bInterfaceSubClass
+  1`:
+
+  | device | endpoint | report-protocol layout | symptom |
+  |---|---|---|---|
+  | `093a:2510` | 4 bytes | `[btn, X, Y, wheel]` | worked |
+  | `046d:c05b` | 6 bytes | packed **12-bit** axes | X worked, **Y dead** |
+  | `0000:3825` | 6 bytes | **Report ID** prefix | КН1 **stuck on**, both axes dead |
+
+  Keyboards hid the problem because their descriptors nearly always *do* match
+  boot layout. The same fix, with the byte-identical CRC16, is upstream in the
+  m1nl fork (commit `64d83ce`).
+- **F1's status stage is unrolled, three attempts, never a `bnak` loop.** `nak`
+  is set by *any* handshake PID: it samples the first PID bit, which is 0 for
+  ACK/NAK/STALL and 1 for DATA0/DATA1, so the host cannot tell a STALL from a
+  NAK. A non-boot device STALLs this request — it is a boot-device request and
+  the microcode cannot branch on the saved class triple — and an unbounded retry
+  would spin until the ~1.4 s watchdog reset `pc`, re-enumerating for ever. A
+  counted loop is impossible because `rcvdt` clobbers `W`. `sim/usb`'s
+  `stallproto` leg pins the survival; `setproto` pins the fix itself.
 - **Vendored hooks and two deliberate non-fixes** (the single-flop pad sample,
   the `ug <= 9` typo) are enumerated in the file header — read it before a
   re-sync.
@@ -191,6 +226,15 @@ a mouse as `typ`=2 on the OneChipBook's side USB-A port.
 `src/peripheral/bk_mouse.sv` — a USB HID mouse presented as the BK's **УВК-01
 «Марсианка»** on **0177714**. The first consumer of the USB host. Oracle:
 `sim/mouse/README.md`.
+
+**CONFIRMED ON HARDWARE 2026-08-06** — four different USB mice drive real
+Марсианка-aware software correctly, **with both parameters left at their
+defaults**. That settles the two items this module shipped as unproven:
+`RST_BIT = 3` (the СБРОС bit, which the УВК-01 sheets do not carry — GID's value
+was the only evidence, and a board run is now the second) and `STEP_SHIFT = 3`
+(the encoder-resolution divide, which wanted a calibration and did not need one:
+the boot-protocol report rate is the same for every mouse, so one value suits
+all four).
 
 **This is the one subsystem where BkEmu has nothing and GID is not the
 authority.** BkEmu does not implement the mouse; GID's is the only software

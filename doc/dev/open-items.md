@@ -280,6 +280,34 @@ from x15 to x12 to pay for it.
 - **SD data CRC16 and MMC cards** — `sd_backend` uses the SPI-default CRC
   policy (real CRCs only on CMD0/CMD8) and types SD cards only.
 
+- **The m1nl usb_hid_host fork** (`~/projects/other/fpga/usb_hid_host_m1nl`,
+  a rewrite of the vendored core) — **evaluated 2026-08-06, not taken, and its
+  headline feature is unreachable here.** Measured standalone on the
+  EP1C12Q240C8 with one wrapper for both:
+
+  | core | LE | M4K | Fmax |
+  |---|---|---|---|
+  | ours | 567 | 1 | 81.5 MHz |
+  | fork, `FULL_SPEED=0`, game on | 728 | 1 | 75.7 MHz |
+  | fork, `FULL_SPEED=0`, game off | 666 | 1 | — |
+
+  So +161 LE (+99 without gamepads) and no extra M4K; Fmax is irrelevant at
+  12.08 MHz, both have ~69 ns of slack. **Full speed is the part we cannot
+  have**: it wants 60 MHz, and the ×9 VCO divides to 96.65 / 64.43 / 48.32 only.
+  64.43 is 7.4 % off, and 48.32 — the classic FS rate — is our usual +0.674 %,
+  outside FS's ±0.25 % transmit tolerance where low-speed's ±1.5 % has always
+  covered us; the fork's FS path is written for 5 samples/bit besides. A 60 MHz
+  source means a second PLL, which the envelope forbids. What the fork would
+  still buy: `SET_IDLE` + `GET_DESCRIPTOR/HID` with real `STALL` decoding (its
+  author's finding that some devices send no reports until enumerated exactly as
+  a PC does), RX filtering, inter-packet timeout handling, **6-key rollover**
+  (`key_0..key_5` — the reason to revisit, for the HID→PS/2 keyboard shim),
+  gamepad VID/PID tables, and split `usb_dm_i/o` + `usb_oe` ports. Costs: a
+  re-vendor with a new module interface, a `sim/usb` device model rewritten for
+  a much longer script including SOF, and +161 LE at 73 % — i.e. budget an STA
+  chase. **SET_PROTOCOL was ported instead** (hook F1), which is the whole of
+  what the mouse bug needed.
+
 **Bigger, probably not worth it**
 - **A native-48.8 Hz analog-RGB output** as a judder-free secondary path. The
   panel cannot take it (see the platform constraints); it would need a

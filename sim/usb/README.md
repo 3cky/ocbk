@@ -21,8 +21,15 @@ not have to be a general USB device — it has to answer exactly this script:
 wait for the D- pull-up  ->  200 ms  ->  bus reset (10 ms SE0 + 40 ms keep-alive)
 SETUP(0,0) + DATA0 GET_DESCRIPTOR(configuration, wLength 24)
   -> three IN(0,0) + ACK pairs draining 24 bytes, which `save` the class triple
-bus reset  ->  SET_ADDRESS(1)  ->  SET_CONFIGURATION(1)  ->  IN(1,1) every ~10 ms
+bus reset  ->  SET_ADDRESS(1)  ->  SET_CONFIGURATION(1)  ->  SET_PROTOCOL(boot)
+  ->  IN(1,1) every ~10 ms
 ```
+
+`SET_PROTOCOL` is **microcode hook F1**, not upstream's — the image is assembled
+in-tree from `mem/usb_hid_host_rom.s` by `mem/gen_usb_rom.py`. Without it a
+device stays in *report* protocol and sends whatever its report descriptor
+declares, which is not the 3-byte layout the wrapper decodes; that is the bug the
+`setproto` leg exists for.
 
 The class triple lands where it does because of those three fixed 8-byte reads:
 descriptor byte 14 = `bInterfaceClass` arrives as `dat[6]` of the second read
@@ -34,8 +41,10 @@ descriptor byte 14 = `bInterfaceClass` arrives as `dat[6]` of the second read
 | leg | what it pins |
 |---|---|
 | `kbd` | class 3 / sub 1 / proto 1 enumerates end to end — two bus resets, three descriptor reads, address 1, configured — classifies as `typ=1`, and the modifier/key fields decode. Also asserts **every CRC the host emitted was correct**. |
-| `mouse` | proto 2 → `typ=2`; buttons decode; and the delta contract below. |
-| `pad` | a non-boot HID interface → `typ=3`, with the axis/button decode the wrapper assumes. Its report carries `0xff`, so this is the leg that exercises **bit stuffing**. |
+| `mouse` | proto 2 → `typ=2`; buttons decode; and the delta contract below. Also that `SET_PROTOCOL` is issued exactly once and accepted. |
+| `setproto` | **The regression leg for the hardware bug.** The device sends a Report-ID-prefixed report until `SET_PROTOCOL(boot)` lands. On the pre-F1 image the wrapper reads the ID as a held КН1 and the button byte as `dx` — the exact symptom two of three mice showed on the board. |
+| `stallproto` | A device that STALLs `SET_PROTOCOL` must not take the host down. `ukp`'s `nak` flag cannot tell STALL from NAK (it samples the first PID bit, 0 for every handshake and 1 for DATA0/DATA1), so the status stage is **unrolled, three attempts**, never a `bnak` loop. `n_reset` staying at 2 is the assertion that no watchdog re-enumeration happened. |
+| `pad` | a non-boot HID interface → `typ=3`, with the axis/button decode the wrapper assumes. Its report carries `0xff`, so this is the leg that exercises **bit stuffing**. It also STALLs `SET_PROTOCOL`, which is what a non-boot interface really does. |
 | `nak` | three NAKs per descriptor read plus a NAKed interrupt endpoint: the host must retry (`bnak`) and still enumerate, and a NAK must never be mistaken for a report. |
 | `unplug` | detach clears `typ`; a *different* device replugged re-enumerates and is re-classified. |
 | `slow` | `kbd` again at the **real 12001-cycle tick** instead of the scaled 61. ~12 s, and it is what proves the scaling in the other five hides nothing about the timer. |
@@ -101,3 +110,9 @@ matching them — so the reversal is not a fudge factor, it is the wire conventi
 the classification tree (U1–U5), the report field plumbing (U6–U10) and the `ukp`
 bit engine — `ukprdy` window, strobe alignment, the NAK sample, RX de-stuffing
 (U11–U14).
+
+Plus **`F1`, which mutates the microcode source and reassembles the ROM** —
+dropping the `SET_PROTOCOL` call restores the shipped-and-broken behaviour, and
+`setproto` must notice. It is the only mutation that reaches the image, and the
+image is where this subsystem's one field bug actually lived: no rewrite of any
+line of Verilog could have expressed it.
