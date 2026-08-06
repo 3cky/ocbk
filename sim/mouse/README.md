@@ -79,7 +79,10 @@ clock. It is gone, so the code no longer implies the clear is conditional.
   coarse, ~100 dpi; a modern optical mouse reports 8–16× more counts for the same
   motion). `STEP_SHIFT = 3` is a starting point, and the *feel* of it is a
   hardware calibration against real software — the oracle pins the mechanism, not
-  the constant.
+  the constant. So the leg **drives** `STEP_SHIFT` on the instance rather than
+  mirroring the DUT default: retuning `bk_mouse` must not fail this oracle. (It
+  did once — the tb's `STEP` was a hand-copied `8` and a `STEP_SHIFT = 2` build
+  failed the `step` leg for no defect, 2026-08-06.)
 - **The Covox interlock**, which lives at the top level: a mouse poll loop pulses
   СБРОС and that is exactly the "port is being modulated" condition the Covox arms
   on, so `mouse_active` joins `psg_act`. GID's docs record the same conflict from

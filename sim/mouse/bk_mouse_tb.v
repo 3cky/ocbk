@@ -15,7 +15,12 @@ module bk_mouse_tb;
 
     localparam real USB_NS = 82.7745;   // 12.081 MHz usb_clk
     localparam real CPU_NS = 331.0;     // ~3.02 MHz cpu_clk_n (BK-0010 rate)
-    localparam int  STEP   = 8;         // must match the DUT's default
+    // STEP is a sensitivity knob, not part of the device contract, so the leg
+    // DRIVES it rather than mirroring the DUT's default: what is pinned here is
+    // the encoder's mechanics (a step latches, a sub-step accumulates) at a STEP
+    // this file owns. Retuning bk_mouse's default must not fail this oracle.
+    localparam int  STEP_SHIFT = 3;
+    localparam int  STEP       = 1 << STEP_SHIFT;
 
     reg usb_clk = 0, clk = 0;
     always #(USB_NS/2.0) usb_clk = ~usb_clk;
@@ -30,7 +35,7 @@ module bk_mouse_tb;
     wire [15:0] mouse_word;
     wire        mouse_active;
 
-    bk_mouse dut (
+    bk_mouse #(.STEP_SHIFT(STEP_SHIFT)) dut (
         .usb_clk(usb_clk), .hid_report(hid_report),
         .hid_btn(hid_btn), .hid_dx(hid_dx), .hid_dy(hid_dy), .hid_typ(hid_typ),
         .clk(clk), .port_data(port_data),
