@@ -100,16 +100,24 @@ module sdram_arbiter #(
                 if (!p_req[i]) served[i] <= 1'b0;
             case (state)
                 A_IDLE: begin
-                    cmd_req <= 1'b0;
-                    if (any) begin
-                        cur       <= sel;
-                        cmd_we    <= p_we  [sel];
-                        cmd_addr  <= p_addr [sel*ADDR_BITS +: ADDR_BITS];
-                        cmd_wdata <= p_wdata[sel*DQ_BITS   +: DQ_BITS];
-                        cmd_be    <= p_be   [sel*2         +: 2];
-                        cmd_req   <= 1'b1;
-                        state     <= A_ISSUE;
-                    end
+                    // The payload capture is deliberately NOT gated on `any`: the
+                    // command registers are don't-care unless cmd_req goes with them,
+                    // and cmd_req/state below still carry the `any` term. Gating them
+                    // too would put `any` - and through it p_req[3] = fb_video's f_req,
+                    // which arrives from the far side of the die - in the clock-enable
+                    // cone of 42 registers, which is the CLAUDE.md enable-cone rule and
+                    // measured -0.015 ns on this exact path. Enabling on state alone
+                    // keeps that cone local. Same cycle behaviour: when !any the load is
+                    // dead (cmd_req stays 0), and cur/cmd_we are only read after the
+                    // A_ISSUE transition that only happens with any.
+                    cur       <= sel;
+                    cmd_we    <= p_we  [sel];
+                    cmd_addr  <= p_addr [sel*ADDR_BITS +: ADDR_BITS];
+                    cmd_wdata <= p_wdata[sel*DQ_BITS   +: DQ_BITS];
+                    cmd_be    <= p_be   [sel*2         +: 2];
+
+                    cmd_req   <= any;
+                    if (any) state <= A_ISSUE;
                 end
                 A_ISSUE: begin
                     if (cmd_ready) begin        // command accepted

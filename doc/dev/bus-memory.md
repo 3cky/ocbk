@@ -229,4 +229,14 @@ arbiter. SMK512 layers on top of the mapper and has its own file,
   paced (`fb_readout` PACE ≥24 sys_clk/word); an unpaced port-1 burst starves
   ports 2/3 for a whole line. Client contract: hold req+fields until the 1-cycle
   gnt, then drop req for ≥1 cycle (`served` mask).
+- **The A_IDLE payload load is deliberately ungated** (2026-08-06): `cmd_addr` /
+  `cmd_wdata` / `cmd_be` / `cmd_we` / `cur` load on `state == A_IDLE` alone, NOT
+  on `A_IDLE && any`. Gating them on `any` put every `p_req` line — including
+  `fb_video`'s `f_req`, which the fitter places at the far edge — in the
+  clock-enable cone of 42 registers and cost **−0.015 ns** on sys_clk; see
+  gotchas, the enable-cone rule's fifth recurrence. It is safe because the
+  command registers are don't-care without `cmd_req`, which still carries `any`,
+  and `cur`/`cmd_we` are read only after the A_ISSUE transition. **Keep it
+  ungated** — and if a fifth port is ever added, keep `any` off the payload
+  enable too.
 
