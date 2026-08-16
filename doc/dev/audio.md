@@ -80,6 +80,18 @@ cassette port shares the right DAC ladder, so tape is documented here too.
     6.04 MHz** (OSR ≈ 151 against a 20 kHz band ⇒ ~60 dB below the raw 6-bit
     floor — we are ladder-limited long before the shaper is). The DC gain is
     exactly 1 by construction, which is what `sim/audio` proves as an identity.
+    **A pipeline register sits between the mixer and the shapers** (`audio_out`,
+    added 2026-08-16 for STA): without it the chain from the mixer's output
+    register was `mix_l → the 17-bit mono add → the CMT mux → the shaper's
+    17-bit add → the clip compare → errp`, i.e. **two 17-bit adds and a compare
+    in one sys_clk**, and it went to −0.072 ns when an unrelated +22 LE
+    re-placed the fitter. The cost is one sys_clk (10.3 ns) on both channels
+    equally — a pure delay, not a resampling: `tick` is unchanged, the shapers
+    still consume one value per tick, and both channels shift together so the
+    stereo image cannot skew. The DC gain of exactly 1 is untouched by a delay,
+    which is why the identity leg still holds. **Rewriting the adder instead is
+    a proven dead end** — splitting it into its 10-bit and 7-bit halves gave a
+    bit-identical fit, because Quartus re-associates it anyway; see gotchas.
     **Three fixed points make the whole thing safe**: `s=0`, `+31744` and
     `−31744` each sit STATIC (codes 32, 63, 1), so **silence produces zero pin
     activity** and **the BK speaker — which maps to the rails — emits a static

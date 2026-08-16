@@ -172,12 +172,15 @@ ways.
   full-speed one pulls up **D+**, and this core only ever watches D−: a
   full-speed device is not misclassified but **invisible** (`connected` never
   asserts). Measured — a Sony pad (**054c:0cda**) does not appear at all, while
-  keyboards and mice enumerate normally. Since most modern gamepads are
-  full-speed, **a USB gamepad may be no easier to obtain than an MSX DE-9 pad**,
-  which was the motivation; the gamepad consumer is therefore gated on having a
-  pad that enumerates. Full-speed support is not a reparameterisation: 48 MHz
-  sampling would fit under the 79 MHz Fmax, but every timing constant and the
-  microcode assume 1.5 Mb/s.
+  keyboards and mice enumerate normally. Full-speed support is not a
+  reparameterisation: 48 MHz sampling would fit under the 79 MHz Fmax, but every
+  timing constant and the microcode assume 1.5 Mb/s.
+
+  **This gated the gamepad consumer until a low-speed pad was found.** It has
+  been: `081f:e401` enumerates at low speed and drives the joystick word — see
+  the USB gamepad section below. The limitation still stands for *other* pads,
+  and it is the first thing to check when one does not work: if `dev_connected`
+  never asserts, the pad is full speed and nothing downstream is at fault.
 - **The microcode is fully hard-coded** — every token and DATA0 packet is a
   literal byte string with a pre-computed CRC5/CRC16. The host never computes or
   checks a CRC. Its enumeration is: wait for the D− pull-up → 200 ms → bus reset
@@ -217,9 +220,26 @@ ways.
   would spin until the ~1.4 s watchdog reset `pc`, re-enumerating for ever. A
   counted loop is impossible because `rcvdt` clobbers `W`. `sim/usb`'s
   `stallproto` leg pins the survival; `setproto` pins the fix itself.
+- **CRC16 VALIDATION WAS BUILT, THEN REMOVED — and the reasoning is worth
+  keeping.** This host checks no CRC in either direction: every token it sends
+  carries one baked into the microcode, and everything it receives is taken on
+  trust. When the gamepad misbehaved on the board and not on a PC, that looked
+  like the obvious cause, so a receive-side CRC16 was written (LFSR over the
+  destuffed bits from `bitadr` 16 through the CRC field, residual `0x800D`,
+  derived from `sim/usb`'s own generator, length-independent). **It worked and
+  changed nothing**: the board still misbehaved, which is itself the proof that
+  the bit stream was never corrupt — the fault was entirely capture-side
+  (hook H8). It was removed rather than kept, because at 76 % LE it cost ~22 LE
+  and directly caused two STA chases, and it had never been shown to catch
+  anything. The full implementation is in git; see
+  [open-items.md](open-items.md) for the escalation if real corruption ever
+  turns up.
 - **Vendored hooks and two deliberate non-fixes** (the single-flop pad sample,
   the `ug <= 9` typo) are enumerated in the file header — read it before a
-  re-sync.
+  re-sync. The single-flop sample is the **surviving suspect** for what corrupts
+  a packet in the first place; H7 makes that harmless rather than fixing it, on
+  purpose, because changing the sample shifts the bit timing by 1/8 of a bit and
+  risks enumeration for every device.
 
 ## Марсианка mouse
 
@@ -285,6 +305,175 @@ cross-combined by four КМ133ЛА15 NANDs. Sheet 2's connector table is the pin
 - **Which write bit is СБРОС is not proven.** The sheets give pin 9 but not the
   cable's mapping onto the port's output bits; bit 3 is GID's and the only
   evidence. It is the `RST_BIT` parameter.
+
+## USB gamepad
+
+**CONFIRMED ON HARDWARE 2026-08-16** — all controls read correctly on the board:
+the four directions, all four face buttons, both shoulder triggers, START and
+SELECT. That acceptance took four board rounds; the two defects it found are
+below, and both were things no amount of desk analysis had produced.
+
+`src/peripheral/bk_gamepad.sv` — a USB HID pad as the BK's joystick word on
+**0177714**. The USB twin of `bk_joystick`: a pure level translator, no bus, no
+state the CPU can see. Oracle: `sim/gamepad/README.md`; the report decode is
+`sim/usb`'s, legs `pad` and `pad_real`.
+
+```
+bit 0 = UP      <- game_u          bit 4 = START   <- game_sta
+bit 1 = RIGHT   <- game_r          bit 5 = A       <- game_a | game_x | game_tr
+bit 2 = DOWN    <- game_d          bit 6 = B       <- game_b | game_y | game_tl
+bit 3 = LEFT    <- game_l          bit 7 = SELECT  <- game_sel
+bits 15:8 = 0 (always)
+```
+
+- **Player 1, low byte, always.** One USB-A port ⇒ one device ⇒ one player, the
+  same argument as the mouse's read word. `pad_word` is OR-ed into `joy_word` at
+  the **top level** exactly as `mouse_word` is, so `qbus_mem` is untouched and
+  every timing golden stays byte-identical. A USB pad and a DE-9 pad on port B
+  give two players; a USB pad and a DE-9 pad on port A collide, which is
+  unavoidable — on a real BK it is the same connector.
+- **Six buttons fold onto two.** X and the RIGHT shoulder trigger join A; Y and
+  the LEFT trigger join B. On a two-button machine everything a thumb lands on
+  should fire. **START and SELECT are real here** — a DE-9 pad has no source for
+  bits 4 and 7 (`bk_joystick` ties them 0), so a USB pad is the only thing in the
+  design that reaches the full `0o377`.
+- **HOOK H9 — the shoulder triggers.** Byte 6 carries them in its **low two
+  bits**, which upstream ignores entirely: it reads only `[5:4]` for
+  START/SELECT. Measured on the reference pad, with the rest of the frame
+  unchanged: **L = byte 6 `0x01`, R = `0x02`**. They share the byte with
+  START/SELECT, so `sim/usb`'s `pad_real` drives `0x33` (all four at once) to pin
+  that they do not disturb each other.
+- **Mutually exclusive with the mouse by construction.** The host reports one
+  `typ`; `bk_mouse` gates on 2 and `bk_gamepad` on 3, so at most one of the two
+  words is ever non-zero. Both directions are pinned — `sim/gamepad` section 2
+  and `sim/mouse`'s `gate` leg.
+- **No Covox interlock, deliberately.** `cx_mouse_mute` exists because a
+  Марсианка program *writes* 0177714 (the СБРОС strobe on bit 3), which is
+  exactly the "port is being modulated" condition `bk_covox` arms on. A gamepad
+  is **read-only** on that port and never arms it.
+- **An arming flop, not just the `typ` gate.** The host clears `typ` on
+  disconnect but **not** the `game_*` levels — only the power-up `initial`
+  (hook H5) ever zeroes them, so they hold the last report's values
+  indefinitely. Without the flop a re-plugged pad would present the previous
+  session's buttons for up to a poll interval. Nothing is exposed until a report
+  has arrived for *this* pad.
+- **Whole frames only — this module's half of the board bug of 2026-08-16.**
+  `game_*` are levels only *between* reports; while one is arriving the wrapper
+  rewrites them byte by byte as `rcvct` walks 0→7 (directions at bytes 0/1/3/4,
+  face buttons at 5, START/SELECT at 6), spanning ~43 µs ≈ 170 `cpu_clk_n`
+  cycles. Sampling them combinationally let the BK read half-decoded frames. The
+  payload is now latched strictly at the report pulse — and after hook H7 that is
+  **load-bearing, not tidiness**: H7 gates the pulse and not the decode, so the
+  wrapper's level outputs are still transiently wrong during a corrupt frame, and
+  latching at the pulse is what makes that invisible.
+- **The other half was a DUPLICATED BYTE in the capture — hook H8, and this is
+  the one that was actually wrong.** With nothing pressed, BK bit 6 flickered on
+  the board and not on a PC. Every code observed is reproduced *exactly* by
+  shifting the frame one byte late from index 3 or 4:
+
+  | held | clean | with the duplicate | observed |
+  |---|---|---|---|
+  | idle | `0` | `0100` | flickers `0100` |
+  | A | `040` | `0120` | `040`/`0120` |
+  | RIGHT | `002` | `0102` | `002`/`0102` |
+  | B, Y | `0100` | `0100` | steady — the duplicate decodes the same |
+  | X | `040` | — | steady |
+
+  **Confirmed on the board**, not inferred: a sticky LED signature of "which
+  report bytes were non-zero" lit byte 6, which a one-byte-late shift is the
+  only way to reach, with byte 2 clean and no re-enumeration.
+
+  The cause is that upstream's wrapper **counted strobes** (`rcvct++` per byte
+  strobe), so the capture depends on the strobe firing exactly once per byte.
+  `bitadr` already knows which byte it is — the strobe for payload byte *i* is
+  always at `bitadr == 28 + 8i` — so bytes are now addressed by **position**:
+  `ukpidx = bitadr[6:3] - 3`. A duplicate strobe then writes the same slot twice
+  (harmless) instead of advancing a counter, and a *lost* strobe is re-written by
+  the next one. Oracle: `sim/usb`'s `dupstrobe` leg, mutation `U23`.
+- **What produces the extra strobe is still not known, and H8 does not depend on
+  knowing.** Three candidate mechanisms were each tested and ruled out: packet
+  corruption (the `crc` leg — and CRC16 passes on the board, so the bit stream is
+  genuinely fine), a bit-stuff landing on the strobe (`stuffdup` — `~nrzon`
+  suppresses exactly one of the two visits), and the device at either edge of its
+  ±1.5 % bit-rate tolerance (`skew`). Addressing by position removes the
+  dependence on the answer. If it is ever wanted, the remaining suspect is the
+  documented single-flop pad sample interacting with `timing`'s resync.
+- **A two-frame agreement filter was tried and was the WRONG LAYER.** The board
+  disproved it: the fault is **data-dependent** — it tracks which button is held —
+  so consecutive frames agree on the same wrong value and the filter only thinned
+  the symptom. It is gone, along with the ~10 ms it added to every press and
+  release. **Recorded because it is a general trap**: a repeat-agreement filter is
+  only valid against *independent* errors, and "it got better" is not evidence
+  that a fix was right.
+- **The mouse needed no change, and that is the argument for fixing this at the
+  receive layer.** On the *latching* half it was never exposed: `bk_mouse`
+  already captures `pl_dx`/`pl_dy`/`pl_btn` inside `if (hid_report)`, because
+  `mouse_dx/dy` self-clear the cycle after the pulse and forced the right shape.
+  A gamepad's outputs are levels with no such forcing function, which is exactly
+  how the bug got in. On the *corruption* half it was covered for free the moment
+  H7 landed. A per-consumer filter would have had to be written twice — and could
+  not have been written for `mouse_dx/dy` at all, since deltas are **relative**
+  and legitimately differ every frame, so agreement would pass only
+  constant-velocity motion.
+
+  Why it surfaced on the pad first is **exposure rate**: a gamepad sends a full
+  8-byte report on every poll, ~100 packets per second even sitting idle, while a
+  mouse at rest sends few or none and its boot report is shorter (`ukprdy` drops
+  early on SE0 for a 4-byte report). Four mice were hardware-confirmed without a
+  phantom click being seen — which is not evidence the exposure was absent, only
+  that it was rare and would have shown up *while moving*, where a stray click is
+  easy to misattribute.
+- **A 2-FF sync per payload bit, no toggle handshake.** Once latched the payload
+  moves only at the ~10 ms poll rate, so it is genuinely quasi-static and a plain
+  sync carries it; the mouse needs a handshake only because `mouse_dx/dy`
+  self-clear the cycle after `report`. Bit skew across the crossing is accepted,
+  as it is in `bk_joystick`: a torn read is one in tens of thousands and the next
+  read is correct.
+
+### The reference pad, measured
+
+**`081f:e401`, "USB gamepad"** — low speed, HID class 3 / subclass 0 /
+protocol 0, one 8-byte interrupt IN endpoint, `bInterval` 10. Subclass ≠ 1 is
+what puts it on the `typ = 3` branch, and being a non-boot interface it **STALLs
+`SET_PROTOCOL`** — which is why hook F1's unrolled status stage matters here too.
+
+Captured with `usbhid-dump -d 081f:e401 -es` **before any RTL was written**,
+because the wrapper has no report-descriptor parser and its gamepad table is
+explicitly a guess:
+
+```
+        b0 b1 b2 b3 b4 b5 b6 b7
+idle:   7F 7F 00 80 80 0F 00 00      byte 0 = X: 00 left, 7F centre, FF right
+UP:     7F 00 00 80 80 0F 00 00      byte 1 = Y: 00 up,   7F centre, FF down
+DOWN:   7F FF 00 80 80 0F 00 00      byte 5 [7:4] = Y,B,A,X
+LEFT:   00 7F 00 80 80 0F 00 00      byte 6 [5:4] = START,SELECT, [1:0] = R,L
+RIGHT:  FF 7F 00 80 80 0F 00 00      bytes 2,3,4,7 constant
+SELECT: 7F 7F 00 80 80 0F 10 00
+START:  7F 7F 00 80 80 0F 20 00
+X:      7F 7F 00 80 80 1F 00 00
+Y:      7F 7F 00 80 80 8F 00 00
+A:      7F 7F 00 80 80 2F 00 00
+B:      7F 7F 00 80 80 4F 00 00
+L trig: 7F 7F 00 80 80 0F 01 00      byte 6 [1:0] = R,L  (hook H9)
+R trig: 7F 7F 00 80 80 0F 02 00
+```
+
+**The stock decode matches this pad exactly — no hook was needed.** That is luck,
+not design, and the three near-misses are worth recording because a different pad
+will hit them:
+
+| property | measured | the trap |
+|---|---|---|
+| byte 0 rest / swing | `0x7f` / `0x00`,`0xff` | the wrapper discards the **whole report** when `byte0[1:0] == 2'b10`. A pad resting at `0x7e` or `0x82` would look **dead**. |
+| D-pad location | on the axes; byte 5's low nibble is a constant `0x0f` | the wrapper has **no hat decode at all**. A hat-only pad would have no directions. |
+| bytes 3, 4 | constant `0x80` | `0x80[7:6]` is `2'b10`, the one value firing **neither** threshold branch. At `0x00` they would force a permanent LEFT+UP. |
+
+If a second pad type needs a different layout, the fix belongs in
+`usb_hid_host.v`'s decode as a new local hook (the H1–H6 / F1 idiom), with its
+own captured `sim/usb` leg — not in `bk_gamepad`, which is a bit-order
+translator and nothing more. The m1nl fork's VID/PID gamepad tables are the
+escape hatch if it ever needs to be per-device; see
+[open-items.md](open-items.md).
 
 ## Cartridge slot
 

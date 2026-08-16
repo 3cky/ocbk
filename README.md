@@ -22,9 +22,11 @@ Everything below is confirmed running on the device.
   Russian/Latin and case triggers, СУ/АР2/НР modifiers and СТОП.
 - **Sound** - the 1-bit speaker, **TurboSound** (2x YM2149) and a stereo
   **Covox** 8-bit DAC.
-- **Joysticks** - both MSX joystick ports drive the BK's joystick register:
+- **MSX Joysticks** - both MSX joystick ports drive the BK's joystick register:
   four directions and two buttons each, so two-player games work.
-- **Mouse** - connected USB 1.1 mouse acts as the BK's **UVK-01 "Marsianka"** mouse.
+- **USB Gamepad** - connected low-speed USB pad drives the BK's joystick register.
+- **USB Mouse** - connected low-speed USB mouse acts as the BK's
+  **UVK-01 "Marsianka"** mouse.
 - **Tape** - the right audio jack doubles as the cassette port. Load real BK
   tape recordings from a PC, and save back to one.
 - **SMK512** - the 512 KB RAM extension, its BIOS, and an IDE drive backed by
@@ -67,15 +69,24 @@ Everything below is confirmed running on the device.
 Turbo and the display mode are remembered across the reset button; they reset
 only on power-off.
 
-### Joysticks
+### MSX joysticks
 
-Both MSX joystick ports are live. Plug in any standard MSX or Atari-style
+Both MSX joystick DE-9 ports are live. Plug in any standard MSX
 digital pad - four directions and two fire buttons are read.
 
-### Mouse
+### USB mouse
 
 A USB 1.1 mouse connected to the side USB-A port appears to the BK
 as a UVK-01 "Marsianka" mouse. While a mouse is connected the Covox output is muted.
+
+### USB gamepad
+
+A USB 1.1 gamepad on the side USB-A port reads as joystick player 1, so it works
+alongside a DE-9 pad in MSX port B for two-player games. All four face buttons and both
+shoulder triggers reach the BK's two fire buttons - X and the right trigger act
+as A, Y and the left trigger as B - and START and SELECT are mapped too.
+Please note that only low-speed pads are supported; most modern gamepads are full speed
+and will not be seen at all.
 
 ### LEDs
 
@@ -135,7 +146,7 @@ something broken.
 
 ## Under the hood
 
-It fits in **9,058 of 12,060 logic elements (75 %)**, 4 memory blocks and the
+It fits in **9,133 of 12,060 logic elements (76 %)**, 4 memory blocks and the
 board's single PLL.
 
 Developer documentation is in **[doc/dev/](doc/dev/)**, one file per subsystem -

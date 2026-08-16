@@ -97,6 +97,8 @@ module smk_ide (
                                      // (BkEmu ignores drive.read/write rc)
     input  logic        bk_media_ok, // backing store present + initialised
     input  logic [27:0] bk_total,    // total image sectors (MAX_LBA source)
+                                     // registered locally as bk_total_q -
+                                     // see the STA note in the reset block
     // backend-side buffer port (valid while serving a bk_wr commit)
     input  logic [7:0]  bk_baddr,
     input  logic [15:0] bk_wdata,
@@ -193,6 +195,9 @@ module smk_ide (
     est_t st;
 
     logic [27:0] lba_a;         // G_CDIV scratch (the default-geometry divide)
+    logic [27:0] bk_total_q;    // bk_total registered locally (STA; see below)
+    logic        media_ok_q;    // bk_media_ok delayed WITH it - they must pair
+    logic        bk_gt7;        // (bk_total > 7) precomputed - see the STA note
     logic [8:0]  g_ptr;         // parse word pointer (bank-1 buffer index)
     logic [8:0]  g_end;         // parse stop index
     logic [16:0] g_sum;         // checksum accumulator (mod 2^16 at compare)
@@ -284,8 +289,8 @@ module smk_ide (
             8'd56: identify_word = {8'b0, g_secs};
             8'd57: identify_word = g_capacity[15:0];     // C*H*S
             8'd58: identify_word = {4'b0, g_capacity[27:16]};
-            8'd60: identify_word = bk_total[15:0];       // MAX_LBA = image
-            8'd61: identify_word = {4'b0, bk_total[27:16]};
+            8'd60: identify_word = bk_total_q[15:0];       // MAX_LBA = image
+            8'd61: identify_word = {4'b0, bk_total_q[27:16]};
             default: identify_word = 16'h0000;           // incl. 59 (no MULT)
         endcase
     endfunction
@@ -388,7 +393,39 @@ module smk_ide (
             g_sub <= '0; x_cyl <= '0; x_head <= '0; x_snum <= '0;
             w_pend <= 1'b0; r_pend <= 1'b0; din_q <= 1'b1;
             w_inv <= '0; w_a0 <= 1'b0; w_byte <= 1'b0; w_idx <= '0;
+            bk_total_q <= '0; media_ok_q <= 1'b0; bk_gt7 <= 1'b0;
         end else begin
+            // ---------------- quasi-static capacity, registered locally ------
+            // The module's standing STA cure, same shape as d_oob and enable_q:
+            // precompute into a flop, never re-derive at the decision point.
+            // bk_total is 28 bits from sd_backend, latched once from the CSD at
+            // card init and never changed after, and it feeds lba_a's wide load
+            // mux from seven geometry states. Taken straight across the module
+            // boundary into that mux it was the design's worst setup cone.
+            //
+            // bk_media_ok is delayed WITH it, and that pairing is the whole
+            // correctness argument: sd_backend raises both on the SAME cycle, so
+            // gating G_WAIT on the raw flag while reading the registered
+            // capacity would latch a stale zero on the one cycle that matters
+            // and hand the geometry FSM a zero-sector card. It is used in
+            // exactly one place (G_WAIT) and never drops mid-run, so attaching
+            // one cycle later is invisible.
+            //
+            // Both reset to 0, which is the safe direction here - the opposite
+            // of enable_q, whose reset-to-1 trap is recorded in smk512.md.
+            bk_total_q <= bk_total;
+            media_ok_q <= bk_media_ok;
+            // ...and the ONE test made of it at a state decision, precomputed.
+            // Registering bk_total alone was not enough: G_WAIT's
+            // `bk_total_q > 28'd7` is a 28-bit compare gating lba_a's load, so
+            // the compare simply became the new critical path into the same
+            // endpoint (+0.045 ns, the THIRD chase to land on lba_a). This is
+            // the module's standing cure, the same shape as d_oob/wait_z/
+            // widx_last: precompute into a flop, never re-derive at the
+            // decision point. Taken from the RAW input so it registers on the
+            // same edge as bk_total_q and cannot disagree with it.
+            bk_gt7     <= (bk_total > 28'd7);
+
             // ---------------- global backend handshake ----------------
             // Records every accepted op as outstanding (bk_out) and, at its
             // done, promotes a pending prefetch to ready. Runs BEFORE the
@@ -404,20 +441,20 @@ module smk_ide (
             // ---------------- engine FSM ----------------
             unique case (st)
                 // ---- geometry init (BkEmu attachDrive + setupGeometry) ----
-                G_WAIT: if (bk_media_ok) begin
-                    if (bk_total > 28'd7) begin
+                G_WAIT: if (media_ok_q) begin
+                    if (bk_gt7) begin
                         bk_req <= 1'b1; bk_wr <= 1'b0; bank_fetch <= 1'b1;
                         bk_sector <= 28'd7;
                         st <= G_FETCH7;
                     end else begin              // no sector 7 -> raw default
-                        lba_a <= bk_total; g_cyls <= '0;
+                        lba_a <= bk_total_q; g_cyls <= '0;
                         st <= G_CDIV;
                     end
                 end
                 G_FETCH7: begin
                     if (bk_done) begin
                         if (bk_error) begin     // unreadable -> raw default
-                            lba_a <= bk_total; g_cyls <= '0;
+                            lba_a <= bk_total_q; g_cyls <= '0;
                             st <= G_CDIV;
                         end else begin
                             g_ptr <= 9'd252;    // byte 0770: numLD word
@@ -431,7 +468,7 @@ module smk_ide (
                     if (g_sub == 2'd2) begin
                         g_sub <= '0;
                         if ((g_val[7:0]) > 8'd125) begin
-                            lba_a <= bk_total; g_cyls <= '0;
+                            lba_a <= bk_total_q; g_cyls <= '0;
                             st <= G_CDIV;       // invalid table -> default
                         end else begin
                             g_nld <= g_val[7:0];
@@ -469,20 +506,20 @@ module smk_ide (
                     if (g_sub == 2'd2) begin
                         g_sub <= '0;
                         if (g_sum[15:0] != 16'o012701) begin
-                            lba_a <= bk_total; g_cyls <= '0;
+                            lba_a <= bk_total_q; g_cyls <= '0;
                             st <= G_CDIV;       // checksum bad -> default
                         end else begin
                             unique case (g_ptr)
                                 9'd253: begin   // S: 1..255
                                     if (g_val[15:0] == '0 || g_val[15:8] != '0)
-                                        begin lba_a <= bk_total; g_cyls <= '0;
+                                        begin lba_a <= bk_total_q; g_cyls <= '0;
                                               st <= G_CDIV; end
                                     else begin g_secs <= g_val[7:0];
                                                g_ptr <= 9'd254; end
                                 end
                                 9'd254: begin   // H (low byte): 1..16
                                     if (g_val[7:0] == '0 || g_val[7:0] > 8'd16)
-                                        begin lba_a <= bk_total; g_cyls <= '0;
+                                        begin lba_a <= bk_total_q; g_cyls <= '0;
                                               st <= G_CDIV; end
                                     else begin g_heads <= g_val[4:0];
                                                g_ptr <= 9'd255; end
@@ -490,7 +527,7 @@ module smk_ide (
                                 default: begin  // C: 1..16383
                                     if (g_val[15:0] == '0
                                         || g_val[15:14] != '0)
-                                        begin lba_a <= bk_total; g_cyls <= '0;
+                                        begin lba_a <= bk_total_q; g_cyls <= '0;
                                               st <= G_CDIV; end
                                     else begin g_cyls <= g_val[13:0];
                                                st <= G_CAP1; end

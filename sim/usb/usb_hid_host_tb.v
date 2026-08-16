@@ -15,6 +15,20 @@ module usb_hid_host_tb;
     localparam real CLK_NS = 82.7745;
     localparam real BIT_NS = 8.0 * CLK_NS;
 
+    // DEVICE BIT-RATE SKEW, in ppm. Low-speed USB allows the device +/-1.5%
+    // (15000 ppm) and our own clock is +0.674% off nominal besides, so a real
+    // device is NEVER exactly 8 usbclk per bit - the host resynchronises on
+    // every D- transition precisely because of that. Nothing here exercised it
+    // until the second board bug (hook H8): the byte strobe was derived from a
+    // `timing` comparison, and a resync landing in the wrong place inside a bit
+    // fired it TWICE, duplicating a byte while leaving the bit stream perfect.
+    // At zero skew the resync never falls there and the defect is invisible,
+    // which is why every leg passed on a broken host.
+`ifndef DEV_SKEW_PPM
+ `define DEV_SKEW_PPM 0
+`endif
+    localparam real DEV_BIT_NS = BIT_NS * (1.0 + (`DEV_SKEW_PPM) / 1000000.0);
+
     // scaled by default; run.sh overrides for the slow leg
 `ifndef MS_TICKS
  `define MS_TICKS 61
@@ -42,6 +56,7 @@ module usb_hid_host_tb;
     reg         report_valid = 0;
     reg  [7:0]  nak_setup    = 8'h00;
     reg         stall_proto  = 0;
+    reg [3:0] corrupt_byte = 0;   // 0 = off; else the payload byte to damage
 
     wire [7:0] dev_addr, n_reset, n_setup, n_set_proto, n_desc_in, n_report_in;
     wire [7:0] n_nak, n_stall, n_crc_err, n_prot_err;
@@ -53,12 +68,12 @@ module usb_hid_host_tb;
     // along - which is how a mouse whose descriptor happens to match behaves.
     wire [63:0] dev_report = (boot_proto || report_rp == 0) ? report : report_rp;
 
-    usb_ls_device #(.BIT_NS(BIT_NS)) dev (
+    usb_ls_device #(.BIT_NS(BIT_NS), .TX_BIT_NS(DEV_BIT_NS)) dev (
         .dp(dp), .dm(dm),
         .plugged(plugged),
         .i_class(i_class), .i_subclass(i_subclass), .i_protocol(i_protocol),
         .report(dev_report), .report_valid(report_valid), .nak_setup(nak_setup),
-        .stall_proto(stall_proto),
+        .stall_proto(stall_proto), .corrupt_byte(corrupt_byte),
         .dev_addr(dev_addr), .configured(configured), .boot_proto(boot_proto),
         .n_reset(n_reset), .n_setup(n_setup), .n_set_proto(n_set_proto),
         .n_desc_in(n_desc_in),
@@ -74,6 +89,7 @@ module usb_hid_host_tb;
     wire signed [7:0] mouse_dx, mouse_dy;
     wire       game_l, game_r, game_u, game_d;
     wire       game_a, game_b, game_x, game_y, game_sel, game_sta;
+    wire       game_tl, game_tr;
     wire [63:0] dbg_hid_report;
     wire [55:0] dbg_regs;
 
@@ -99,6 +115,7 @@ module usb_hid_host_tb;
         .game_l(game_l), .game_r(game_r), .game_u(game_u), .game_d(game_d),
         .game_a(game_a), .game_b(game_b), .game_x(game_x), .game_y(game_y),
         .game_sel(game_sel), .game_sta(game_sta),
+        .game_tl(game_tl), .game_tr(game_tr),
         .dbg_hid_report(dbg_hid_report), .dbg_regs(dbg_regs),
         .dev_connected(dev_connected)
     );
@@ -107,6 +124,10 @@ module usb_hid_host_tb;
     // leg runs from sim/usb, so point it at the same image from here. Overriding
     // it rather than copying the image is the point of the parameter.
     defparam dut.ukp.ukprom.ROMFILE = "../../mem/usb_hid_host_rom.hex";
+
+    wire [11:0] game_bits = {game_tr, game_tl, game_sta, game_sel, game_y,
+                             game_x, game_b, game_a, game_r, game_d,
+                             game_l, game_u};
 
     // ---- report-pulse capture (the pulse is one usbclk wide) --------------
     // THE DELTAS MUST BE SAMPLED ON THE PULSE. The wrapper zeroes mouse_dx/dy
@@ -117,10 +138,17 @@ module usb_hid_host_tb;
     integer n_pulses = 0;
     reg [7:0] lat_btn = 0, lat_mod = 0, lat_k1 = 0, lat_k2 = 0;
     reg signed [7:0] lat_dx = 0, lat_dy = 0;
+    reg [11:0] lat_game = 0;     // the game bits AS A CONSUMER SEES THEM, i.e.
+                                // sampled at the pulse - what bk_gamepad does
+    reg [63:0] lat_report = 0;  // the eight bytes of THAT frame, likewise - a
+                                // later clean frame must not be able to hide
+                                // damage done to an earlier one
     always @(posedge usbclk) if (hid_report) begin
         n_pulses = n_pulses + 1;
         lat_btn <= mouse_btn; lat_dx <= mouse_dx; lat_dy <= mouse_dy;
         lat_mod <= key_modifiers; lat_k1 <= key1; lat_k2 <= key2;
+        lat_game <= game_bits;
+        lat_report <= dbg_hid_report;
     end
 
     // ---- checking ---------------------------------------------------------
@@ -162,6 +190,47 @@ module usb_hid_host_tb;
         begin
             target = n_pulses + n; i = 0;
             while (n_pulses < target && i < limit_us) begin #1000; i = i + 1; end
+        end
+    endtask
+
+    // ---- gamepad frames, in wire order ------------------------------------
+    // usbhid-dump prints byte 0 first; dbg_hid_report packs dat[7] first. This
+    // task takes the bytes the way the capture prints them, so a leg below can
+    // be read off against the pasted dump line by line, and then waits for the
+    // frame to be decoded.
+    task pad_frame(input [7:0] b0, input [7:0] b1, input [7:0] b2,
+                   input [7:0] b3, input [7:0] b4, input [7:0] b5,
+                   input [7:0] b6, input [7:0] b7);
+        begin
+            report = {b7, b6, b5, b4, b3, b2, b1, b0};
+            wait_reports(2, 3000*TSCALE);
+        end
+    endtask
+
+
+    localparam [11:0] P_NONE = 12'b000000000000;
+    localparam [11:0] P_U    = 12'b000000000001;
+    localparam [11:0] P_L    = 12'b000000000010;
+    localparam [11:0] P_D    = 12'b000000000100;
+    localparam [11:0] P_R    = 12'b000000001000;
+    localparam [11:0] P_A    = 12'b000000010000;
+    localparam [11:0] P_B    = 12'b000000100000;
+    localparam [11:0] P_X    = 12'b000001000000;
+    localparam [11:0] P_Y    = 12'b000010000000;
+    localparam [11:0] P_SEL  = 12'b000100000000;
+    localparam [11:0] P_STA  = 12'b001000000000;
+    localparam [11:0] P_TL   = 12'b010000000000;   // hook H9: shoulder triggers
+    localparam [11:0] P_TR   = 12'b100000000000;
+
+    // Checks ALL ten outputs at once, so a frame cannot assert the bit it is
+    // named for while quietly also asserting three others.
+    task ck_pad(input [8*48-1:0] what, input [11:0] exp);
+        begin
+            if (game_bits !== exp) begin
+                errors = errors + 1;
+                $display("  FAIL %0s: got %b expected %b  (t=%0t)",
+                         what, game_bits, exp, $time);
+            end
         end
     endtask
 
@@ -282,6 +351,196 @@ module usb_hid_host_tb;
             ck(game_y === 1'b1, "d[5][7] -> Y");
             ck(game_sel === 1'b1, "d[6][4] -> SELECT");
             ck(game_sta === 1'b1, "d[6][5] -> START");
+        end
+        // ==================================================================
+        "pad_real": begin
+            // THE REFERENCE PAD, FROM A REAL CAPTURE. Every frame below is a
+            // verbatim `usbhid-dump -d 081f:e401 -es` line taken from the pad
+            // that motivated bk_gamepad (a "USB gamepad", low speed, HID class 3
+            // / subclass 0 / protocol 0, 8-byte interrupt IN, bInterval 10).
+            //
+            // The `pad` leg above drives the layout the vendored wrapper's
+            // comment DESCRIBES. This one drives what a device actually sent, so
+            // the guess table stops being a guess. Three properties of this pad
+            // are what make the stock decode work unmodified, and each is a
+            // trap if a future pad differs:
+            //
+            //   * byte 0 rests at 0x7f and swings to 0x00/0xff, so the wrapper's
+            //     `valid <= (ukpdat[1:0] != 2'b10)` gate is never tripped. A pad
+            //     resting at 0x7e or 0x82 would have its WHOLE report discarded.
+            //   * the D-pad is on the axes, not the hat: byte 5's low nibble is
+            //     a constant 0x0f. The wrapper has no hat decode at all.
+            //   * bytes 3 and 4 are constant 0x80, and 0x80[7:6] is 2'b10 - the
+            //     one value that fires NEITHER of the wrapper's threshold
+            //     branches. At 0x00 they would force a permanent LEFT+UP.
+            $display("=== leg pad_real: captured 081f:e401 frames ===");
+            i_class = 3; i_subclass = 0; i_protocol = 0;
+            stall_proto = 1;            // a non-boot interface STALLs it
+            plugged = 1;
+            wait_enum(4000*TSCALE);
+            ck(dev_connected === 1'b1, "connected");
+            ck_eq(typ, 2'd3, "typ = 3 (gamepad)");
+            ck_eq(n_crc_err, 8'd0, "host CRC5/CRC16 all valid");
+            ck_eq(dbg_regs[39:32], 8'd3, "regs[4] = bInterfaceClass 3");
+            ck_eq(dbg_regs[47:40], 8'd0, "regs[5] = bInterfaceSubClass 0");
+            ck_eq(dbg_regs[55:48], 8'd0, "regs[6] = bInterfaceProtocol 0");
+
+            //                b0    b1    b2    b3    b4    b5    b6    b7
+            report_valid = 1;
+            pad_frame(8'h7f, 8'h7f, 8'h00, 8'h80, 8'h80, 8'h0f, 8'h00, 8'h00);
+            ck_pad("idle: nothing asserted", P_NONE);
+            ck_eq(dbg_hid_report, 64'h00000f8080007f7f,
+                  "the eight captured bytes arrive intact");
+
+            pad_frame(8'h7f, 8'h00, 8'h00, 8'h80, 8'h80, 8'h0f, 8'h00, 8'h00);
+            ck_pad("UP", P_U);
+            pad_frame(8'h7f, 8'hff, 8'h00, 8'h80, 8'h80, 8'h0f, 8'h00, 8'h00);
+            ck_pad("DOWN", P_D);
+            pad_frame(8'h00, 8'h7f, 8'h00, 8'h80, 8'h80, 8'h0f, 8'h00, 8'h00);
+            ck_pad("LEFT", P_L);
+            pad_frame(8'hff, 8'h7f, 8'h00, 8'h80, 8'h80, 8'h0f, 8'h00, 8'h00);
+            ck_pad("RIGHT", P_R);
+
+            // Back to centre between the axes and the buttons: the directions
+            // are latched by the wrapper and only byte 0's clear releases them,
+            // so a release that does not work would show up as a stuck bit in
+            // every remaining frame.
+            pad_frame(8'h7f, 8'h7f, 8'h00, 8'h80, 8'h80, 8'h0f, 8'h00, 8'h00);
+            ck_pad("released back to centre", P_NONE);
+
+            pad_frame(8'h7f, 8'h7f, 8'h00, 8'h80, 8'h80, 8'h0f, 8'h10, 8'h00);
+            ck_pad("SELECT", P_SEL);
+            pad_frame(8'h7f, 8'h7f, 8'h00, 8'h80, 8'h80, 8'h0f, 8'h20, 8'h00);
+            ck_pad("START", P_STA);
+            pad_frame(8'h7f, 8'h7f, 8'h00, 8'h80, 8'h80, 8'h1f, 8'h00, 8'h00);
+            ck_pad("X", P_X);
+            pad_frame(8'h7f, 8'h7f, 8'h00, 8'h80, 8'h80, 8'h8f, 8'h00, 8'h00);
+            ck_pad("Y", P_Y);
+            pad_frame(8'h7f, 8'h7f, 8'h00, 8'h80, 8'h80, 8'h2f, 8'h00, 8'h00);
+            ck_pad("A", P_A);
+            pad_frame(8'h7f, 8'h7f, 8'h00, 8'h80, 8'h80, 8'h4f, 8'h00, 8'h00);
+            ck_pad("B", P_B);
+
+            // The shoulder triggers, captured the same way. They sit in byte 6's
+            // LOW bits, which upstream ignored entirely - it reads only [5:4].
+            pad_frame(8'h7f, 8'h7f, 8'h00, 8'h80, 8'h80, 8'h0f, 8'h01, 8'h00);
+            ck_pad("L trigger", P_TL);
+            pad_frame(8'h7f, 8'h7f, 8'h00, 8'h80, 8'h80, 8'h0f, 8'h02, 8'h00);
+            ck_pad("R trigger", P_TR);
+            // ...and they must not disturb START/SELECT, which share the byte.
+            pad_frame(8'h7f, 8'h7f, 8'h00, 8'h80, 8'h80, 8'h0f, 8'h33, 8'h00);
+            ck_pad("START+SELECT+both triggers together",
+                   P_STA | P_SEL | P_TL | P_TR);
+
+            // Not captured but reachable: the pad can press a direction and a
+            // button at once, and the two decode paths must not interfere.
+            pad_frame(8'h00, 8'h00, 8'h00, 8'h80, 8'h80, 8'h2f, 8'h20, 8'h00);
+            ck_pad("up-left + A + START", P_U | P_L | P_A | P_STA);
+
+            pad_frame(8'h7f, 8'h7f, 8'h00, 8'h80, 8'h80, 8'h0f, 8'h00, 8'h00);
+            ck_pad("everything released again", P_NONE);
+
+            // ck_pad reads the LEVEL outputs, which the wrapper writes as bytes
+            // arrive - so on its own it cannot tell a healthy link from one
+            // delivering no reports at all. Assert the pulses too, or a CRC
+            // check with a bad window or constant would reject every frame here
+            // and still look fine (it did: mutations U19-U22 survived until
+            // this line existed).
+            ck(n_pulses >= 10, "report pulses actually fired for these frames");
+            ck_eq({52'd0, lat_game}, {52'd0, P_NONE},
+                  "and the consumer view tracked the last frame");
+        end
+        // ==================================================================
+        "stuffdup": begin
+            // THE REGRESSION LEG FOR HOOK H8 - a BIT-STUFF landing exactly on
+            // the byte strobe.
+            //
+            // Upstream fired the strobe on (bitadr[2:0]==3'b100) & (timing==2),
+            // guarded by ~nrzon. But nrzon is only set at the bit's SAMPLE
+            // (timing==4), while a stuff bit FREEZES bitadr - so during a stuff
+            // bit at that position the strobe condition is true again while
+            // nrzon still reads 0 from the previous real bit. The wrapper takes
+            // the same ukpdat twice, rcvct advances twice, and every later byte
+            // lands one slot late: a DUPLICATED BYTE from a perfectly valid bit
+            // stream. CRC16 (hook H7) cannot see it, which is why it survived.
+            //
+            // This payload is chosen, not arbitrary: its stuffing puts a stuff
+            // bit at bitadr 52, i.e. >= 28 (past ukprdy) and == 4 mod 8 (on the
+            // strobe), which duplicates byte 3. The assertion is the strongest
+            // available - the raw eight bytes must come back exactly as sent.
+            $display("=== leg stuffdup: a stuff bit on the byte strobe ===");
+            i_class = 3; i_subclass = 0; i_protocol = 0;
+            stall_proto = 1;
+            plugged = 1;
+            wait_enum(4000*TSCALE);
+            ck_eq(typ, 2'd3, "typ = 3 (gamepad)");
+
+            report_valid = 1;
+            pad_frame(8'hCF, 8'h21, 8'h84, 8'hC7, 8'h8F, 8'h34, 8'h6D, 8'hF3);
+            ck_eq(dbg_hid_report, 64'hF36D348FC78421CF,
+                  "the eight bytes arrive UNDUPLICATED");
+            ck(n_pulses > 0, "and the frame was actually delivered");
+
+            // The pad's own idle frame must still be exact afterwards, so the
+            // fix cannot have shifted the ordinary case.
+            pad_frame(8'h7f, 8'h7f, 8'h00, 8'h80, 8'h80, 8'h0f, 8'h00, 8'h00);
+            ck_eq(dbg_hid_report, 64'h00000f8080007f7f,
+                  "and an ordinary frame is still exact");
+        end
+        // ==================================================================
+        "dupstrobe": begin
+            // THE REGRESSION LEG FOR HOOK H8 - fault injection, not a model.
+            //
+            // The board shows a frame arriving with a byte DUPLICATED at index
+            // 3 or 4: every later byte lands one slot late. It was confirmed
+            // with a sticky LED signature (byte 6 goes non-zero, which only a
+            // one-byte-late shift reaches; byte 2 stayed clean and there was no
+            // re-enumeration). Three candidate mechanisms for the extra strobe
+            // were tested here and ALL THREE are ruled out - packet corruption
+            // (the `crc` leg), a stuff bit on the strobe (`stuffdup`), and the
+            // device at the edge of its bit-rate tolerance (`skew`).
+            //
+            // So this leg does not reproduce a cause. It injects the EFFECT
+            // directly - one spurious extra byte strobe - and demands the frame
+            // arrive intact anyway. That is the property hook H8 provides:
+            // bytes are addressed by POSITION (from bitadr, which is
+            // authoritative) instead of by counting strobes, so a duplicate
+            // writes the same slot twice and a lost one is re-written by the
+            // next. Counting cannot survive either.
+            $display("=== leg dupstrobe: an extra byte strobe must not shift the frame ===");
+            i_class = 3; i_subclass = 0; i_protocol = 0;
+            stall_proto = 1;
+            plugged = 1;
+            wait_enum(4000*TSCALE);
+            ck_eq(typ, 2'd3, "typ = 3 (gamepad)");
+
+            report = 64'h00000f8080007f7f;      // the pad's real idle frame
+            report_valid = 1;
+
+            // Inject inside the payload: wait for the data window to open, run
+            // a few byte times in, then hold the strobe high for exactly one
+            // usbclk - one extra rising edge for the wrapper's edge detector.
+            @(posedge dut.data_rdy);
+            #(20*BIT_NS);
+            @(negedge usbclk);
+            force dut.data_strobe = 1'b1;
+            @(negedge usbclk);
+            release dut.data_strobe;
+
+            // Check THE INJECTED FRAME, not a later one: wait for exactly the
+            // pulse that ends it and read the latched copy. (Waiting for two
+            // and reading dbg_hid_report live was the first version of this
+            // leg, and it PASSED on a knowingly-broken build - the next clean
+            // frame had already overwritten the damage.)
+            wait_reports(1, 3000*TSCALE);
+            ck_eq(lat_report, 64'h00000f8080007f7f,
+                  "frame exact despite a DOUBLE byte strobe");
+            ck_eq({52'd0, lat_game}, {52'd0, P_NONE},
+                  "and it decodes as idle, not as a phantom button");
+
+            // ...and a second, clean frame still works afterwards.
+            pad_frame(8'h7f, 8'h7f, 8'h00, 8'h80, 8'h80, 8'h2f, 8'h00, 8'h00);
+            ck_pad("a later clean frame is unaffected", P_A);
         end
         // ==================================================================
         "setproto": begin

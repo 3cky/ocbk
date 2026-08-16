@@ -54,7 +54,7 @@
 #
 # --mutate  rewrites one property of a COPY of the real RTL (the sim/evnt idiom -
 #           no inline replica to drift) and requires the named leg to break.
-#           14 mutations, U1-U14, plus F1 which mutates the MICROCODE SOURCE and
+#           20 mutations, U1-U20, plus F1 which mutates the MICROCODE SOURCE and
 #           rebuilds the ROM image - the one artifact no RTL mutation can reach.
 #
 set -euo pipefail
@@ -75,12 +75,23 @@ build() {   # build <out> <host.v> [extra iverilog args...]
 
 pass() { vvp -n "$1" "+leg=$2" | grep -q '^COSIM PASS$'; }
 
-# ---- the seven fast legs + the slow one ------------------------------------
+# ---- the nine fast legs + the slow one ------------------------------------
 if [ "$MODE" != "--mutate" ]; then
     build "$SP/usb.vvp" "$HOST"
-    for leg in kbd mouse setproto stallproto pad nak unplug; do
+    for leg in kbd mouse setproto stallproto pad pad_real stuffdup dupstrobe nak unplug; do
         echo "=== leg $leg ==="
         pass "$SP/usb.vvp" "$leg" || { echo "usb oracle: FAIL ($leg)"; exit 1; }
+    done
+    # The device at both edges of its bit-rate tolerance. Low-speed USB allows
+    # the device +/-1.5%, and our own clock is +0.674% off besides, so a real
+    # device is never exactly 8 usbclk per bit - the host resynchronises on
+    # every D- transition to absorb it. Only the device's TRANSMIT cell is
+    # skewed; its receive sampling and turnaround stay nominal, because those
+    # are model machinery (skewing them just stops the model decoding the host).
+    for ppm in 15000 -15000; do
+        echo "=== leg skew ($ppm ppm device bit rate) ==="
+        build "$SP/skew.vvp" "$HOST" -DDEV_SKEW_PPM=$ppm
+        pass "$SP/skew.vvp" pad_real || { echo "usb oracle: FAIL (skew $ppm)"; exit 1; }
     done
     echo "=== leg slow (real 12001-cycle ms tick, ~12 s) ==="
     build "$SP/slow.vvp" "$HOST" -DMS_TICKS=12001
@@ -133,6 +144,25 @@ run_mut U11 kbd    's/if(bitadr==24) ukprdy <= 1;/if(bitadr==32) ukprdy <= 1;/' 
 run_mut U12 kbd    's/(bitadr\[2:0\] == 3'"'"'b100) \& (timing == 2)/(bitadr[2:0] == 3'"'"'b000) \& (timing == 2)/' || fails=1
 run_mut U13 nak    's/if (bitadr == 8) nak <= dmi;/if (bitadr == 8) nak <= ~dmi;/' || fails=1
 run_mut U14 pad    's/if(nrzrxct!=6)/if(nrzrxct!=7)/'                          || fails=1
+# --- the gamepad decode, against the REFERENCE PAD's captured frames ---
+# U15-U17 are the three ways the vendored guess table could have been wrong for
+# a real device. Each is killed only by pad_real, because each depends on a byte
+# value the synthetic `pad` leg does not send. U16 in particular is the reason
+# the capture was taken before any of this was written: the stock thresholds are
+# safe here ONLY because the pad parks bytes 3 and 4 at 0x80, the single 2-bit
+# value that fires neither branch.
+run_mut U15 pad_real 's/game_x <= ukpdat\[4\];/game_x <= ukpdat[5];/'          || fails=1
+run_mut U16 pad_real 's/if (ukpdat\[7:6\]==2'"'"'b00) {game_l, game_r} <= 2'"'"'b10;/if (ukpdat[7:6]==2'"'"'b10) {game_l, game_r} <= 2'"'"'b10;/' || fails=1
+run_mut U17 pad_real 's/6: if (valid) begin/6: if (1'"'"'b0) begin/'           || fails=1
+# --- hook H8: bytes addressed by POSITION, not by counting strobes ---
+# U23 is the board regression: it puts the capture back on a strobe COUNTER,
+# which is what upstream did and what shifts a whole frame when a strobe fires
+# twice. Only `dupstrobe` can kill it - every other leg has a well-behaved
+# strobe, which is exactly why the defect survived every existing leg AND the
+# board for three builds.  U24/U25 are the index arithmetic itself.
+run_mut U18 dupstrobe 's|reg  data_strobe_r, data_rdy_r;|reg [2:0] rcvct_m = 0; reg  data_strobe_r, data_rdy_r;|; s|    if(data_rdy) begin|    if(!data_rdy) rcvct_m <= 0; else begin|; s|            dat\[ukpidx\] <= ukpdat;|            dat[rcvct_m] <= ukpdat; rcvct_m <= rcvct_m + 3'"'"'d1;|' || fails=1
+run_mut U19 pad_real  's|bitadr\[6:3\] - 4.d3;|bitadr[6:3] - 4'"'"'d2;|'   || fails=1
+run_mut U20 pad_real  's|assign ukpidx = ukpidx4\[2:0\];|assign ukpidx = ukpidx4[2:0] + 3'"'"'d1;|' || fails=1
 
 # --- the microcode image ----------------------------------------------------
 # Everything above mutates Verilog, and the defect that put this leg here was
