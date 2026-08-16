@@ -112,8 +112,8 @@ The constraints that shape every decision; details and the reasoning in
   is the root reason the arbiter / done-gate machinery exists.
 - **The panel is standard-VESA-only**, so the output is 1024×768@60 and the
   48.83→60 Hz gap is bridged in the framebuffer.
-- **Current fit: 9,065 / 12,060 LE (75 %)**, 4/52 M4K, 112/173 pins, one PLL,
-  sys_clk setup +0.118 ns, TNS 0. Still thin, and it moves with placement: the
+- **Current fit: 9,133 / 12,060 LE (76 %)**, 4/52 M4K, 112/173 pins, one PLL,
+  sys_clk setup +0.339 ns, TNS 0. Still thin, and it moves with placement: the
   Phase-12 Covox left it at +0.102 on the `ram_init|filling` /
   `mem_mapper|mon_en` cone and the arming fix bought it back for +33 LE; the
   joysticks then drove it to **−0.121** on `sdram_ctrl|wait_cnt → s_addr` — the
@@ -129,7 +129,27 @@ The constraints that shape every decision; details and the reasoning in
   other counter). **Read that pair as one lesson: the same tree measured +0.405
   and −0.011 depending only on an unrelated parameter.** One build's slack is a
   sample, not a property — judge a fix by whether the cone left the report.
-  → audio, gotchas
+  Phase 15's gamepad cost only +23 LE and still forced a chase, this time with a
+  twist worth keeping: the cone it promoted (`sd_backend|bk_total → smk_ide|lba_a`,
+  +0.021) shared its **endpoint** with the cone that was already worst on `main`
+  (`g_val → lba_a`, +0.118). **When a chase keeps landing on the same
+  destination, fix the endpoint, not the leg** — registering the quasi-static
+  capacity locally (+40 LE) moved that whole family to +0.787 and took `lba_a`
+  out of the critical set. **Then it came back twice more.** A speculative USB
+  CRC16 (+22 LE) drove `audio_ns6`'s shaper cone to a real **VIOLATION, −0.072 /
+  TNS −0.586**; rewriting that 17-bit adder as two adds was provably exact and
+  produced a **bit-identical fit** — Quartus re-associates arithmetic itself, so
+  **only a moved REGISTER BOUNDARY changes a critical path** (→ gotchas). A real
+  pipeline register between the mixer and the shapers fixed it. That exposed
+  `lba_a` a **third** time, and registering the value had only moved the problem:
+  the cost was `bk_total_q > 28'd7`, a 28-bit compare at a state decision gating
+  the load. Precomputing it into a flop — `smk_ide`'s own written cure — cleared
+  the endpoint for **−1 LE**.
+  **The last chase was closed by SUBTRACTION, and that is the lesson to keep.**
+  The CRC had been added on a hypothesis the board disproved; it was removed
+  rather than chased further. At this fill the cheapest STA fix is often deleting
+  something that was never justified — always ask what the increment is *for*
+  before chasing what it broke. → audio, gotchas, smk512
 
 ## Source tree
 

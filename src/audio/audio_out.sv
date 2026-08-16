@@ -135,18 +135,52 @@ module audio_out #(
 
     wire signed [15:0] s_left = cmt_mode_q ? mono : mix_l;
 
+    // ---- shaper input pipeline (STA, 2026-08-16) ----------------------------
+    // One register between the mixer and the shapers. Without it the combinational
+    // chain from the mixer's output register is
+    //
+    //     mix_l -> the 17-bit mono add -> the CMT mux -> the shaper's 17-bit add
+    //           -> the clip compare -> errp
+    //
+    // i.e. TWO 17-bit adds and a compare in one sys_clk. That cone went to
+    // -0.072 ns / TNS -0.586 when an unrelated +22 LE elsewhere re-placed the
+    // fitter, and it is the natural place to break: the mono add is only live in
+    // CMT mode, but STA has to assume it and an SDC exception is forbidden here.
+    //
+    // A SOURCE-LEVEL REWRITE WAS TRIED FIRST AND IS A DEAD END - do not retry it.
+    // Splitting the shaper's 17-bit add into its 10-bit and 7-bit halves (which
+    // is exact, since errp is only 10 bits) produced a BIT-IDENTICAL fit: same
+    // 9,170 LE, same -0.072, same cone. Quartus re-associates that arithmetic
+    // itself, so only a real register boundary moves this path.
+    //
+    // The cost is one sys_clk (10.3 ns) of latency on both channels equally -
+    // a pure delay, not a resampling: the shapers still consume one value per
+    // tick, tick is unchanged, and both channels shift together so the stereo
+    // image cannot skew. audio_ns6's DC gain is exactly 1 and a delay does not
+    // touch that, which is why sim/audio's identity leg still holds.
+    logic signed [15:0] s_left_q, s_right_q;
+    always_ff @(posedge sys_clk or negedge rst_n) begin
+        if (!rst_n) begin
+            s_left_q  <= 16'sd0;
+            s_right_q <= 16'sd0;
+        end else begin
+            s_left_q  <= s_left;
+            s_right_q <= mix_r;
+        end
+    end
+
     // ---- the two shapers ----------------------------------------------------
     logic [5:0] code_l, code_r;
     logic       clip_l, clip_r;
 
     audio_ns6 u_ns6_l (
         .sys_clk (sys_clk), .rst_n (rst_n), .tick (tick),
-        .s_in    (s_left), .code (code_l), .dbg_clip (clip_l)
+        .s_in    (s_left_q), .code (code_l), .dbg_clip (clip_l)
     );
 
     audio_ns6 u_ns6_r (
         .sys_clk (sys_clk), .rst_n (rst_n), .tick (tick),
-        .s_in    (mix_r),  .code (code_r), .dbg_clip (clip_r)
+        .s_in    (s_right_q),  .code (code_r), .dbg_clip (clip_r)
     );
 
     assign dbg_clip = clip_l | clip_r;

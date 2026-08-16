@@ -830,19 +830,16 @@ module ocbk_top (
         .joy_word (joy_pads)
     );
 
-    // The 0177714 read word is the pads OR the Marsianka mouse (u_mouse, below
-    // the USB host - it needs that block's signals). With no USB mouse
-    // enumerated mouse_word is 0, so this is transparent: the pads read exactly
-    // as they did before the mouse existed, and qbus_mem is untouched. A pad on
-    // DE-9 port B and a USB mouse can therefore be used at once; the mouse's
-    // buttons do land on port A's trigger bits, which is unavoidable because on
-    // a real BK it is the same connector.
-    // Both are driven by the USB block further down (u_usb / u_mouse), which
-    // has to sit after the signals it consumes; declared here because the read
-    // word and the Covox mute are both needed above it.
+    // The 0177714 read word is the MSX joys OR the Marsianka mouse OR the USB
+    // gamepad.
+    //
+    // All three are driven by the USB block further down (u_usb / u_mouse /
+    // u_gamepad), which has to sit after the signals it consumes; declared here
+    // because the read word and the Covox mute are both needed above it.
     wire [15:0] mouse_word;
+    wire [15:0] pad_word;
     wire        cx_mouse_mute;
-    wire [15:0] joy_word = joy_pads | mouse_word;
+    wire [15:0] joy_word = joy_pads | mouse_word | pad_word;
 
     // ---- SMK512 IDE controller --------------------------------------------
     // A sibling peripheral like u_kbd: it snoops the shared bus itself and
@@ -1213,8 +1210,8 @@ module ocbk_top (
     //
     // BK-visible consumers:
     //   - a mouse presented as Marsianka on 0177714 (see bk_mouse.sv);
-    //   - the keyboard, via a HID->PS/2 shim into the existing kbd_ps2bk (TODO);
-    //   - a gamepad OR'd into the 0177714 joystick word (TODO).
+    //   - a gamepad OR'd into the 0177714 joystick word (see bk_gamepad.sv);
+    //   - the keyboard, via a HID->PS/2 shim into the existing kbd_ps2bk (TODO).
     logic [1:0]  usb_typ;
     logic        usb_report, usb_conerr, usb_connected;
     logic [7:0]  usb_key_mod, usb_key1, usb_key2, usb_key3, usb_key4;
@@ -1222,6 +1219,7 @@ module ocbk_top (
     logic signed [7:0] usb_mouse_dx, usb_mouse_dy;
     logic        usb_g_l, usb_g_r, usb_g_u, usb_g_d;
     logic        usb_g_a, usb_g_b, usb_g_x, usb_g_y, usb_g_sel, usb_g_sta;
+    logic        usb_g_tl, usb_g_tr;
     logic [63:0] usb_report_bytes;
     logic [55:0] usb_enum_regs;
 
@@ -1251,6 +1249,8 @@ module ocbk_top (
         .game_y        (usb_g_y),
         .game_sel      (usb_g_sel),
         .game_sta      (usb_g_sta),
+        .game_tl       (usb_g_tl),
+        .game_tr       (usb_g_tr),
         .dbg_hid_report(usb_report_bytes),
         .dbg_regs      (usb_enum_regs),
         .dev_connected (usb_connected)
@@ -1268,6 +1268,28 @@ module ocbk_top (
         .port_data  (snd_port_data),
         .mouse_word (mouse_word),
         .mouse_active ()
+    );
+
+    // ---- USB gamepad: the pad as the BK's 0177714 read word ---------------
+    bk_gamepad u_gamepad (
+        .usb_clk    (usb_clk),
+        .hid_report (usb_report),
+        .hid_typ    (usb_typ),
+        .g_u        (usb_g_u),
+        .g_d        (usb_g_d),
+        .g_l        (usb_g_l),
+        .g_r        (usb_g_r),
+        .g_a        (usb_g_a),
+        .g_b        (usb_g_b),
+        .g_x        (usb_g_x),
+        .g_y        (usb_g_y),
+        .g_tl       (usb_g_tl),
+        .g_tr       (usb_g_tr),
+        .g_sel      (usb_g_sel),
+        .g_sta      (usb_g_sta),
+        .clk        (cpu_clk_n),
+        .pad_word   (pad_word),
+        .pad_active ()
     );
 
     // Mute Covox as it conflicts with the mouse when connected.

@@ -229,13 +229,15 @@ from x15 to x12 to pay for it.
   than that. The one new sharp edge is the **`!sel2_n` gate** on that leg —
   `io_word` is `rd_romio` and reaches every reply point — see
   [peripherals.md](peripherals.md).
-- **START (bit 4) and SELECT (bit 7) of the joystick word have no source.** An
-  MSX DE-9 digital pad has two triggers and nothing else, so those two bits are
-  tied 0. Both alternatives were considered and rejected: an A+B chord is a
-  heuristic (the standing answer here is a hard user-selected mode, never a
-  guess), and OR-ing in PS/2 keys would inject phantom presses during ordinary
-  typing. If a game is ever found that needs START, the honest fix is a
-  user-selected mapping, not an invented one.
+- **START (bit 4) and SELECT (bit 7) of the joystick word have no source *on
+  DE-9*.** An MSX DE-9 digital pad has two triggers and nothing else, so those
+  two bits are tied 0 there. Both alternatives were considered and rejected: an
+  A+B chord is a heuristic (the standing answer here is a hard user-selected
+  mode, never a guess), and OR-ing in PS/2 keys would inject phantom presses
+  during ordinary typing. **A USB pad does source them** (`bk_gamepad`, which
+  reaches the full `0o377`), so this is now a DE-9-only gap rather than a design
+  one; if a game is ever found that needs START on a DE-9 pad, the honest fix is
+  still a user-selected mapping, not an invented one.
 - **No joystick-disable DIP is shipped**, deliberately: with nothing plugged in
   the ports read all-released and 177714 reads 0, so there is nothing to
   disable, and a toggle is one more piece of hidden state to get wrong (the
@@ -307,6 +309,47 @@ from x15 to x12 to pay for it.
   a much longer script including SOF, and +161 LE at 73 % — i.e. budget an STA
   chase. **SET_PROTOCOL was ported instead** (hook F1), which is the whole of
   what the mouse bug needed.
+
+  **Its gamepad VID/PID tables are no longer a reason to revisit, but they are
+  the recorded escape hatch.** The reference pad (`081f:e401`) turned out to be
+  low speed and its report layout matches the vendored decode exactly, so the
+  gamepad consumer shipped with no change to the decode at all — see
+  [peripherals.md](peripherals.md) for the capture and for the three near-misses
+  that make that luck rather than design. A *second* pad type with a different
+  layout (a hat-only D-pad is the likely one — the wrapper has no hat decode) is
+  what would make per-device tables worth their LE. Until then the cheaper fix is
+  a local hook in the decode plus its own captured `sim/usb` leg. **6-key
+  rollover for the keyboard shim remains the real reason to revisit.**
+
+- **The USB host checks no CRC on receive — built, tried, and REMOVED
+  2026-08-16.** A full receive-side CRC16 was implemented (LFSR over the
+  destuffed bits, residual `0x800D` derived from the device model's own
+  generator, gating the report pulse) while chasing the gamepad's phantom BK
+  bit 6. It worked, and the board was unchanged — which is exactly how we learned
+  the bit stream was never corrupt and the fault was capture-side (hook H8,
+  positional byte addressing). It was removed because at 76 % LE it cost ~22 LE
+  and caused two STA chases for no demonstrated benefit. **The code is in git**
+  and this is the recorded escalation if genuine wire corruption ever appears —
+  it is receive-side only, needs no microcode change and adds no latency, and it
+  would cover the mouse and a future keyboard shim at the same time. Note the
+  clock is NOT a candidate cause and should not be chased: `ukp` re-centres its
+  bit timing on every D− transition, so the +0.674 % error cannot accumulate
+  into a slip.
+- **What makes the byte strobe fire twice is still unknown.** H8 removes the
+  design's *dependence* on the answer (bytes are addressed by `bitadr` position,
+  so a duplicate strobe overwrites the same slot), which is why it is the fix
+  that shipped. Three candidates were tested in `sim/usb` and all three are ruled
+  out: packet corruption, a bit-stuff landing on the strobe (`stuffdup`), and the
+  device at either edge of its ±1.5 % bit-rate tolerance (`skew`). The remaining
+  suspect is the documented single-flop pad sample interacting with `timing`'s
+  per-transition resync. Only worth pursuing if a symptom returns.
+- **Enumeration traffic is decoded as a report.** `dat[]` is shared between
+  control transfers and interrupt reports, so once `typ` is set the descriptor
+  bytes are decoded as buttons and pulse `report`. Found while instrumenting the
+  board (the first LED signature saturated on it). Harmless in practice — it is a
+  few frames at plug-in against ~100/s forever, and the next real report
+  overwrites it — but it is why any future report-path diagnostic must gate on
+  steady state, and it would matter more for a keyboard shim.
 
 **Bigger, probably not worth it**
 - **A native-48.8 Hz analog-RGB output** as a judder-free secondary path. The

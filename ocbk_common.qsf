@@ -42,6 +42,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE src/peripheral/bk_kbd014.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/peripheral/bk_evnt.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/peripheral/bk_joystick.sv
 set_global_assignment -name SYSTEMVERILOG_FILE src/peripheral/bk_mouse.sv
+set_global_assignment -name SYSTEMVERILOG_FILE src/peripheral/bk_gamepad.sv
 # USB HID host (vendored, plain Verilog): microcode ROM before its user.
 set_global_assignment -name VERILOG_FILE src/peripheral/usb_hid_host_rom.v
 set_global_assignment -name VERILOG_FILE src/peripheral/usb_hid_host.v

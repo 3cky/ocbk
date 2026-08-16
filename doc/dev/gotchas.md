@@ -168,6 +168,28 @@
   placement roll. `init_cnt` and `refi_tmr` are the remaining `== 0` compares
   in `sdram_ctrl`; both currently gate a state only, never a pad register — if
   either ever reaches `s_addr` / `s_dqm` / `dq_out`, it gets the same flop.
+- **A SOURCE-LEVEL RE-ASSOCIATION WILL NOT MOVE A CRITICAL PATH — measured, and
+  it cost a build (2026-08-16).** `audio_ns6`'s cone
+  (`mixer|mix_l → ns6|errp`) went to **−0.072 ns, TNS −0.586** after an
+  unrelated **+22 LE** elsewhere (the USB CRC16) re-placed the fitter. The
+  natural cure looked like rewriting the shaper's 17-bit `accr = s_in + errp`
+  as the two adds it really is — a 10-bit low half and a 7-bit high half joined
+  by one carry, exact because `errp` is only 10 bits, and verified identical
+  over the entire input space before being written.
+  **It produced a BIT-IDENTICAL fit**: same 9,170 LE, same −0.072, same TNS,
+  same cone. Quartus re-associates that arithmetic itself, so how an adder is
+  *written* is not a fitter input at all. Same shape as the Phase-7 `epcs_boot`
+  reset-value tweak that was a sim-proven no-op.
+  **The rule: only a change to the REGISTER BOUNDARIES moves a critical path.**
+  Re-writing combinational expressions, re-ordering operands or splitting an
+  operator are invisible downstream of synthesis. The fix that worked was a real
+  pipeline register between the mixer and the shapers, which also took the
+  second 17-bit add (the CMT mono fold) out of the chain — two 17-bit adds and a
+  compare in one sys_clk was the actual depth. → audio
+  **Corollary when reviewing a proposed STA fix: ask which flop moved.** If the
+  answer is "none", expect nothing — and never accept a slack improvement alone
+  as evidence, because at this placement fragility an unrelated edit moves slack
+  by half a nanosecond on its own.
 - **A SINGLE-driver open-collector `tri1` net degenerates to stuck-ASSERTED in
   Quartus** (Cyclone I has no internal tri-state/pull-up). This bit the Phase-6
   keyboard on hardware: `bk_kbd014` was the *only* nVIRQ source, driving

@@ -45,7 +45,15 @@
 `timescale 1ns / 1ps
 
 module usb_ls_device #(
-    parameter real BIT_NS = 662.196     // 8 usbclk at 12.081 MHz
+    parameter real BIT_NS = 662.196,    // 8 usbclk at 12.081 MHz
+    // The device's TRANSMIT bit cell, separately settable. A real low-speed
+    // device is allowed +/-1.5% on this and the host resynchronises on every
+    // D- transition to absorb it. Only the transmitted cells move: the model's
+    // RECEIVE sampling and the turnaround stay at BIT_NS, because those are
+    // model-side machinery (a real device recovers the host's clock, and the
+    // 6-bit-time turnaround is the documented lock condition above) - skewing
+    // them just stops the model decoding the host and proves nothing.
+    parameter real TX_BIT_NS = BIT_NS
 )(
     inout  wire        dp,
     inout  wire        dm,
@@ -61,6 +69,12 @@ module usb_ls_device #(
     input  wire        stall_proto,     // 1 = STALL SET_PROTOCOL's status stage,
                                         //     i.e. a device that does not
                                         //     support the request
+    input  wire [3:0]  corrupt_byte,    // 0 = off; else the 1-based payload byte
+                                        //     to flip a bit in AFTER the CRC16
+                                        //     is computed - a self-inconsistent
+                                        //     packet, exactly what a wire fault
+                                        //     produces and what the host must
+                                        //     now reject
 
     output reg  [7:0]  dev_addr,        // current device address
     output reg         configured,      // SET_CONFIGURATION seen
@@ -160,11 +174,11 @@ module usb_ls_device #(
                 tx_st   = (tx_st == ST_J) ? ST_K : ST_J;   // NRZI: 0 = transition
                 tx_ones = 0;
             end
-            #(BIT_NS);
+            #(TX_BIT_NS);
             if (tx_ones == 6) begin                        // stuff a 0 after six 1s
                 tx_st   = (tx_st == ST_J) ? ST_K : ST_J;
                 tx_ones = 0;
-                #(BIT_NS);
+                #(TX_BIT_NS);
             end
         end
     endtask
@@ -208,12 +222,21 @@ module usb_ls_device #(
 
     task tx_data(input [7:0] pid, input [63:0] payload, input integer n);
         reg [15:0] c;
+        reg [7:0]  b;
         integer i;
         begin
-            c = crc16_bytes(payload, n);
+            c = crc16_bytes(payload, n);        // CRC over the INTACT payload
             tx_packet_start();
             tx_byte(pid);
-            for (i = 0; i < n; i = i + 1) tx_byte(payload[i*8 +: 8]);
+            for (i = 0; i < n; i = i + 1) begin
+                b = payload[i*8 +: 8];
+                // Damaged AFTER the CRC is fixed, so the packet is
+                // self-inconsistent the way a corrupted one on real wire is.
+                // Bit 7 is the interesting one: on the reference pad, byte 5
+                // bit 7 is game_y - the exact bit that flickered on the board.
+                if (corrupt_byte != 0 && i == corrupt_byte - 1) b = b ^ 8'h80;
+                tx_byte(b);
+            end
             tx_byte(c[7:0]); tx_byte(c[15:8]);
             tx_eop();
         end

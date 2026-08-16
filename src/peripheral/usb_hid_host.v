@@ -85,7 +85,12 @@ module usb_hid_host #(parameter MS_TICKS = 12001) (
 
     // gamepad 
     output reg game_l, game_r, game_u, game_d,  // left right up down
-    output reg game_a, game_b, game_x, game_y, game_sel, game_sta,  // buttons
+    output reg game_a, game_b, game_x, game_y, game_sel, game_sta,
+    // LOCAL HOOK H9 (ocbk): the shoulder triggers. Byte 6 carries them in its
+    // low two bits, which upstream ignores entirely - it reads only [5:4] for
+    // START/SELECT. Measured on the reference pad (081f:e401): L sends byte 6 =
+    // 0x01, R sends 0x02, with the rest of the frame unchanged.
+    output reg game_tl, game_tr,    // shoulder triggers: left, right  // buttons
 
     // debug
     output [63:0] dbg_hid_report,	// last HID report
@@ -109,13 +114,13 @@ wire [3:0] save_r;      // which register to save to
 wire [3:0] save_b;      // dat[b]
 wire connected;
 
+wire [2:0] ukpidx;          // hook H8: the byte's position, from bitadr
 ukp #(.MS_TICKS(MS_TICKS)) ukp(
     .usbrst_n(usbrst_n), .usbclk(usbclk),
     .usb_dp(usb_dp), .usb_dm(usb_dm), .usb_oe(),
     .ukprdy(data_rdy), .ukpstb(data_strobe), .ukpdat(ukpdat), .save(save), .save_r(save_r), .save_b(save_b),
-    .connected(connected), .conerr(conerr));
+    .connected(connected), .conerr(conerr), .ukpidx(ukpidx));
 
-reg  [3:0] rcvct;		// counter for recv data
 reg  data_strobe_r, data_rdy_r;	// delayed data_strobe and data_rdy
 reg  [7:0] dat[8];		// data in last response
 assign dbg_hid_report = {dat[7], dat[6], dat[5], dat[4], dat[3], dat[2], dat[1], dat[0]};
@@ -145,6 +150,7 @@ initial begin
     mouse_btn = 8'h00; mouse_dx = 8'sh00; mouse_dy = 8'sh00;
     game_l = 0; game_r = 0; game_u = 0; game_d = 0;
     game_a = 0; game_b = 0; game_x = 0; game_y = 0; game_sel = 0; game_sta = 0;
+    game_tl = 0; game_tr = 0;                                   // hook H9
 end
 
 always @(posedge usbclk) begin : process_in_data
@@ -154,13 +160,12 @@ always @(posedge usbclk) begin : process_in_data
         // clear mouse movement for later
         mouse_dx <= 0; mouse_dy <= 0;
     end
-    if(~data_rdy) rcvct <= 0;
-    else begin
+    if(data_rdy) begin
         if(data_strobe && ~data_strobe_r) begin  // rising edge of ukp data strobe
-            dat[rcvct] <= ukpdat;
+            dat[ukpidx] <= ukpdat;
 
             if (typ == 1) begin     // keyboard
-                case (rcvct)
+                case (ukpidx)
                 0: key_modifiers <= ukpdat;
                 2: key1 <= ukpdat;
                 3: key2 <= ukpdat;
@@ -168,7 +173,7 @@ always @(posedge usbclk) begin : process_in_data
                 5: key4 <= ukpdat;
                 endcase
             end else if (typ == 2) begin    // mouse
-                case (rcvct)
+                case (ukpidx)
                 0: mouse_btn <= ukpdat;
                 1: mouse_dx <= ukpdat;
                 2: mouse_dy <= ukpdat;
@@ -182,7 +187,7 @@ always @(posedge usbclk) begin : process_in_data
                 // Variations:
                 // - Some gamepads uses d[0] and d[1] for X and Y axis.
                 // - Some transmits a different set when d[0][1:0] is 2 (a dualshock adapater)
-                case (rcvct)
+                case (ukpidx)
                 0: begin
                     if (ukpdat[1:0] != 2'b10) begin
                         // for DualShock2 adapter, 2'b10 marks an irrelevant record
@@ -214,12 +219,13 @@ always @(posedge usbclk) begin : process_in_data
                 6: if (valid) begin
                     game_sel <= ukpdat[4];
                     game_sta <= ukpdat[5];
+                    game_tl  <= ukpdat[0];      // hook H9
+                    game_tr  <= ukpdat[1];
                 end
                 endcase
                 // TODO: add any special handling if needed 
                 // (using the detected controller type in 'dev')                
             end
-            rcvct <= rcvct + 1;
         end
     end
     if(~data_rdy && data_rdy_r && typ != 0)    // falling edge of ukp data ready
@@ -255,6 +261,7 @@ module ukp #(parameter MS_TICKS = 12001) (
     output usb_oe,
     output reg ukprdy, 			// data frame is outputing
     output ukpstb,				// strobe for a byte within the frame
+    output [2:0] ukpidx,		// hook H8: WHICH byte, from bitadr (see below)
     output reg [7:0] ukpdat,	// output data when ukpstb=1
     output reg save,			// save: regs[save_r] <= dat[save_b]
     output reg [3:0] save_r, save_b,
@@ -295,6 +302,7 @@ module ukp #(parameter MS_TICKS = 12001) (
     reg [13:0] interval = 0;
     reg [6:0] bitadr = 0;				// 0~127
     reg [7:0] data = 0;					// received data
+
     reg [2:0] nrztxct, nrzrxct;			// NRZI trans/recv count for bit stuffing
     wire interval_cy = interval == MS_TICKS;   // hook H6
     wire next = ~(state == S_OPCODE & (
@@ -450,7 +458,44 @@ module ukp #(parameter MS_TICKS = 12001) (
     assign usb_oe = ug;
     assign sample = inst_ready & state == S_OPCODE & inst == 4'b1101 & timing == 4; // IN
     assign record = connected & ~nak;
+    // The byte strobe. Two things about it were investigated and are NOT bugs -
+    // recorded so they are not re-investigated (2026-08-16):
+    //  * a STUFF BIT at this bit position does not double-strobe. bitadr does
+    //    freeze across a stuff bit, so the condition is visited twice, but
+    //    ~nrzon suppresses exactly one of the two visits: nrzon is still 0
+    //    during the stuff bit (so the strobe fires there) and is set at that
+    //    bit's sample (so it is suppressed for the following real bit). One
+    //    strobe either way. sim/usb's `stuffdup` leg pins this with a payload
+    //    whose stuffing lands exactly here.
+    //  * a DEVICE AT THE EDGE OF ITS BIT-RATE TOLERANCE does not either. The
+    //    `skew_*` legs run the device at +/-1.5%, the full low-speed spec
+    //    allowance, and the strobe stays one-per-byte.
     assign ukpstb = ~nrzon & ukprdy & (bitadr[2:0] == 3'b100) & (timing == 2);
+
+    // LOCAL HOOK H8 (ocbk): the byte's POSITION, derived from bitadr instead of
+    // counted by the consumer.
+    //
+    // Upstream's wrapper counted strobes (rcvct++ per strobe), which makes the
+    // capture depend on the strobe firing exactly once per byte. On the board it
+    // does not: a frame arrives with a byte DUPLICATED at index 3 or 4, so every
+    // later byte lands one slot late. That was confirmed with a sticky
+    // signature on the LEDs - byte 6 goes non-zero, which is only reachable by
+    // a one-byte-late shift, with no re-enumeration and byte 2 still clean.
+    // The bit stream itself is fine (CRC16, hook H7, passes), so it is purely a
+    // capture fault.
+    //
+    // bitadr is authoritative: the strobe for payload byte i is always at
+    // bitadr == 28 + 8i, so bitadr[6:3] == 3 + i. Addressing the byte by that
+    // makes a duplicate strobe write the SAME slot twice - harmless - instead of
+    // advancing a counter. It is immune to a lost strobe for the same reason.
+    // ukprdy bounds bitadr to 28..84 here, i.e. i to 0..7.
+    //
+    // This is deliberately NOT a fix for whatever produces the extra strobe -
+    // three candidate mechanisms were tested in sim and all three are ruled out
+    // (packet corruption, a stuff bit on the strobe, the device at +/-1.5%).
+    // Addressing by position removes the dependence on knowing.
+    wire [3:0] ukpidx4 = bitadr[6:3] - 4'd3;
+    assign ukpidx = ukpidx4[2:0];
     // LOCAL HOOK H4: dpi/dmi/ukprdyd/nakd were DECLARED HERE, after their uses
     // above. Quartus accepts that; Icarus does not ("declaration after use"), so
     // the four moved up to the other reg declarations at the head of ukp. Purely

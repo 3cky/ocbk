@@ -190,13 +190,27 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   wins) against a non-zero `joy_word` on a full SoC with real SDRAM, and both
   mutations — merge dropped, gate dropped — are recorded in its runner header
   as verified by hand.
-- `sim/usb/run.sh` — the **USB HID host** oracle, **eight legs,
-  mutation-tested x14 plus one ROM-image mutation**; `sim/usb/README.md` carries
+- `sim/usb/run.sh` — the **USB HID host** oracle, **ten legs plus two skew
+  builds, mutation-tested x20 plus one ROM-image mutation**; `sim/usb/README.md` carries
   the pinned contract. The vendored low-speed host runs at its real 12.081 MHz
   rate against `usb_ls_device.v`, a behavioural low-speed HID device (line
   states, NRZI, bit stuffing, CRC5/CRC16, the SETUP/IN/DATA/handshake script).
-  Legs: `kbd`, `mouse`, `setproto`, `stallproto`, `pad`, `nak`, `unplug`, and
-  `slow`.
+  Legs: `kbd`, `mouse`, `setproto`, `stallproto`, `pad`, `pad_real`, `stuffdup`,
+  `dupstrobe`, `nak`, `unplug`, `skew` (±1.5 %) and `slow`. `pad_real` also
+  carries the **shoulder-trigger** frames (byte 6 `0x01`/`0x02`, hook H9) and
+  drives `0x33` to pin that they and START/SELECT share the byte without
+  disturbing each other.
+  **`dupstrobe` is the leg that caught the board bug**, and it did so by
+  injecting the EFFECT (one spurious byte strobe) rather than modelling a cause —
+  three candidate causes were tested here and all three were wrong. Every other
+  leg feeds the host a well-behaved strobe, which is why a genuinely broken
+  wrapper passed the whole suite, and the board, three times.
+  **`pad_real` is built from a real capture** — every frame is a verbatim
+  `usbhid-dump` line from the reference gamepad (`081f:e401`), taken before any
+  consumer RTL was written. The wrapper has no report-descriptor parser and its
+  gamepad table is explicitly a guess, so this is what turns the guess into a
+  tested contract; `U16` in particular (the byte-3/4 threshold) is killable only
+  by frames a synthetic leg would never send.
   **`setproto` is the one that came from a board run, and it is the model for
   how a field bug should land here.** Three mice misbehaved three different ways
   because the host left them in *report* protocol while the wrapper decodes
@@ -264,6 +278,40 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   README: which write bit is СБРОС (the sheets give connector pin 9, not the
   cable's mapping onto port output bits — `RST_BIT`), and the *feel* of `STEP`,
   which is a hardware calibration rather than a contract.
+- `sim/gamepad/run.sh` — the **USB gamepad** oracle, **one leg,
+  mutation-tested x22**; `sim/gamepad/README.md` carries the pinned contract.
+  `bk_gamepad` is the USB twin of `bk_joystick` — a pure level translator whose
+  word is OR-ed into `joy_word` at the TOP level, so `qbus_mem` is untouched and
+  every golden stays byte-identical. The leg walks all ten host outputs onto
+  their BK bits (the remap is the error surface: the host says `l/r/u/d`, the BK
+  word is `U,R,D,L`), pins the button folding (X and the R shoulder trigger onto
+  A, Y and the L trigger onto B), and checks the upper byte
+  on EVERY edge — player 2 must be unreachable by any input combination, not
+  just the ones a section drives.
+  **Two of its properties are load-bearing and each came from a surviving
+  mutation**: every input starts HELD at t=0 (the state a board powers up into
+  after a pad was used and unplugged, since the host never clears `game_*`) and
+  `clk` takes its first edge BEFORE `usb_clk` (the two dividers have no defined
+  start order, so the BK side can sample before the USB side has run). With the
+  inputs released instead, a wrongly-armed flop leaks a zero payload and looks
+  correct.
+  **The typ exclusion is pinned from both ends**: section 2 here requires
+  `typ` 0/1/2 to contribute nothing to `pad_word`, and `sim/mouse`'s `gate` leg
+  requires `typ` 3 to contribute nothing to `mouse_word`. The report DECODE is
+  not this oracle's job — `sim/usb`'s `pad`/`pad_real` legs own it.
+  **It has already earned its keep — from the board, not from review.** With
+  nothing pressed, BK bit 6 flickered at random on hardware and not on a PC.
+  Two causes: the payload was *sampled* rather than latched at the report pulse
+  (`game_*` are levels only BETWEEN reports — the wrapper rewrites them byte by
+  byte over ~43 µs), and, because this host checks **no CRC**, a single frame
+  corrupted on the wire was decoded as a real report. The decode surfaces that
+  as phantom BUTTONS first, since a direction needs an exact byte value while a
+  button is an unvalidated single-bit pick — on the reference pad a one-bit-early
+  slip fires `game_y` alone, which is exactly BK bit 6. Sections 7b and 7c are
+  the regressions, `G7` (filter removed) and `G10` (sampled not latched) the
+  mutations. 7c injects an **arbitrary** bad frame rather than modelling the
+  corruption, so it holds whatever the cause turns out to be, and it also
+  requires a genuine repeated change to still land.
 - `sim/run_clkgen.sh` — the Phase-7 `cpu_clkgen` unit oracle: BK-0010 (/32)
   mode **bit-identical** to a replica of the pre-Phase-7 `divc[4]` tap
   (enables included), the /24 BK-0011M rate exact, and a retarget sweep (no
