@@ -20,6 +20,7 @@ greybox_tmp/
 *.fit.*
 *.asm.*
 *.qpf.bak
+*.qdf
 
 # Simulation outputs
 *.vvp

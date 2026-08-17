@@ -130,11 +130,11 @@ and reset for a plain machine.
 ## Building and flashing
 
 ```
-make          # build the bitstream (Quartus II 11.0) -> ocbk.pof
+make          # build the bitstream (Quartus II 11.0sp1) -> ocbk.pof
 make flash    # write it to the board's config flash over USB-Blaster
 ```
 
-Needs Quartus II 11.0 at `/opt/altera/11.0/quartus` (override with
+Needs Quartus II 11.0sp1 at `/opt/altera/11.0sp1/quartus` (override with
 `QUARTUS_HOME=`). Flashing is Active Serial over a USB-Blaster; it programs
 the FPGA configuration *and* the BK ROM images in one shot, so the board comes
 up standalone afterwards.

@@ -1,6 +1,6 @@
 PROJECT  := ocbk
 
-QUARTUS_HOME ?= /opt/altera/11.0/quartus
+QUARTUS_HOME ?= /opt/altera/11.0sp1/quartus
 QUARTUS_BIN  := $(QUARTUS_HOME)/bin
 
 QUARTUS_MAP  := $(QUARTUS_BIN)/quartus_map
