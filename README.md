@@ -144,45 +144,12 @@ automatically - nothing to load at runtime. If that image is ever corrupt the
 board refuses to run the CPU and blinks the power LED rather than booting
 something broken.
 
-### Building without installing Quartus
+## Prebuilt firmware
 
-The toolchain is also available as a container image, so you can build the
-firmware without a local Quartus:
-
-```
-make mem/ram_test.hex mem/boot_blob.hex mem/boot_blob11.hex mem/usb_hid_host_rom.hex
-docker run --rm -v "$PWD:/build" -w /build -e HOME=/tmp \
-  ghcr.io/3cky/quartus:11.0 \
-  sh -c 'make -o mem/ram_test.hex -o mem/boot_blob.hex -o mem/boot_blob11.hex \
-              -o mem/usb_hid_host_rom.hex QUARTUS_HOME="$QUARTUS_ROOTDIR" compile'
-```
-
-The memory images are generated first, outside the container, because the
-image's Python is older than the generators need. The result is bit-identical
-to a local Quartus 11.0sp1 build.
-
-### Continuous integration
-
-Every push builds the firmware exactly this way and uploads `ocbk.pof` as a
-workflow artifact, so a ready-to-flash image can be downloaded from any run
-without building anything locally. Pushing a `v*` tag additionally drafts a
-release with the `.pof` attached.
-
-The build also fails on any negative timing slack. That matters more here than
-it looks: the design sits at 76 % of the device and is placement-fragile, so a
-timing regression does not show up as a failed simulation - it shows up as a
-board that will not boot.
-
-## Under the hood
-
-It fits in **9,133 of 12,060 logic elements (76 %)**, 4 memory blocks and the
-board's single PLL.
-
-Developer documentation is in **[doc/dev/](doc/dev/)**, one file per subsystem -
-the architecture, the platform constraints, the memory map, the per-module
-design rules and the simulation oracles that keep the timing honest. Start with
-**[doc/dev/platform.md](doc/dev/platform.md)**; **[CLAUDE.md](CLAUDE.md)** is
-the index and the list of rules a change must not break.
+Latest release could be downloaded from the [releases page](https://github.com/3cky/ocbk/releases/latest)
+or [directly](https://github.com/3cky/ocbk/releases/latest/download/ocbk.pof).
+Development version could be downloaded from the artifacts of
+[build workflow](https://github.com/3cky/ocbk/actions/workflows/build.yml?query=branch%3Amain+is%3Asuccess).
 
 ## Credits
 
