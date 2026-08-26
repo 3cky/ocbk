@@ -175,9 +175,10 @@ doc/                bk0011m.sch, smk64.mac; doc/dev/ = this documentation
 not the directory order and must not be shuffled; `ocbk.f` (the slang/verilator
 filelist) mirrors the same set and must be kept in sync with it.
 
-Keep comments concise but precise and clear. Update comments every time the
-corresponding code is changed. Avoid using all-uppercase in comments for emphasis
-except situations where it is absolutely required.
+## Style guidelines
+
+Use ASD-STE100 Simplified Technical English rules for RTL and testbench comments.
+Update comments every time the corresponding code is changed.
 
 ## Build & test
 
@@ -189,7 +190,7 @@ make clean     # remove build intermediates
 ```
 
 `make sim` needs Icarus Verilog; the FPGA build needs Quartus II 11.0 at
-`/opt/altera/11.0/quartus` (override `QUARTUS_HOME=`). Run individual Quartus
+`/opt/altera/11.0sp1/quartus` (override `QUARTUS_HOME=`). Run individual Quartus
 stages directly when iterating, e.g. `quartus_map ocbk.qpf`, `quartus_sta ocbk.qpf`.
 
 Some oracles are **slow and outside `make sim`** — `sim/smktime`, `sim/vregtime`,
