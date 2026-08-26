@@ -155,11 +155,14 @@ Development version could be downloaded from the artifacts of
 
 - The **1801VM1** CPU and **1801VP1-037/014** chip models are reverse-engineered
   gate-level designs from the [cpu11](https://github.com/1801BM1/cpu11) and
-  [k1801](https://github.com/1801BM1/k1801) projects - the reason this can be
-  cycle-accurate at all rather than merely compatible.
+  [k1801](https://github.com/1801BM1/k1801) projects.
 - YM2149 / AY-3-8910 PSG core was adapted from [BK0011M for MiSTer Board](https://github.com/MiSTer-devel/BK0011M_MiSTer/) project.
 - The board bring-up (clocking, SDRAM, VGA) builds on **esemsx3** from
   [ocm-pld-dev](https://github.com/gnogni/ocm-pld-dev), the 1chipMSX firmware
   project.
 - The USB side is **[usb_hid_host](https://github.com/nand2mario/usb_hid_host)**
   by nand2mario.
+
+## License
+
+MIT - see [LICENSE](LICENSE).
