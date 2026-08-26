@@ -144,16 +144,12 @@ automatically - nothing to load at runtime. If that image is ever corrupt the
 board refuses to run the CPU and blinks the power LED rather than booting
 something broken.
 
-## Under the hood
+## Prebuilt firmware
 
-It fits in **9,133 of 12,060 logic elements (76 %)**, 4 memory blocks and the
-board's single PLL.
-
-Developer documentation is in **[doc/dev/](doc/dev/)**, one file per subsystem -
-the architecture, the platform constraints, the memory map, the per-module
-design rules and the simulation oracles that keep the timing honest. Start with
-**[doc/dev/platform.md](doc/dev/platform.md)**; **[CLAUDE.md](CLAUDE.md)** is
-the index and the list of rules a change must not break.
+Latest release could be downloaded from the [releases page](https://github.com/3cky/ocbk/releases/latest)
+or [directly](https://github.com/3cky/ocbk/releases/latest/download/ocbk.pof).
+Development version could be downloaded from the artifacts of
+[build workflow](https://github.com/3cky/ocbk/actions/workflows/build.yml?query=branch%3Amain+is%3Asuccess).
 
 ## Credits
 

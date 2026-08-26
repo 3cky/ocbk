@@ -1,0 +1,221 @@
+# This workflow builds the flashable firmware (ocbk.pof). The image
+# ghcr.io/3cky/quartus:11.0 supplies the pinned toolchain, Quartus II 11.0sp1
+# Web Edition.
+#
+# The job does not use a job-level `container:`. There are two separate reasons.
+# The image's debian:stretch base causes both of them:
+#
+#   * The image has python3 3.5.3. The scripts mem/gen_*.py use f-strings, which
+#     need python3 3.6 or later. The generators cannot run in the image.
+#   * The image has glibc 2.24. The node20 action runtime needs glibc 2.28 or
+#     later. actions/checkout and actions/upload-artifact cannot run in the
+#     image.
+#
+# Therefore the runner's own python3 generates the memory images. Only the
+# Quartus steps run in the container. The container reads the source tree
+# through a bind mount at /build.
+name: build
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+    # These filters apply to pull requests only. A filter on `push` also
+    # applies to tags. A commit that changes only documentation can carry a
+    # release tag, and that commit must still build.
+    paths-ignore:
+      - '**.md'
+      - 'doc/**'
+      - '.claude/**'
+  workflow_dispatch:
+
+# Cancel a superseded pull request run. Never cancel a build of main or of a
+# tag.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  bitstream:
+    name: Quartus compile
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write          # only the release step writes
+    env:
+      QUARTUS_IMAGE: ghcr.io/3cky/quartus:11.0
+      GEN_HEX: mem/ram_test.hex mem/boot_blob.hex mem/boot_blob11.hex mem/usb_hid_host_rom.hex
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The default setting writes a bearer token into .git/config. The
+          # container reads that file through the bind mount.
+          persist-credentials: false
+
+      - name: Generate memory images (runner python3)
+        run: |
+          set -euo pipefail
+          python3 -V
+          make $GEN_HEX
+          # Make these files newer than every source file. Container-side make
+          # then has no reason to run the generators. The -o flags below give
+          # the same protection by a different method.
+          touch $GEN_HEX
+          ls -l $GEN_HEX
+
+      - name: Check the committed USB microcode matches its source
+        run: |
+          set -euo pipefail
+          # Git tracks mem/usb_hid_host_rom.hex. The Makefile also generates
+          # it from mem/usb_hid_host_rom.s. Without this check, an edited .s
+          # file that nobody re-assembled can reach the firmware.
+          rm -f mem/usb_hid_host_rom.hex
+          make mem/usb_hid_host_rom.hex
+          git diff --exit-code -- mem/usb_hid_host_rom.hex \
+            || { echo "::error file=mem/usb_hid_host_rom.hex::committed microcode does not match mem/usb_hid_host_rom.s - re-run 'make mem/usb_hid_host_rom.hex' and commit"; exit 1; }
+          touch mem/usb_hid_host_rom.hex
+
+      - name: Pull the Quartus image
+        run: |
+          set -euo pipefail
+          docker pull "$QUARTUS_IMAGE"
+          docker image inspect --format '{{index .RepoDigests 0}}' "$QUARTUS_IMAGE"
+
+      - name: Compile (map -> fit -> sta -> asm -> cpf)
+        run: |
+          set -euo pipefail
+          # The -o (--old-file) flag prevents container-side make from remaking
+          # the generated hex files. The mtimes after a checkout do not matter.
+          # Git tracks mem/usb_hid_host_rom.hex and the Makefile also generates
+          # it, so mtimes alone give an unreliable result.
+          old=
+          for f in $GEN_HEX; do old="$old -o $f"; done
+          # This command sets no -e GITHUB_TOKEN option and no --env-file
+          # option. docker run inherits no variables from the runner. Therefore
+          # the image entrypoint does not run `gh auth setup-git`. Do not add an
+          # -e option here.
+          docker run --rm \
+            -v "$PWD:/build" -w /build \
+            -e HOME=/tmp -e TMPDIR=/tmp \
+            "$QUARTUS_IMAGE" \
+            sh -c "make $old QUARTUS_HOME=\"\$QUARTUS_ROOTDIR\" compile"
+
+      - name: Verify the ROM blobs inside the POF
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD:/build" -w /build \
+            -e HOME=/tmp -e TMPDIR=/tmp \
+            "$QUARTUS_IMAGE" \
+            sh -c "make -o mem/boot_blob.hex QUARTUS_HOME=\"\$QUARTUS_ROOTDIR\" blob-check"
+
+      - name: Reclaim ownership of the container's output
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
+
+      - name: Timing and resource gate
+        if: always()
+        run: |
+          set -uo pipefail
+          FIT=ocbk.fit.summary
+          STA=ocbk.sta.summary
+
+          for f in "$FIT" "$STA"; do
+            [ -s "$f" ] || { echo "::error::$f missing or empty - the build did not get that far"; exit 1; }
+          done
+
+          grep -qE '^Fitter Status *: *Successful' "$FIT" \
+            || { echo "::error::Fitter did not succeed"; head -3 "$FIT"; exit 1; }
+
+          # The :11.0 tag can change. Only this exact build reproduces the
+          # firmware that ships.
+          grep -qE '^Quartus II Version *: *11\.0 Build 208 .*SP 1' "$FIT" \
+            || { echo "::error::unexpected Quartus version"; grep '^Quartus II Version' "$FIT"; exit 1; }
+
+          # Clock names contain the character '|', for example
+          # altpll_inst|pll|clk[0]. Therefore this step writes fenced code
+          # blocks and not markdown tables.
+          {
+            echo '## Fit'
+            echo '```'
+            awk '/^(Fitter Status|Quartus II Version|Family|Device|Total)/' "$FIT"
+            [ -f ocbk.pof ] && echo "POF sha256          : $(sha256sum ocbk.pof | cut -d' ' -f1)"
+            echo '```'
+            echo '## Timing'
+            echo '```'
+            awk '/^Type[ ]*:/  { sub(/^Type[ ]*:[ ]*/,""); t=$0 }
+                 /^Slack[ ]*:/ { s=$3 }
+                 /^TNS[ ]*:/   { n++; printf "%-42s slack %9s  TNS %s\n", t, s, $3 }
+                 END           { if (n==0) print "NO STANZAS PARSED" }' "$STA"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Do not use the exit code of quartus_sta. The Makefile runs
+          # quartus_asm after it in all conditions, so a build with a violation
+          # still produces a POF. This step reads the numbers instead. It checks
+          # all five analysis types. A summary that it cannot parse is a
+          # failure.
+          awk '/^Type[ ]*:/  { sub(/^Type[ ]*:[ ]*/,""); t=$0 }
+               /^Slack[ ]*:/ { s=$3 }
+               /^TNS[ ]*:/   { n++
+                               if (s+0 < 0 || $3+0 < 0) {
+                                 bad=1
+                                 printf "::error::TIMING VIOLATED: %s slack=%s TNS=%s\n", t, s, $3
+                               } }
+               END           { if (n==0) { print "::error::no timing stanzas parsed from the STA summary"; exit 1 }
+                               printf "%d timing corners checked\n", n
+                               exit bad+0 }' "$STA"
+
+      - name: Checksums
+        if: always()
+        run: sha256sum ocbk.pof ocbk.sof 2>/dev/null | tee SHA256SUMS || true
+
+      - name: Upload the bitstream
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bitstream
+          if-no-files-found: warn
+          retention-days: ${{ github.ref == 'refs/heads/main' && 90 || 14 }}
+          path: |
+            ocbk.pof
+            ocbk.sof
+            SHA256SUMS
+
+      - name: Upload the Quartus reports
+        # This step also runs after a failure. A failed timing gate is the
+        # condition in which ocbk.sta.rpt has the most value.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quartus-reports
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ocbk.*.summary
+            ocbk.*.rpt
+            ocbk.pin
+
+      - name: Draft a release
+        # The release is a draft. Nothing ships from this project before a
+        # test on hardware. To publish immediately, remove the --draft flag.
+        # This condition contains no status function, so the implicit success()
+        # condition also applies. A tagged build that fails the timing gate
+        # produces no release.
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            -R "$GITHUB_REPOSITORY" \
+            --draft \
+            --title "$GITHUB_REF_NAME" \
+            --notes "CI build of \`$GITHUB_SHA\`." \
+            ocbk.pof ocbk.fit.summary ocbk.sta.summary
