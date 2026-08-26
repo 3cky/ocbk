@@ -12,37 +12,28 @@ QUARTUS_CPF  := $(QUARTUS_BIN)/quartus_cpf
 QUARTUS_PGM  := $(QUARTUS_BIN)/quartus_pgm
 PGM_CABLE    := USB-Blaster
 
-.PHONY: all compile sim clean distclean flash blob-check
+.PHONY: all compile clean distclean flash blob-check
 
 all: compile
 
 # --- simulation regressions (no Quartus required) -------------------------
+#
+# sim/run_all.sh runs the oracles in parallel (one process each, longest first)
+# and prints one status line per oracle plus the full transcript of any that
+# fails. It takes ~4 min on 16 cores against ~35 min serial.
+#
+#   make sim                  the whole suite
+#   make sim SIM=ref037       only the oracles whose path matches (repeatable:
+#                             SIM="ref037 video")
+#   make sim SIM_ARGS=-v      every oracle's full transcript, in list order
+#   make sim SIM_JOBS=1       serial, for debugging a runner
+#
+SIM      ?=
+SIM_ARGS ?=
+
+.PHONY: sim
 sim:
-	./sim/run_clkgen.sh
-	./sim/run_mapper.sh
-	./sim/raminit/run.sh
-	./sim/evnt/run.sh
-	./sim/bk10/run.sh
-	./sim/bk11/run.sh
-	./sim/smk/run.sh
-	./sim/ide/run.sh
-	./sim/ide/run_soc.sh
-	./sim/ide/run_sd.sh
-	./sim/romwr/run.sh
-	./sim/ref037/run.sh
-	./sim/ref014/run.sh
-	./sim/run_ps2.sh
-	./sim/run_audio.sh
-	./sim/ts/run.sh
-	./sim/covox/run.sh
-	./sim/joystick/run.sh
-	./sim/usb/run.sh
-	./sim/mouse/run.sh
-	./sim/gamepad/run.sh
-	./sim/run_sdram_arbiter.sh
-	./sim/run_sdram_cosim.sh
-	./sim/run_video.sh
-	./sim/run_epcs_boot.sh
+	./sim/run_all.sh $(SIM_ARGS) $(SIM)
 
 # --- FPGA build -----------------------------------------------------------
 compile: mem/ram_test.hex mem/boot_blob.hex mem/boot_blob11.hex mem/usb_hid_host_rom.hex

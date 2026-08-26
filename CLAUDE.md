@@ -183,11 +183,17 @@ Update comments every time the corresponding code is changed.
 ## Build & test
 
 ```
-make sim       # Icarus regressions: bk10 cycle-count oracle + slave cosim
+make sim       # Icarus regressions: the 25 oracles, in parallel (~4 min on 16 cores)
 make           # Quartus: map -> fit -> sta -> asm -> POF (ocbk.pof in the project root)
 make flash     # program EPCS4 over USB-Blaster (Active Serial; JTAG TDO not wired)
 make clean     # remove build intermediates
 ```
+
+`make sim` runs `sim/run_all.sh`, which runs the oracles as one job pool and
+prints one status line each plus the full transcript of any that fails. While
+iterating, run only what the change touches — `make sim SIM="ref037 video"` —
+and use `make sim SIM_ARGS=-v` for every transcript, `SIM_JOBS=1` for the
+serial run. → verification
 
 `make sim` needs Icarus Verilog; the FPGA build needs Quartus II 11.0 at
 `/opt/altera/11.0sp1/quartus` (override `QUARTUS_HOME=`). Run individual Quartus

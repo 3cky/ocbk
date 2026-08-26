@@ -4,6 +4,41 @@ The oracle catalogue: what each `sim/` run pins, and the rules for regenerating
 goldens. Longer per-oracle contracts live in `sim/*/README.md`.
 
 
+## How the suite runs
+
+`make sim` calls `sim/run_all.sh`. Every runner cd's to its own directory, reads
+the repository and writes only to its own `mktemp` scratch, so the suite is one
+job pool of independent processes: 25 oracles, `nproc` at a time, **longest
+first** so the makespan stays near the longest single oracle rather than
+stacking a slow one behind the queue. Serial the suite is ~35 min of CPU; on 16
+cores it is ~4 min of wall clock.
+
+The four longest runners parallelise *inside* themselves as well, through the
+same small pool in `sim/parlib.sh` (`par_init` / `par_job` / `par_wait`):
+`ref037` (14 legs, 432 s → 140 s), `run_video` (4 stage testbenches, 282 s →
+112 s), `run_epcs_boot` (3 blob legs, 207 s → 67 s) and `evnt` (2 builds + 2
+transcript legs, and 5 mutants under `--mutate`). `par_wait` **replays each
+job's output in launch order**, so a parallel transcript reads exactly like the
+serial one it replaced — and unlike the serial version it reports *every*
+failing leg, not just the first.
+
+Two rules for the runners:
+
+- **A `--regen` path must force `par_init 1`.** There a golden written by one
+  leg is read by the next, so only the ordinary diff-only run is safe to
+  parallelise. `sim/ref037/run.sh --regen-hw` does this.
+- **A leg runs in a subshell, so it must `return 1`, never `exit 1`,** and must
+  hand results back through files, not variables.
+
+Day to day, run only what the change touches: `make sim SIM="ref037 video"`
+matches oracle paths by substring. `make sim SIM_ARGS=-v` prints every
+transcript in list order; `SIM_JOBS=1` gets the fully serial run back for
+debugging a runner.
+
+The `WEIGHT` comments in `run_all.sh`'s list are measured serial seconds and
+only order the list — a stale number costs a little makespan and nothing else.
+Re-measure from the per-oracle times the run prints.
+
 Cycle accuracy is the whole point. All `make sim` oracles must stay green:
 - `sim/bk10/run.sh` — the upstream timing testbench vs `sim/bk10/golden.txt`
   (the CPU core's per-instruction cycle counts). Independent of the SDRAM work.
