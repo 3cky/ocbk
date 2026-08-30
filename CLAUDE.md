@@ -32,7 +32,8 @@ to do with.
 | `mem_mapper`'s SMK stage, `smk_ide`, `sd_backend` | [doc/dev/smk512.md](doc/dev/smk512.md) — SMK512 RAM/BIOS/IDE/SD, `N_EXT` |
 | `src/video/`, `bk_evnt` | [doc/dev/video.md](doc/dev/video.md) — framebuffer conventions, palette, 177662, EVNT/IRQ2 |
 | `src/audio/`, the CMT jack | [doc/dev/audio.md](doc/dev/audio.md) — mixer/DAC stage, TurboSound, tape |
-| `src/peripheral/` (keyboard, joysticks), `qbus_slot` | [doc/dev/peripherals.md](doc/dev/peripherals.md) |
+| `src/peripheral/` (keyboard, joysticks) | [doc/dev/peripherals.md](doc/dev/peripherals.md) |
+| `qbus_slot`, the МПИ expansion bus, the adapter board | [doc/dev/mpi.md](doc/dev/mpi.md) — the traced XT3 connector, RPLY/D8:B, the D11 input synchroniser, termination |
 | Quartus / Icarus / bus behaviour that surprised us once | [doc/dev/gotchas.md](doc/dev/gotchas.md) |
 | planning new work | [doc/dev/open-items.md](doc/dev/open-items.md) — what is deferred and why |
 

@@ -272,11 +272,21 @@ from x15 to x12 to pay for it.
   become a bounded-variance check.
 - **Keyboard reset chord** — `warm_rst_req` has the OR seam, no chord decodes
   into it.
-- **Cartridge slot** (`src/bus/qbus_slot.sv`, `SLOT_ENABLE=0`) drives nothing; the
-  pin map is commented in `ocbk_common.qsf`. Real 5V BK Q-bus hardware needs an
-  external level shifter — Cyclone I is not 5V-tolerant. If a second nVIRQ
-  source ever lands here, OR the active-high asserts and invert at the top —
-  never go back to tri-state Z (see the `tri1` gotcha).
+- **Cartridge slot / МПИ** (`src/bus/qbus_slot.sv`, `SLOT_ENABLE=0`) drives
+  nothing, and its top-level instance leaves every physical port unconnected, so
+  it synthesises away. **The real connector is now traced pin-by-pin — see
+  [mpi.md](mpi.md)**, which carries the XT3 map, the FPGA pin assignment, the
+  RPLY/D8:B topology, the D11 input-synchroniser rule, the termination values
+  and the defect list the stub must fix.
+  **The "needs an external level shifter" claim recorded here was WRONG** and is
+  corrected in that file: esemsx3 drives all 50 cartridge-slot lines straight off
+  FPGA pins with `PCI_IO ON` (the clamp diode) + 4 mA, which is how this board
+  already runs real 5 V MSX cartridges and how `ocbk_common.qsf` already treats
+  the joystick pins. The adapter board is passive. **The real electrical gap is
+  TERMINATION** — the BK board carries the 3.3 k / 2.2 k / 22 k wired-OR
+  pull-ups, ocbk is the host now, and the fabricated adapter has none of them.
+  If a second nVIRQ source ever lands here, OR the active-high asserts and invert
+  at the top — never go back to tri-state Z (see the `tri1` gotcha).
 - **CRT effects** (scanline dim / gamma) in the upscaler — the `vga_out` colour
   decode is the hook.
 - **SD data CRC16 and MMC cards** — `sd_backend` uses the SPI-default CRC
