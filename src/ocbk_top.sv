@@ -131,11 +131,14 @@ module ocbk_top (
     inout  wire         pSltInit_n,// nINIT: the host pulses it, a module may too
     output wire         pSltRom3_n,// 177716 bank state (bk11) -> module
     output wire         pSltRom4_n,
+    output wire         pSltE_n,   // the 037's E strobe: the read strobe a
+                                   //   module's top-window ROM uses (bk10)
     // Host-ROM deselect. The module pulls these to take a region away from us;
     // the adapter inverts, so they arrive active low here.
     input  wire         pSltMon10_n, // bk10 MONITOR 100000-117777
-    input  wire         pSltBas10_n, // bk10 BASIC   120000-177577
-    input  wire         pSltMon11_n, // bk11 MSTD    160000-177577
+    input  wire         pSltBas10_n, // bk10 BASIC1+2 120000-157777
+    input  wire         pSltBas2_n,  // bk10 BASIC3   160000-177577
+    input  wire         pSltMon11_n, // bk11 MSTD     160000-177577
 
     // ---- PS/2 keyboard (receive-only; pins pulled up, driven Z) ----------
     inout  wire         pPs2Clk,
@@ -641,6 +644,8 @@ module ocbk_top (
     );
     assign rply_n = (rply037_rt_n === 1'b0) ? 1'b0 : 1'bZ;
 
+    wire        e_037_n;        // the 037's E strobe, out to the МПИ slot
+
     // 037 video-side taps consumed by the video pipeline below
     wire        vid_fetch, vid_pal_stb, vid_line_en, hgate, vgate;
     wire [13:1] video_va;
@@ -666,7 +671,8 @@ module ocbk_top (
         .PIN_nCAS  (),
         .PIN_nRAS  (),
         .PIN_nWE   (),
-        .PIN_nE    (),
+        .PIN_nE    (e_037_n),      // -> qbus_slot: a module's top-window ROM
+                                   //    is read-strobed by E, not by DIN
         .PIN_nBS   (nbs_n),         // keyboard-controller select -> bk_kbd014
         .PIN_WTI   (wti_037),       // -> bk_evnt (EVNT/IRQ2 detector)
         .PIN_WTD   (),
@@ -1229,6 +1235,7 @@ module ocbk_top (
         .dout_n     (dout_n),
         .wtbt_n     (wtbt_n),
         .init_n     (init_n),
+        .e_037_n    (e_037_n),
         .rply_n     (rply_n),
         .model_bk11 (model_bk11),
         .smk_en     (smk_en),       // DIP 8 on = internal SMK512: slot stands down
@@ -1244,8 +1251,10 @@ module ocbk_top (
         .pSltInit_n (pSltInit_n),
         .pSltRom3_n (pSltRom3_n),
         .pSltRom4_n (pSltRom4_n),
+        .pSltE_n    (pSltE_n),
         .pSltMon10_n(pSltMon10_n),
         .pSltBas10_n(pSltBas10_n),
+        .pSltBas2_n (pSltBas2_n),
         .pSltMon11_n(pSltMon11_n)
     );
 

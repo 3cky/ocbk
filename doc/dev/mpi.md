@@ -5,9 +5,15 @@ connector, traced pin-by-pin from `doc/bk0011m.sch`, and the
 `src/bus/qbus_slot.sv` bridge that drives it. The internal Q-bus conventions this bridges onto are in
 [bus-memory.md](bus-memory.md); the RPLY re-timing rule is in `src/bus/bk_rply.sv`.
 
-**STATUS: the slave-only bridge is IMPLEMENTED AND SIM-GREEN; HARDWARE NOT YET
-CONFIRMED.** `src/bus/qbus_slot.sv` is live (`SLOT_ENABLE=1`), the 27 pins are
-assigned, and `sim/slot` covers it with three legs and six mutations. What is
+**STATUS: the slave-only bridge is IMPLEMENTED and PARTLY CONFIRMED ON HARDWARE
+(2026-08-30).** A real МСТД module booted the board into its FOCAL ROM at
+120000 — so the bridge, the RPLY path, the address window and the BAS deselect
+all work on real silicon. Its tests ROM at 160000 did **not** work, which
+traced to two things now fixed in RTL but still needing **two adapter wires**
+(A29 and A30 — see the deselect section).
+
+`src/bus/qbus_slot.sv` is live (`SLOT_ENABLE=1`), 29 pins are assigned, and
+`sim/slot` covers it with three legs and **eight** mutations. What is
 implemented is **data transfer, RPLY and the host-ROM deselect** — no
 interrupts, no DMA/arbitration, no IAK chain. **Do not merge to `main` until a
 real SMK512 runs on the board**, and read the termination note below before
@@ -220,6 +226,93 @@ Consequences for the RTL:
   `D14.26`/`D14.27` (RA0/RA1) likewise — so ocbk's `pin_dmgi_n(1'b1)`,
   `pin_sp_n(1'b1)` and `pin_pa_n(2'b11)` tie-offs are authentic, not
   simplifications.
+
+## The host-ROM deselect: four lines, four different windows
+
+**CONFIRMED ON HARDWARE 2026-08-30, the hard way.** Traced from
+`doc/bk0010-01.sch` and `doc/smk512-scheme-v1.0.sch` after a real МСТД module
+booted into FOCAL but died with a bus error on its tests ROM.
+
+A BK-0010-01 has **four** KR1801RE2A mask ROMs, and each is silenced by a
+different mechanism:
+
+| ROM | part | window | CE | DIN |
+|---|---|---|---|---|
+| DS17 | 017 | 100000–117777 MONITOR | **GND** | S1-18 (normal) |
+| DS18 | 106 | 120000–137777 BASIC | **XT3.A14** | S1-18 |
+| DS20 | 107 | 140000–157777 BASIC | **XT3.A14** | S1-18 |
+| DS19 | 108 | 160000–177577 BASIC | **GND** | **S1-46 = XT3.A29 = E via R60** |
+
+Two things fall out, and both were wrong in the first implementation:
+
+- **`BAS` (A14) covers 120000–157777 only** — segs 2–5. It is one CE shared by
+  DS18 and DS20. Giving it segs 6,7 as well makes ocbk stand down over a window
+  no module has claimed, and the CPU bus-times-out there.
+- **The 160000 window has no CE at all.** It is silenced by taking away its READ
+  STROBE: DS19's DIN comes from `XT3.A29`, which is the 037's **E** through the
+  series resistor `R60`, so a module that holds A29 overrides R60 and wins.
+
+`DS17`'s CE is hardwired to GND, so **MON10 and M11 are user modifications** —
+wires the SMK512 installation adds. That is why they appear on no stock
+schematic, and it is why they are real rather than invented.
+
+The SMK512's own bus connector (`P5`) drives all four into its CPLD:
+
+```
+P5.B1  = MON10 -> U1.40      P5.A14 = BAS   -> U1.43
+P5.B6  = M11   -> U1.41      P5.A29 = BAS2  -> U1.120
+```
+
+### The resulting map
+
+| line | МПИ | FPGA | disables | segs | model |
+|---|---|---|---|---|---|
+| MON10 | B1 | 180 | MONITOR 100000–117777 | 0,1 | bk10 |
+| BAS | A14 | 175 | BASIC 120000–**157777** | 2,3,4,5 | bk10 |
+| **BAS2** | **A29** | **160** | BASIC 160000–177577 | 6,7 | bk10 |
+| M11 | B6 | 174 | MSTD 160000–177577 | 6,7 | bk11 |
+
+All four arrive **active low**: they are asserted by pulling the МПИ line to
+**+5 V**, and the adapter inverts each through a BSS138. That inversion is not
+cosmetic — a static 5 V into a PCI-clamped 3.3 V pad would conduct through the
+clamp continuously, unlike the bus lines where 5 V is only transient.
+
+### E, and why a module can be mute without it
+
+`va_037_sync` already produces the strobe, byte-identically to the reference
+netlist (`va_037_sync.sv:207`):
+
+```systemverilog
+assign PIN_nE = PIN_nSYNC | PIN_nDIN | (A[15:7] == (16'o177600 >> 7));
+```
+
+— a read cycle outside the I/O page, which is exactly what makes it safe as the
+strobe for a window that abuts the I/O page at 177600. It was left unconnected
+in `ocbk_top` until 2026-08-30.
+
+**A module's top-window ROM reads the raw E on `XT3.A30`.** МСТД does exactly
+that: its `D1` (RE2A-019, the tests ROM) takes its DIN from A30 while its `D2`
+(RE2A-018, FOCAL) uses the normal `~DIN` on A23. So without E exported, the
+tests ROM has no strobe, never drives data, never replies — a bus error, while
+FOCAL works perfectly. That is the failure the board showed, and mutation
+**S7** in `sim/slot` now pins it.
+
+The SMK512 does **not** connect A30, so E matters for МСТД-class modules only.
+It does connect A22 (`P4O` → U1.91), but as an input — on a real BK-0011M that
+pin is driven push-pull by `D36`, so ocbk driving it is correct.
+
+### Two adapter wires
+
+Neither A29 nor A30 is on the fabricated adapter. Both need adding, to pads
+that are free at both ends:
+
+| МПИ | X1 pad | → MSX pin | FPGA | direction | needed by |
+|---|---|---|---|---|---|
+| **A29** (BAS2) | 36 | P1.24 (A8) | **160** | in, **via a BSS138** like the other three | SMK512 **and** МСТД |
+| **A30** (E) | 35 | P1.22 (A6) | **158** | out, direct — 3.3 V LVTTL clears 5 V TTL V<sub>IH</sub>, and `PIN_nE` is already the right polarity | МСТД-class modules |
+
+A29 is the one that matters for the SMK512: without it a real SMK512 hits the
+same wall at 160000 that МСТД did.
 
 ## Termination — mostly ocbk's job, but the board helps on the net that matters
 

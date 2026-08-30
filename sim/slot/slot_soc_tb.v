@@ -39,6 +39,7 @@ module slot_soc_tb;
     localparam [15:0] ROMSTUBW = 16'o000137;   // ROM word 0 (JMP) - MUST match
     localparam [15:0] ROMSTUB1 = 16'o001000;   //   mem/gen_slot_test.py
     localparam [15:0] HOSTROM  = 16'o017171;   // the host BASIC word at 120000
+    localparam [15:0] HOSTROM2 = 16'o104405;   // basic10_3.rom word 0, at 160000
 
     reg noreply, dip8;
     initial begin
@@ -197,13 +198,14 @@ module slot_soc_tb;
     // ---- THE BRIDGE UNDER TEST + the module on the far side -----------------
     tri1 [15:0] pSltAd;          // tri1 = the .qsf's WEAK_PULL_UP_RESISTOR
     wire        pSltSync_n, pSltDin_n, pSltDout_n, pSltWtbt_n;
-    wire        pSltRply_n, pSltInit_n, pSltRom3_n, pSltRom4_n;
-    wire        pSltMon10_n, pSltBas10_n, pSltMon11_n;
+    wire        pSltRply_n, pSltInit_n, pSltRom3_n, pSltRom4_n, pSltE_n;
+    wire        pSltMon10_n, pSltBas10_n, pSltBas2_n, pSltMon11_n;
 
     // The .qsf gives every one of these pads a weak pull-up, which is what
     // makes an EMPTY connector read deasserted. tri1 is that pull-up.
     tri1        slt_rply = pSltRply_n;
     tri1        slt_m10  = pSltMon10_n;
+    tri1        slt_b2   = pSltBas2_n;
     tri1        slt_b10  = pSltBas10_n;
     tri1        slt_m11  = pSltMon11_n;
 
@@ -216,6 +218,7 @@ module slot_soc_tb;
         .dout_n     (dout),
         .wtbt_n     (wtbt),
         .init_n     (init),
+        .e_037_n    (va_ne),        // the 037's E -> the slot's top-window strobe
         .rply_n     (rply),
         .model_bk11 (1'b0),
         .smk_en     (dip8),
@@ -231,8 +234,10 @@ module slot_soc_tb;
         .pSltInit_n (pSltInit_n),
         .pSltRom3_n (pSltRom3_n),
         .pSltRom4_n (pSltRom4_n),
+        .pSltE_n    (pSltE_n),
         .pSltMon10_n(slt_m10),
         .pSltBas10_n(slt_b10),
+        .pSltBas2_n (slt_b2),
         .pSltMon11_n(slt_m11)
     );
 
@@ -244,10 +249,12 @@ module slot_soc_tb;
         .pSltDin_n  (pSltDin_n),
         .pSltDout_n (pSltDout_n),
         .pSltWtbt_n (pSltWtbt_n),
+        .pSltE_n    (pSltE_n),
         .pSltRply_n (slt_rply),
         .pSltInit_n (pSltInit_n),
         .pSltMon10_n(slt_m10),
         .pSltBas10_n(slt_b10),
+        .pSltBas2_n (slt_b2),
         .pSltMon11_n(slt_m11),
         .no_reply   (noreply)        // +dip8 keeps the module LIVE: the
                                      // misconfiguration is what we are testing
@@ -363,6 +370,9 @@ module slot_soc_tb;
         // The host's own BASIC word at 120000, so the deselect can be checked
         // in BOTH directions: module pattern with BAS10 on, this with it off.
         u_mem.mem['h5000] = HOSTROM;
+        // ...and at 160000 (SDRAM word addr[15:1] = 0x7000), so the BAS2 leg
+        // can check the E-strobed window in both directions too.
+        u_mem.mem['h7000] = HOSTROM2;
     end
 
     // ---- reset (wait SDRAM init) + watchdog ---------------------------------

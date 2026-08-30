@@ -451,12 +451,28 @@ set_location_assignment PIN_138 -to pSltInit_n
 # ---- 177716 window-1 ROM socket selects (host -> module) -----------------
 set_location_assignment PIN_122 -to pSltRom3_n
 set_location_assignment PIN_161 -to pSltRom4_n
+# ---- the 037's E strobe (host -> module) ---------------------------------
+# On a BK-0010 the TOP ROM window (160000-177577) is read-strobed by E, not by
+# DIN: the machine's own DS19 takes its DIN from XT3.A29 (= E through R60), and
+# a module reads the raw E on XT3.A30 to strobe its replacement ROM. МСТД does
+# exactly that. NOT on the stock adapter - needs a wire from X1 pad 35 (A30) to
+# the MSX edge pin that lands here.
+set_location_assignment PIN_158 -to pSltE_n
+
 # ---- host-ROM deselect (module -> host; inverted by the adapter) ---------
 # MON10/BAS10 are BK-0010 signals and MON11 is an ocbk/adapter extension; a
 # real BK-0011M connector has no pin for any of them. qbus_slot model-gates
 # them so a module cannot deselect a ROM the real machine could not.
+# Four lines, and each covers a DIFFERENT ROM - see qbus_slot.sv's table,
+# traced from doc/bk0010-01.sch and doc/smk512-scheme-v1.0.sch. BAS covers
+# 120000-157777 only; the 160000 window is BAS2's, and a module that asserts
+# BAS without BAS2 leaves 160000 owned by the host.
+# BAS2 is NOT on the stock adapter - needs a wire from X1 pad 36 (A29) plus a
+# BSS138 like the other three, since these lines are asserted by pulling to
+# +5V and a static 5V into a PCI-clamped pad would conduct continuously.
 set_location_assignment PIN_180 -to pSltMon10_n
 set_location_assignment PIN_175 -to pSltBas10_n
+set_location_assignment PIN_160 -to pSltBas2_n
 set_location_assignment PIN_174 -to pSltMon11_n
 
 # ---- I/O standard: 5V-tolerant via the PCI clamp, 4mA, pulled up ---------
@@ -477,6 +493,8 @@ set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pSltRom3_n
 set_instance_assignment -name PCI_IO ON -to pSltRom3_n
 set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pSltRom4_n
 set_instance_assignment -name PCI_IO ON -to pSltRom4_n
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pSltE_n
+set_instance_assignment -name PCI_IO ON -to pSltE_n
 # Open-collector / input-only nets: these MUST have the pull-up, since the
 # adapter provides none and an empty connector has to read deasserted.
 set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pSltInit_n
@@ -490,3 +508,5 @@ set_instance_assignment -name PCI_IO ON -to pSltBas10_n
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pSltBas10_n
 set_instance_assignment -name PCI_IO ON -to pSltMon11_n
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pSltMon11_n
+set_instance_assignment -name PCI_IO ON -to pSltBas2_n
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pSltBas2_n

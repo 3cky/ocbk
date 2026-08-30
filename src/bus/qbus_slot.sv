@@ -119,6 +119,7 @@ module qbus_slot #(
     input  wire         dout_n,
     input  wire         wtbt_n,
     input  wire         init_n,    // nINIT, out to the module
+    input  wire         e_037_n,   // the 037's E strobe (va_037_sync PIN_nE)
     inout  wire         rply_n,    // open-collector: the module replies here
 
     // ---- configuration / state -------------------------------------------
@@ -141,8 +142,10 @@ module qbus_slot #(
     inout  wire         pSltInit_n,
     output wire         pSltRom3_n,
     output wire         pSltRom4_n,
+    output wire         pSltE_n,
     input  wire         pSltMon10_n,
     input  wire         pSltBas10_n,
+    input  wire         pSltBas2_n,
     input  wire         pSltMon11_n
 );
 
@@ -168,6 +171,17 @@ module qbus_slot #(
             // Window-1 ROM socket selects, active low on the bus.
             assign pSltRom3_n = ~rom3;
             assign pSltRom4_n = ~rom4;
+
+            // The 037's E strobe, straight out. On a BK-0010 the TOP ROM window
+            // (160000-177577) is read-strobed by E, not by DIN: the machine's
+            // own DS19 takes its DIN from XT3.A29, which is E through the series
+            // resistor R60, and an МПИ module reads the raw E on XT3.A30 to
+            // strobe its own replacement ROM. That is how МСТД's second ROM
+            // works, and without this pin such a module can never reply.
+            // Already the right polarity and qualification - va_037_sync's
+            // PIN_nE is `SYNC | DIN | (A >= 177600)`, i.e. a read cycle outside
+            // the I/O page - so it needs no inversion or gating here.
+            assign pSltE_n = e_037_n;
 
             // ---- the module's reply --------------------------------------
             logic [1:0] rply_sr;
@@ -226,25 +240,46 @@ module qbus_slot #(
             // 0177600-0177777 is MK_NONE in the mapper already, so "seg 7"
             // self-truncates at 0177577 - exactly the blob's BASIC/MSTD top.
             //
-            // The model qualifier is not cosmetic: a real BK-0011M has NO
-            // MON10/BAS10 pin (XT3 has no A14/B1/B6 - those positions are
-            // BK-0010 only), and the adapter routes them from the MSX edge
-            // regardless. Without the gate, a module asserting BAS10 would
-            // knock out the BK-0011M top ROM, which no real machine can do.
-            logic [2:0] m10_sr, b10_sr, m11_sr;
+            // The four disable lines, and which ROM each one really covers -
+            // traced from doc/bk0010-01.sch and doc/smk512-scheme-v1.0.sch,
+            // NOT guessed. On a BK-0010-01 the ROM set is four RE2A masks:
+            //   DS17 017  100000-117777  CE = GND      <- MON10 (a user mod;
+            //        the stock CE is hardwired, which is why the SMK512 install
+            //        adds a wire)
+            //   DS18 106  120000-137777  CE = XT3.A14  <- BAS
+            //   DS20 107  140000-157777  CE = XT3.A14  <- BAS  (SAME line)
+            //   DS19 108  160000-177577  CE = GND, but its DIN comes from
+            //        XT3.A29 (= E through R60), so holding A29 silences it
+            //                                        <- BAS2
+            // So BAS covers segs 2-5 ONLY. Giving it segs 6,7 as well - the
+            // first version of this file did - makes ocbk stand down over a
+            // window no module has claimed, and the CPU bus-times-out there.
+            // Confirmed on hardware with an МСТД module: FOCAL at 120000 ran,
+            // the tests ROM at 160000 died with a bus error.
+            // The SMK512 drives all four (P5.B1 MON10, P5.A14 BAS, P5.A29 BAS2,
+            // P5.B6 M11 -> its CPLD), so all four are load-bearing for it.
+            //
+            // The model qualifier is not cosmetic: MON10/BAS/BAS2 are BK-0010
+            // lines and M11 is the BK-0011M one, and a module drives whichever
+            // its host has. Without the gate a module asserting BAS2 on a bk11
+            // would knock out the top ROM by the wrong mechanism.
+            logic [2:0] m10_sr, b10_sr, b2_sr, m11_sr;
             always_ff @(posedge cpu_clk or negedge rst_n)
                 if (!rst_n) begin
                     m10_sr <= 3'b000;
                     b10_sr <= 3'b000;
+                    b2_sr  <= 3'b000;
                     m11_sr <= 3'b000;
                 end else begin
                     m10_sr <= {m10_sr[1:0], ~pSltMon10_n};
                     b10_sr <= {b10_sr[1:0], ~pSltBas10_n};
+                    b2_sr  <= {b2_sr[1:0],  ~pSltBas2_n};
                     m11_sr <= {m11_sr[1:0], ~pSltMon11_n};
                 end
 
             wire mon10 = &m10_sr[2:1] & slot_live & ~model_bk11;
             wire bas10 = &b10_sr[2:1] & slot_live & ~model_bk11;
+            wire bas2  = &b2_sr[2:1]  & slot_live & ~model_bk11;
             wire mon11 = &m11_sr[2:1] & slot_live &  model_bk11;
 
             // Loaded only while the bus is idle, so the value the qbus_mem FSM
@@ -254,7 +289,8 @@ module qbus_slot #(
                 if (!rst_n)       rom_dsl_vec <= 8'h00;
                 else if (sync_n)  rom_dsl_vec <=
                       (mon10 ? 8'b0000_0011 : 8'h00)   // segs 0,1 = 100000-117777
-                    | (bas10 ? 8'b1111_1100 : 8'h00)   // segs 2-7 = 120000-177577
+                    | (bas10 ? 8'b0011_1100 : 8'h00)   // segs 2-5 = 120000-157777
+                    | (bas2  ? 8'b1100_0000 : 8'h00)   // segs 6,7 = 160000-177577
                     | (mon11 ? 8'b1100_0000 : 8'h00);  // segs 6,7 = 160000-177577
 
         end
@@ -269,6 +305,7 @@ module qbus_slot #(
             assign pSltInit_n = 1'bZ;
             assign pSltRom3_n = 1'bZ;
             assign pSltRom4_n = 1'bZ;
+            assign pSltE_n    = 1'bZ;
             assign ad_n       = 16'hZZZZ;
             assign rply_n     = 1'bZ;
             assign rom_dsl_vec = 8'h00;

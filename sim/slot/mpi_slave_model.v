@@ -20,10 +20,22 @@
 //                              SMK512 takes the host ROM away: a CPU write to
 //                              the module's own mode register changes a bus
 //                              line as a side effect.
-//   ROM_BASE .. ROM_BASE+ROM_SIZE-1   a module ROM window, answered ONLY while
-//                              the matching deselect is asserted. That is the
-//                              real contract: a module must not answer for a
-//                              region the host still owns, or both drive.
+//   ROM_BASE .. +ROM_WORDS     a module ROM window on the NORMAL DIN strobe,
+//                              answered only while BAS is asserted.
+//   ROM2_BASE .. +ROM_WORDS    a SECOND window on the E STROBE, answered only
+//                              while BAS2 is asserted. This is the МСТД
+//                              topology and it is the whole reason this model
+//                              exists in this shape: on a BK-0010 the
+//                              160000-177577 ROM is read-strobed by the 037's
+//                              E, not by DIN (the host's own DS19 takes its DIN
+//                              from XT3.A29 = E through R60), so a module's
+//                              replacement ROM reads the raw E on XT3.A30. A
+//                              bridge that does not export E leaves this window
+//                              permanently mute - which is exactly what
+//                              happened on the board.
+//                              Both windows answer ONLY while their deselect is
+//                              asserted: a module must not answer for a region
+//                              the host still owns, or both drive.
 //
 // THE RELEASE RULE IS THE POINT OF THIS FILE.  A DATIO(B) read-modify-write
 // runs DIN then DOUT under ONE held SYNC, so a slave that returns to idle on
@@ -43,6 +55,7 @@
 module mpi_slave_model #(
     parameter [15:0] REG_BASE  = 16'o177740,
     parameter [15:0] ROM_BASE  = 16'o120000,
+    parameter [15:0] ROM2_BASE = 16'o160000,
     parameter int    ROM_WORDS = 16,       // decoded window, in words
     parameter int    LATENCY   = 4         // clk edges from strobe to RPLY
 ) (
@@ -55,10 +68,12 @@ module mpi_slave_model #(
     input  wire        pSltDin_n,
     input  wire        pSltDout_n,
     input  wire        pSltWtbt_n,
+    input  wire        pSltE_n,     // the 037's E: the second window's strobe
     output wire        pSltRply_n,
     input  wire        pSltInit_n,
     output wire        pSltMon10_n,
     output wire        pSltBas10_n,
+    output wire        pSltBas2_n,
     output wire        pSltMon11_n,
 
     // ---- tb control -------------------------------------------------------
@@ -86,15 +101,23 @@ module mpi_slave_model #(
     wire sel_rom = !pSltSync_n && !no_reply
                    && (addr >= ROM_BASE)
                    && (addr <  ROM_BASE + 2*ROM_WORDS)
-                   // only while WE front it - see the header
-                   && (ctrl[0] || ctrl[1]);
-    wire sel_any = (sel_reg || sel_rom) && !no_reply;
+                   && ctrl[0];                  // BAS
+    // The E-strobed window. Note the strobe: this one is read on E, NOT on DIN.
+    wire sel_rom2 = !pSltSync_n && !no_reply
+                   && (addr >= ROM2_BASE)
+                   && (addr <  ROM2_BASE + 2*ROM_WORDS)
+                   && ctrl[2];                  // BAS2
+    wire sel_any = (sel_reg || sel_rom || sel_rom2) && !no_reply;
 
     // ---- read data --------------------------------------------------------
     // The ROM window returns an address-derived pattern, so a wrong address on
     // the pins shows up as wrong DATA rather than as no reply at all.
-    wire [15:0] rd_word = sel_rom ? (16'o052525 ^ {3'b0, addr[13:1]})
-                                  : regs[addr[3:1]];
+    // Distinct constants per window: addr[13:1] alone cannot tell 120000 from
+    // 160000, so without this a read served by the WRONG window would still
+    // look correct.
+    wire [15:0] rd_word = sel_rom2 ? (16'o025252 ^ {3'b0, addr[13:1]})
+                        : sel_rom  ? (16'o052525 ^ {3'b0, addr[13:1]})
+                                   : regs[addr[3:1]];
 
     reg         drive;
     reg         reply;
@@ -109,6 +132,7 @@ module mpi_slave_model #(
     // the host ROM go away, one bus cycle later.
     assign pSltMon10_n = ~ctrl[1];
     assign pSltBas10_n = ~ctrl[0];
+    assign pSltBas2_n  = ~ctrl[2];
     assign pSltMon11_n = ~ctrl[0];
 
     wire strobes_idle = pSltDin_n && pSltDout_n;
@@ -131,7 +155,7 @@ module mpi_slave_model #(
                 cnt   <= 8'd0;
             end else if (!reply) begin
                 if (cnt == LATENCY[7:0]) begin
-                    if (sel_any && !pSltDin_n) begin
+                    if (sel_any && (sel_rom2 ? !pSltE_n : !pSltDin_n)) begin
                         rd_hold <= rd_word;
                         drive   <= 1'b1;
                         reply   <= 1'b1;

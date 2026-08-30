@@ -592,9 +592,10 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   floating pin), and *DIP 8 stand-down* (a module IS attached and answering
   while DIP 8 selects the internal SMK512 — the bridge must contribute nothing).
   BK-0010 SoC stack, data-checking, `COSIM PASS` at the pinned success park like
-  `sim/romwr`. **Mutation-tested ×6** (`./run.sh --mutate`), including the
-  original stub's address-setup bug and the module-side SYNC-rise re-arm that
-  drops a DATIO write half.
+  `sim/romwr`. **Mutation-tested ×8** (`./run.sh --mutate`), including the
+  original stub's address-setup bug, the module-side SYNC-rise re-arm that drops
+  a DATIO write half, and **the two defects a real МСТД module found on the
+  board** — the un-exported 037 E strobe (S7) and the over-wide BAS mask (S8).
   **Two of its checks had to be STRUCTURAL, and that is the lesson to keep**:
   pin driver overlap and the inward-claim gate are both invisible
   behaviourally — the overlap window is the module's data hold *after* the CPU

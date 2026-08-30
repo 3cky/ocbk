@@ -20,11 +20,17 @@ Sub-tests, in order:
      SYNC-rise would drop the write half and this leg would see a stale value.
   5. qbto  - a read of an address neither ocbk nor the module decodes must get
      no reply at all -> trap 4. Proves the bridge does not "helpfully" answer.
-  6. Deselect - write the module's control register to make it assert BAS10,
-     then read the BASIC region: the MODULE's pattern must come back, not
-     ocbk's ROM. Then release it and read again: ocbk's ROM must return. This
-     is the whole point of the deselect lines, checked in both directions so a
-     stuck-asserted deselect cannot pass.
+  6. Deselect - write the module's control register to make it assert BAS,
+     then read 120000: the MODULE's pattern must come back, not ocbk's ROM.
+     Then release it and read again: ocbk's ROM must return. Checked in both
+     directions so a stuck-asserted deselect cannot pass.
+  7. The E-STROBED window, i.e. the МСТД topology. 160000-177577 has its OWN
+     deselect (BAS2) and its own read strobe: a module's ROM there is clocked
+     by the 037's E, not by DIN. Three parts - BAS2 alone must move only the
+     160000 window, releasing it must give that window back, and both deselects
+     together must hand over both windows. A bridge that does not export E
+     leaves 160000 mute and the read traps, which is what a real МСТД module
+     did on the board before E was wired.
 
 Data-checking oracle (COSIM PASS at the pinned success park), NOT a timing
 golden. Park loops match sim/bk11 and sim/romwr: success 001004, fail 001012.
@@ -40,17 +46,22 @@ REG_BASE  = 0o177740            # the module's register file (8 words)
 REG_A     = REG_BASE + 0o2      # a scratch register used by most legs
 CTRL      = REG_BASE + 0o16     # the module's control register
 DEAD_ADDR = 0o177600            # decoded by NOBODY -> qbto -> trap 4
-ROM_WIN   = 0o120000            # the module's ROM window (bk10 BASIC region)
+ROM_WIN   = 0o120000            # module ROM window 1 (BAS, normal DIN strobe)
+ROM2_WIN  = 0o160000            # module ROM window 2 (BAS2, the E strobe)
 
 # Must match mpi_slave_model.v's presets and pattern.
 PRESET0   = 0o125252            # regs[i] = 0125252 + i
 PRESET1   = 0o125253
-# the model's address-derived word: 0o052525 ^ addr[13:1] (13 bits, as the RTL)
-ROMPAT0   = 0o052525 ^ ((ROM_WIN >> 1) & 0x1FFF)
+# the model's address-derived words: base ^ addr[13:1] (13 bits, as the RTL).
+# Different bases per window - addr[13:1] alone cannot tell 120000 from 160000,
+# so a read served by the WRONG window would otherwise still look correct.
+ROMPAT0   = 0o052525 ^ ((ROM_WIN  >> 1) & 0x1FFF)
+ROMPAT2   = 0o025252 ^ ((ROM2_WIN >> 1) & 0x1FFF)
 
-# The host's own BASIC ROM word the tb pokes at ROM_WIN, so the deselect can be
-# checked in BOTH directions.
+# The host's own ROM words the tb pokes at each window, so both deselects can be
+# checked in BOTH directions. HOSTROM2 is basic10_3.rom word 0, the real image.
 HOSTROM   = 0o017171
+HOSTROM2  = 0o104405
 
 _ok = [0]
 
@@ -122,12 +133,35 @@ def build_program():
     a.emit(0o000004)
 
     # --- 6a. deselect ON: the MODULE answers in the BASIC region -----------
-    a.emit(0o012737, 0o000001, CTRL)        # MOV #1,@#CTRL   (assert BAS10)
+    a.emit(0o012737, 0o000001, CTRL)        # MOV #1,@#CTRL   (assert BAS only)
     cmp_mem_imm(a, ROM_WIN, ROMPAT0)
+    # BAS covers 120000-157777 ONLY. 160000 is BAS2's window and must still be
+    # the HOST's - a mask that hands segs 6,7 to BAS makes ocbk stand down over
+    # a window no module has claimed, and this read traps instead.
+    cmp_mem_imm(a, ROM2_WIN, HOSTROM2)
 
     # --- 6b. deselect OFF: ocbk's own ROM answers again --------------------
-    a.emit(0o005037, CTRL)                  # CLR @#CTRL      (release BAS10)
+    a.emit(0o005037, CTRL)                  # CLR @#CTRL      (release BAS)
     cmp_mem_imm(a, ROM_WIN, HOSTROM)
+
+    # --- 7. the E-STROBED window (the МСТД topology) -----------------------
+    # 160000-177577 is a SEPARATE deselect (BAS2) AND a separate read strobe:
+    # the module's ROM there is clocked by the 037's E, not by DIN. A bridge
+    # that does not export E leaves this window mute and the read traps - which
+    # is exactly what a real МСТД module did on the board.
+    # 7a. BAS2 alone must NOT disturb window 1's owner...
+    a.emit(0o012737, 0o000004, CTRL)        # MOV #4,@#CTRL   (assert BAS2 only)
+    cmp_mem_imm(a, ROM_WIN,  HOSTROM)       #   120000 still the host's
+    cmp_mem_imm(a, ROM2_WIN, ROMPAT2)       #   160000 now the module's, via E
+    # 7b. ...and releasing it gives 160000 back to the host.
+    a.emit(0o005037, CTRL)                  # CLR @#CTRL
+    cmp_mem_imm(a, ROM2_WIN, HOSTROM2)
+
+    # 7c. both windows at once, the real МСТД configuration.
+    a.emit(0o012737, 0o000005, CTRL)        # MOV #5,@#CTRL   (BAS | BAS2)
+    cmp_mem_imm(a, ROM_WIN,  ROMPAT0)
+    cmp_mem_imm(a, ROM2_WIN, ROMPAT2)
+    a.emit(0o005037, CTRL)                  # CLR @#CTRL
 
     # --- all checks passed -> success park ---------------------------------
     a.emit(0o000137)                        # JMP @#success

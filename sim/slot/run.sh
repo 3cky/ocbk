@@ -138,4 +138,20 @@ if vvp -n "$SP/m.vvp" +dip8 2>/dev/null | grep -q '^COSIM PASS$'; then
 fi
 echo "  S6 caught: slot does not stand down for DIP 8"
 
-echo "МПИ slot oracle: 6 mutations, all caught"
+# S7 - THE HARDWARE BUG, 2026-08-30: the bridge does not export the 037's E, so
+#      a module's top-window ROM (160000-177577, read-strobed by E rather than
+#      DIN) never gets a strobe and can never reply. Found with a real МСТД
+#      module: FOCAL at 120000 ran, the tests ROM at 160000 died with a bus
+#      error. This is the mutation that would have caught it.
+patch "$MUT_SRC" 's|assign pSltE_n = e_037_n;|assign pSltE_n = 1'"'"'b1;|' "$SP/m7.sv"
+mutate S7 "the 037's E strobe not exported (the МСТД top-ROM failure)" \
+      "$MUT_MEM" "$SP/m7.sv" "$MUT_MOD"
+
+# S8 - BAS given the whole BASIC region instead of 120000-157777. On real
+#      hardware BAS gates DS18+DS20 only; the 160000 window is BAS2's. With the
+#      wide mask ocbk stands down over a window no module has claimed.
+patch "$MUT_SRC" 's|(bas10 ? 8.b0011_1100 : 8.h00)|(bas10 ? 8'"'"'b1111_1100 : 8'"'"'h00)|' "$SP/m8.sv"
+mutate S8 "BAS mask covers segs 6,7 (which belong to BAS2)" \
+      "$MUT_MEM" "$SP/m8.sv" "$MUT_MOD"
+
+echo "МПИ slot oracle: 8 mutations, all caught"
