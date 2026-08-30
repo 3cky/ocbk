@@ -12,17 +12,17 @@
 //
 // ELECTRICAL: the МПИ is 5 V TTL and the adapter does NOT level-shift the bus.
 // The pads take it on the PCI clamp diode (PCI_IO ON in the .qsf, plus 4 mA
-// drive), which is how the board already runs 5 V MSX cartridges and how the
-// joystick ports are already treated. There is no transceiver and no direction
-// control anywhere - the previous version of this file claimed pSltBdir_n was
-// one, which was a misreading of the MSX BUSDIR pin.
+// drive - 8 mA on ~SYNC, see the pull-up note), which is how the board already
+// runs 5 V MSX cartridges and how the joystick ports are already treated. There
+// is no transceiver and no direction control anywhere - the previous version of
+// this file claimed pSltBdir_n was one, which was a misreading of MSX BUSDIR.
 //
 //   PARAMETER SLOT_ENABLE
 //     1 (the shipped value) : the bridge is live.
 //     0                     : every slot pin is released and the internal bus
 //        is untouched, so the machine runs exactly as it did before this module
-//        existed. Kept as a one-token escape hatch because the adapter carries
-//        NO termination - see the pull-up note at the bottom.
+//        existed. Kept as a one-token escape hatch for the termination question
+//        - see the pull-up note further down.
 //
 // ============ THE INBOUND REPLY GOES THROUGH ITS OWN D8:B ============
 // On the real board the bus RPLY net (S1-49) is the internal wired-OR (S1-21,
@@ -79,11 +79,17 @@
 // reply edge.
 //
 // ============ SAFETY, IN THREE LAYERS ============
-// The adapter has NO termination. The BK board terminates every wired-OR МПИ
-// net with 3.3k / 2.2k / 22k; here the pads' internal ~25k to 3.3 V is the only
-// pull-up in the system, roughly 8x weak and to the wrong rail. Measuring the
-// rise time and high level on ~RPLY and AD with a module attached is the gating
-// item before bring-up. Until then:
+// The adapter has no termination of its own, but the OneChipBook pulls three of
+// these pads to 3V3 with 1k, and two of them land where the МПИ wants them:
+// PIN_128 = ~RPLY (the most critical net on the bus, and now terminated harder
+// than the real BK's own 3.3k) and PIN_138 = ~INIT (open-drain here, so exactly
+// what a pull-up is for). PIN_131 = ~SYNC is the mismatch - a push-pull output
+// on a 1k pull-up, so it takes 8 mA drive in the .qsf instead of 4.
+// What is left unterminated is the 16 AD lines and the remaining strobes, on
+// the pads' internal ~25k alone. AD is driven push-pull from one end or the
+// other for the whole of every cycle and nobody samples the turnaround, so
+// measuring its rise time with a module attached is the remaining gating item
+// rather than a known problem. Until then:
 //   1. slot_live = ~smk_en. The internal SMK512 emulation and a real module
 //      claim the same addresses, so they are mutually exclusive anyway. Tying
 //      the slot to DIP 8 being OFF costs nothing, needs no new switch, and
@@ -94,7 +100,9 @@
 //      this keeps it off our internal net as well.)
 //   3. RPLY_FILT: one extra agreement sample. Costs one cpu_clk on external
 //      replies only - no internal timing constant moves and the slot has no
-//      calibration target - and can be turned off once the pull-ups are fixed.
+//      calibration target. It was written when ~RPLY was believed to be on a
+//      weak internal pull-up alone; with the board's 1k on PIN_128 it can go to
+//      0 with more confidence, but leave it until the board says so.
 
 module qbus_slot #(
     parameter bit SLOT_ENABLE = 1'b1,

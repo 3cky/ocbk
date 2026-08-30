@@ -397,12 +397,30 @@ set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pMemDat
 # treatment the MSX joystick ports above already get, and how this board runs
 # real 5V MSX cartridges. Outbound, 3.3V LVTTL VOH at 4mA clears TTL VIH.
 #
-# TERMINATION IS THE OPEN ITEM. The real BK board terminates every wired-OR МПИ
-# net (3.3k on AD/strobes/RPLY, 2.2k on the DMA group, 22k on the IRQ pair); the
-# fabricated adapter has none of them, so the internal weak pull-ups below are
-# the only ones in the system - about 8x weak and to the wrong rail. Measure the
-# rise time and high level on ~RPLY and AD with a module attached before trusting
-# them; qbus_slot's SLOT_ENABLE and RPLY_FILT are the escape hatches.
+# TERMINATION. The real BK board terminates every wired-OR МПИ net (3.3k on
+# AD/strobes/RPLY, 2.2k on the DMA group, 22k on the IRQ pair) and the adapter
+# has none of them - but the ONECHIPBOOK ITSELF pulls three of these pads to
+# 3V3 with 1k, and two of them land exactly where they are wanted:
+#
+#   PIN_128  (MSX WAIT, open collector)   -> ~RPLY   1k to 3V3. IDEAL: this is
+#            the single most critical net on the bus, and it is now terminated
+#            harder than the real BK's own 3.3k. Rise time on RPLY is no longer
+#            the bring-up worry it was.
+#   PIN_138  (MSX RSV16)                  -> ~INIT   1k to 3V3. IDEAL: ~INIT is
+#            open-drain here (we pull low or let go), which is exactly what a
+#            pull-up is for.
+#   PIN_131  (MSX INT, open collector)    -> ~SYNC   1k to 3V3, and this one is
+#            a MISMATCH. ~SYNC is a push-pull OUTPUT, so the pad has to sink
+#            3.3 mA of pull-up current on top of the load every time it asserts
+#            - most of a 4 mA budget, which would push VOL up. It gets 8 mA
+#            below for that reason alone. The adapter is fabricated and the
+#            МПИ-to-MSX mapping is fixed in copper, so the signal cannot simply
+#            be moved to a quieter pad.
+#
+# Everything else still has only the pads' internal ~25k, about 8x weaker than
+# the design intent and to the wrong rail. Measure the rise time and high level
+# on the AD lines with a module attached before trusting them; qbus_slot's
+# SLOT_ENABLE and RPLY_FILT are the escape hatches.
 
 # ---- multiplexed address/data (bidirectional) ----------------------------
 set_location_assignment PIN_126 -to pSltAd[0]
@@ -445,7 +463,9 @@ set_location_assignment PIN_174 -to pSltMon11_n
 set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pSltAd
 set_instance_assignment -name PCI_IO ON -to pSltAd
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pSltAd
-set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pSltSync_n
+# 8 mA, not 4: PIN_131 carries the board's 1k pull-up to 3V3 (see above), so
+# this push-pull output sinks 3.3 mA of it on every assert.
+set_instance_assignment -name CURRENT_STRENGTH_NEW 8MA -to pSltSync_n
 set_instance_assignment -name PCI_IO ON -to pSltSync_n
 set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pSltDin_n
 set_instance_assignment -name PCI_IO ON -to pSltDin_n

@@ -221,7 +221,7 @@ Consequences for the RTL:
   `pin_sp_n(1'b1)` and `pin_pa_n(2'b11)` tie-offs are authentic, not
   simplifications.
 
-## Termination — this is ocbk's job now
+## Termination — mostly ocbk's job, but the board helps on the net that matters
 
 Every wired-OR МПИ net is terminated **on the BK board**, not in the modules:
 
@@ -234,16 +234,27 @@ Every wired-OR МПИ net is terminated **on the BK board**, not in the modules:
 | ~PRT, ~PRT1 | **22 k** | `E7`/`E8` |
 | ~RESET (`S1-25`) | **43 k** + 10 µF | `R8`, `C5`/`C14` |
 
-**ocbk is the host, so these pull-ups are ocbk's responsibility — and the
-adapter board has none of them** except `R1` (1 k on `~BSY`, a line the host
-*drives*, where it is least needed). The `.qsf`'s `WEAK_PULL_UP_RESISTOR` is a
-~25 kΩ internal pull to **3.3 V**: roughly 8× weaker than the design intent and
-to the wrong rail for the 3.3 k and 2.2 k groups. It is about right for the
-22 k ~PRT pair only.
+ocbk is the host now, so these are ocbk's responsibility — and the adapter
+board has none of them. **But the OneChipBook itself pulls three of the slot
+pads to 3V3 with 1 kΩ**, and because those are the pads the 1chipMSX needed for
+its own open-collector signals, two of the three land exactly where the МПИ
+wants them:
 
-**Resolve this before any bring-up.** The board is already fabricated, so the
-measurement to take first is the rise time and high level on `~RPLY` and the AD
-lines with a module attached.
+| FPGA pin | why the board pulls it up (MSX) | adapter carries | verdict |
+|---|---|---|---|
+| **128** | WAIT, open collector | **~RPLY** | **ideal.** The single most critical net on the bus, terminated harder than the real BK's own 3.3 k. Rise time on RPLY is no longer a bring-up worry |
+| **138** | RSV16 | **~INIT** | **ideal.** ~INIT is open-drain here — we pull low or let go — which is exactly what a pull-up is for |
+| **131** | INT, open collector | **~SYNC** | **mismatch.** ~SYNC is a push-pull *output*, so the pad sinks 3.3 mA of pull-up current on every assert — most of a 4 mA budget. It gets **8 mA** in the `.qsf` for that reason. The adapter is fabricated and the МПИ↔MSX mapping is fixed in copper, so the signal cannot be moved to a quieter pad |
+
+**What is still unterminated: the 16 AD lines and the remaining strobes**, which
+have only the pads' internal ~25 kΩ to 3.3 V — about 8× weaker than the design
+intent and to the wrong rail. That is now the whole of the open electrical
+question, and it is a much smaller one than it looked: AD is driven push-pull
+from one end or the other for the whole of every cycle, and the only moment
+nobody drives it is the turnaround, which no one samples. **Measure rise time
+and high level on the AD lines with a module attached before bring-up**;
+`qbus_slot`'s `SLOT_ENABLE` and `RPLY_FILT` are the escape hatches, and
+`RPLY_FILT` can now go to 0 with more confidence than when it was written.
 
 ## What the implementation does, and what the old stub got wrong
 
