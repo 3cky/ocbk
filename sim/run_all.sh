@@ -49,6 +49,7 @@ SCRIPTS=(
    ./sim/mouse/run.sh           # WEIGHT  <1
    ./sim/joystick/run.sh        # WEIGHT  <1
    ./sim/gamepad/run.sh         # WEIGHT  <1
+   ./sim/slot/run.sh            # WEIGHT   4
    ./sim/covox/run.sh           # WEIGHT  <1
    ./sim/run_clkgen.sh          # WEIGHT  <1
 )

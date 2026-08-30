@@ -1,16 +1,17 @@
 # МПИ — the BK expansion bus and the cartridge-slot seam
 
 The Магистральный параллельный интерфейс: the real BK-0011M expansion
-connector, traced pin-by-pin from `doc/bk0011m.sch`, and what `src/bus/qbus_slot.sv`
-must become to drive it. The internal Q-bus conventions this bridges onto are in
+connector, traced pin-by-pin from `doc/bk0011m.sch`, and the
+`src/bus/qbus_slot.sv` bridge that drives it. The internal Q-bus conventions this bridges onto are in
 [bus-memory.md](bus-memory.md); the RPLY re-timing rule is in `src/bus/bk_rply.sv`.
 
-**STATUS: NOTHING IS IMPLEMENTED.** `qbus_slot` is a stub held at
-`SLOT_ENABLE=0` and instantiated in `ocbk_top` with **every physical port left
-unconnected**, so it synthesises to nothing. The `.qsf` pin block is a comment,
-truncated after two example lines. There is no oracle. This file is the traced
-reference the implementation must be written against, not a description of
-working code.
+**STATUS: the slave-only bridge is IMPLEMENTED AND SIM-GREEN; HARDWARE NOT YET
+CONFIRMED.** `src/bus/qbus_slot.sv` is live (`SLOT_ENABLE=1`), the 27 pins are
+assigned, and `sim/slot` covers it with three legs and six mutations. What is
+implemented is **data transfer, RPLY and the host-ROM deselect** — no
+interrupts, no DMA/arbitration, no IAK chain. **Do not merge to `main` until a
+real SMK512 runs on the board**, and read the termination note below before
+plugging anything in.
 
 ## The three connectors on a real BK-0011M
 
@@ -244,10 +245,61 @@ to the wrong rail for the 3.3 k and 2.2 k groups. It is about right for the
 measurement to take first is the rise time and high level on `~RPLY` and the AD
 lines with a module attached.
 
-## What `qbus_slot` must gain
+## What the implementation does, and what the old stub got wrong
 
-The stub's `SLOT_ENABLE=1` branch is a sketch. Known defects, all logic rather
-than electrical:
+The rewritten `qbus_slot` is the slave-only bridge. Two equations carry it:
+
+```
+slot_ad_oe = din_n & ~slot_rd & slot_live   // the bridge drives the PINS
+ad_n       = slot_rd ? pSltAd : Z           // the bridge drives ad_n INWARD
+```
+
+- **Outward** is gated on `din_n` so the pins are released for the whole of any
+  read, and on `~slot_rd` so they stay released through the module's data-hold
+  after DIN rises. Re-enabling the drivers the instant DIN releases puts 16
+  lines of push-pull CMOS against a module that is still driving — a fight on
+  every read, and **not observable behaviourally** (the CPU has already
+  sampled), which is why `sim/slot` checks the two output enables structurally.
+- **Inward** is gated on `slot_rd`, a flag set only from the **re-timed** reply.
+  Gating on the raw pin buys nothing — the CPU samples 1.5 `cpu_clk` after the
+  re-timed reply — and costs an unsynchronised, unterminated pin acting as a
+  combinational output-enable on the shared internal `ad_n`. On this active-low
+  wired-AND bus an extra driver of all-ones is the identity element, so the
+  damage from a glitch is *silent* corruption of an internal read.
+- **The address window needed no invention.** `vm1_qbus` drives `ad_oe` two
+  `cpu_clk` before it drops SYNC and holds one after, so the bridge only has to
+  mirror the window the CPU already produces. The old stub's
+  `drive_ad = sync_n ? 1'b0 : din_n` released AD until *after* SYNC had fallen,
+  leaving a real slave no setup at all — mutation **S2**.
+- **`slot_live = ~smk_en`.** The internal SMK512 emulation and a real module
+  claim the same addresses, so tying the slot to DIP 8 being off costs nothing,
+  needs no new switch, and makes the shipped default provably byte-identical.
+- **The deselect lands on `qbus_mem`'s `sel_rom`, not in `mem_mapper`.** One
+  term covers the whole cycle (`selected`, the done-gate, `sel_romr`'s fetch
+  enable into `cpu_sdram_dp`, the overlay merge and `turbo_mem` all derive from
+  it), and it keeps the added logic off the mapper's `kind`/`phys` cone, which
+  feeds one of the two worst setup paths in the design. It is an 8-bit
+  per-segment mask indexed by `addr[14:12]`, **frozen while the bus is idle** —
+  a module changes its deselect lines as a side effect of a CPU write to its own
+  mode register, so unlike the DIP latches this is not quasi-static and would
+  otherwise move under the FSM mid-cycle.
+- **The deselect lines are model-gated.** A real BK-0011M has no MON10/BAS10/
+  MON11 pin at all (XT3 has no A14/B1/B6); the adapter routes them from the MSX
+  edge regardless. Without the gate a module asserting BAS10 would knock out the
+  BK-0011M top ROM, which no real machine can do.
+- **`bsy_n` is deliberately NOT used**, though it is the natural source for a
+  bus-ownership gate and XT3.B13 wants it anyway. `vm1.v:62` drives it
+  `? 1'b0 : 1'bZ` onto a plain `wire` in `ocbk_top` with zero fanout — consuming
+  it would need a push-pull hook in the vendored CPU (the `pin_sel_n` precedent)
+  or it comes up **stuck asserted**, the `virq_n` trap, with every sim passing.
+  Not worth a vendored-file change in a slave-only increment; it is the first
+  item for phase 2. Note `pin_wtbt_n` and `pin_iako_n` are already on that
+  warning list and are harmless because they are `tri1` nets — the trap is
+  specific to plain `wire`.
+
+### Still missing (phase 2)
+
+The stub's old defect list, with what remains:
 
 1. **Address setup is lost.** `drive_ad = sync_n ? 1'b0 : din_n` releases AD
    whenever SYNC is deasserted, so AD reaches the slot only *after* SYNC has
@@ -284,5 +336,7 @@ both.
 - `ocm-pld-dev/esemsx3/emsx_top_common.qsf` + `src/emsx_top.vhd` — the
   direct-drive / `PCI_IO` precedent and the BUSDIR correction
 - `src/bus/bk_rply.sv` — why D8:B exists and what must not be re-timed twice
+- `sim/slot/README.md` — the oracle contract, the three legs and the six
+  mutations, including the two checks that had to be structural
 - [gotchas.md](gotchas.md) — the `tri1` stuck-asserted rule that governs every
   new OR-merge here

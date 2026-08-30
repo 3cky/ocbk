@@ -382,6 +382,7 @@ module boot_check_tb;
         .sel2_n   (sel[2]),
         .model_bk11(model11),        // bk10 pass-through, or +bk11 banking
         .smk_en(smk),                // +smk only (never floating: X would poison)
+        .rom_dsl_vec(8'h00),        // no МПИ module: host ROM fully selected
         .boot_active(1'b0),
         .bw_req   (1'b0),
         .bw_addr  ({AB{1'b0}}),

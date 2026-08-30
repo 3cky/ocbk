@@ -382,23 +382,91 @@ set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pMemDat
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pMemDat
 
 # ==========================================================================
-#  Cartridge-slot Q-bus pin map (FORWARD SEAM - commented out for Phase 1)
+#  МПИ expansion bus (the BK cartridge slot) - see doc/dev/mpi.md
 # ==========================================================================
-# Uncomment together with qbus_slot SLOT_ENABLE=1 (and add the matching inout
-# ports to ocbk_top) to bring the internal Q-bus out to the physical cartridge
-# slot for real BK hardware. Pins from esemsx3 emsx_top_common.qsf (PIN_121-180,
-# all unused by Phase 1). REQUIRES an external bidirectional 5V<->3.3V level-
-# shifter: Cyclone I is 3.3V LVTTL, not 5V-tolerant (PCI clamp only).
+# The BK expansion bus, brought out through the passive adapter (the ocbk_mpi
+# board: an MSX 2x25 edge connector wired to a СНП-58-64). Slave-only: data
+# transfer, RPLY and the host-ROM deselect. The pin numbers below come from the
+# connector trace in doc/dev/mpi.md, cross-validated against the adapter's own
+# net list - do NOT rederive them from the esemsx3 MSX signal names, which are
+# what these pads were called on the 1chipMSX and mean nothing here.
 #
-#   ad_n[15:0] <-> pSltAdr[15:0]   PIN_164,163,166,165,168,167,158,156,
-#                                   160,139,143,141,159,162,161,140
-#   sync_n      -> pSltMerq_n  PIN_135      din_n  -> pSltRd_n   PIN_137
-#   dout_n      -> pSltWr_n    PIN_136      wtbt_n -> pSltIorq_n PIN_134
-#   rply_n     <-  pSltWait_n  PIN_128 (open-collector, board pull-up)
-#   transceiver dir -> pSltBdir_n PIN_133
-#   (DMA/IRQ/iako/init/sp/sel/bsy -> pSltDat[7:0] PIN_170..178 + spares
-#    pSltRsv5/16 PIN_126/138, pSltSw1/2 PIN_179/180, pSltCs* PIN_122..124)
+# NO LEVEL SHIFTER, and none is needed. The МПИ is 5V TTL and the adapter is
+# passive, so every net below arrives at the pad raw. PCI_IO ON enables the PCI
+# clamp diode to VCCIO, which is the 5V tolerance mechanism - exactly the
+# treatment the MSX joystick ports above already get, and how this board runs
+# real 5V MSX cartridges. Outbound, 3.3V LVTTL VOH at 4mA clears TTL VIH.
 #
-# set_location_assignment PIN_164 -to pSltAdr[0]
-# set_location_assignment PIN_163 -to pSltAdr[1]
-# ... (full block added at slot bring-up)
+# TERMINATION IS THE OPEN ITEM. The real BK board terminates every wired-OR МПИ
+# net (3.3k on AD/strobes/RPLY, 2.2k on the DMA group, 22k on the IRQ pair); the
+# fabricated adapter has none of them, so the internal weak pull-ups below are
+# the only ones in the system - about 8x weak and to the wrong rail. Measure the
+# rise time and high level on ~RPLY and AD with a module attached before trusting
+# them; qbus_slot's SLOT_ENABLE and RPLY_FILT are the escape hatches.
+
+# ---- multiplexed address/data (bidirectional) ----------------------------
+set_location_assignment PIN_126 -to pSltAd[0]
+set_location_assignment PIN_123 -to pSltAd[1]
+set_location_assignment PIN_127 -to pSltAd[2]
+set_location_assignment PIN_125 -to pSltAd[3]
+set_location_assignment PIN_134 -to pSltAd[4]
+set_location_assignment PIN_132 -to pSltAd[5]
+set_location_assignment PIN_133 -to pSltAd[6]
+set_location_assignment PIN_124 -to pSltAd[7]
+set_location_assignment PIN_137 -to pSltAd[8]
+set_location_assignment PIN_136 -to pSltAd[9]
+set_location_assignment PIN_140 -to pSltAd[10]
+set_location_assignment PIN_135 -to pSltAd[11]
+set_location_assignment PIN_143 -to pSltAd[12]
+set_location_assignment PIN_139 -to pSltAd[13]
+set_location_assignment PIN_159 -to pSltAd[14]
+set_location_assignment PIN_168 -to pSltAd[15]
+# ---- strobes (host -> module) --------------------------------------------
+set_location_assignment PIN_131 -to pSltSync_n
+set_location_assignment PIN_156 -to pSltDin_n
+set_location_assignment PIN_163 -to pSltDout_n
+set_location_assignment PIN_166 -to pSltWtbt_n
+# ---- the module's reply (open-collector, module -> host) -----------------
+set_location_assignment PIN_128 -to pSltRply_n
+# ---- nINIT (open-drain; we pull it low or let go, never drive high) ------
+set_location_assignment PIN_138 -to pSltInit_n
+# ---- 177716 window-1 ROM socket selects (host -> module) -----------------
+set_location_assignment PIN_122 -to pSltRom3_n
+set_location_assignment PIN_161 -to pSltRom4_n
+# ---- host-ROM deselect (module -> host; inverted by the adapter) ---------
+# MON10/BAS10 are BK-0010 signals and MON11 is an ocbk/adapter extension; a
+# real BK-0011M connector has no pin for any of them. qbus_slot model-gates
+# them so a module cannot deselect a ROM the real machine could not.
+set_location_assignment PIN_180 -to pSltMon10_n
+set_location_assignment PIN_175 -to pSltBas10_n
+set_location_assignment PIN_174 -to pSltMon11_n
+
+# ---- I/O standard: 5V-tolerant via the PCI clamp, 4mA, pulled up ---------
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pSltAd
+set_instance_assignment -name PCI_IO ON -to pSltAd
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pSltAd
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pSltSync_n
+set_instance_assignment -name PCI_IO ON -to pSltSync_n
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pSltDin_n
+set_instance_assignment -name PCI_IO ON -to pSltDin_n
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pSltDout_n
+set_instance_assignment -name PCI_IO ON -to pSltDout_n
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pSltWtbt_n
+set_instance_assignment -name PCI_IO ON -to pSltWtbt_n
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pSltRom3_n
+set_instance_assignment -name PCI_IO ON -to pSltRom3_n
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pSltRom4_n
+set_instance_assignment -name PCI_IO ON -to pSltRom4_n
+# Open-collector / input-only nets: these MUST have the pull-up, since the
+# adapter provides none and an empty connector has to read deasserted.
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pSltInit_n
+set_instance_assignment -name PCI_IO ON -to pSltInit_n
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pSltInit_n
+set_instance_assignment -name PCI_IO ON -to pSltRply_n
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pSltRply_n
+set_instance_assignment -name PCI_IO ON -to pSltMon10_n
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pSltMon10_n
+set_instance_assignment -name PCI_IO ON -to pSltBas10_n
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pSltBas10_n
+set_instance_assignment -name PCI_IO ON -to pSltMon11_n
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pSltMon11_n

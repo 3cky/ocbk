@@ -57,6 +57,7 @@ sim/smktime/snd_bios.hex
 sim/vregtime/vreg_ram.hex
 sim/vregtime/vreg_top.hex
 sim/romwr/romwr_ram.hex
+sim/slot/slot_ram.hex
 
 # Local MCP servers
 .mcp.json

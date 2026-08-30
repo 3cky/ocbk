@@ -272,12 +272,16 @@ from x15 to x12 to pay for it.
   become a bounded-variance check.
 - **Keyboard reset chord** — `warm_rst_req` has the OR seam, no chord decodes
   into it.
-- **Cartridge slot / МПИ** (`src/bus/qbus_slot.sv`, `SLOT_ENABLE=0`) drives
-  nothing, and its top-level instance leaves every physical port unconnected, so
-  it synthesises away. **The real connector is now traced pin-by-pin — see
-  [mpi.md](mpi.md)**, which carries the XT3 map, the FPGA pin assignment, the
-  RPLY/D8:B topology, the D11 input-synchroniser rule, the termination values
-  and the defect list the stub must fix.
+- **Cartridge slot / МПИ — the SLAVE-ONLY bridge is IMPLEMENTED and sim-green,
+  HARDWARE NOT YET CONFIRMED** (`src/bus/qbus_slot.sv`, `SLOT_ENABLE=1`; oracle
+  `sim/slot`, 3 legs + 6 mutations; 27 pins). Data transfer, RPLY and the
+  host-ROM deselect. **Do not merge to `main` until a real SMK512 runs on the
+  board.** Still open: DMR/SACK/DMGI/DMGO arbitration, the VIRQ/IAKO chain
+  (IRQ3 is the cheapest first interrupt — free and module-owned), `bsy_n` (needs
+  a push-pull hook in the vendored `vm1.v`, or it comes up stuck asserted), and
+  turbo, where the strobe setup and bus turnaround roughly halve. See
+  [mpi.md](mpi.md) for the XT3 map, the RPLY/D8:B topology, the D11
+  input-synchroniser rule and the termination values.
   **The "needs an external level shifter" claim recorded here was WRONG** and is
   corrected in that file: esemsx3 drives all 50 cartridge-slot lines straight off
   FPGA pins with `PCI_IO ON` (the clamp diode) + 4 mA, which is how this board

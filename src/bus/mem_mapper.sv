@@ -167,9 +167,25 @@ module mem_mapper #(
     output logic                 smk_ro, // with kind==MK_EXT: read-only (HLT10
                                          // seg 0 / ALL extent) - qbus_mem
                                          // withholds the write reply -> trap 4
-    output logic                 smk_wo  // with kind==MK_EXT: write-only (HLT
+    output logic                 smk_wo, // with kind==MK_EXT: write-only (HLT
                                          // extent) - qbus_mem withholds the
                                          // read reply -> trap 4
+
+    // ---- window-1 ROM socket selects, out to the МПИ ---------------------
+    // The real board latches the 177716 write in D36 (К555ТМ9) and takes Q4/Q5
+    // - the raw AD3/AD4 bits - straight out to the expansion connector as
+    // ~ROM3/~ROM4 (traced: D36.10 -> S1-65 -> XT3.A32, D36.12 -> S1-66 ->
+    // XT3.A22). Those two bits are the window-1 ROM codes 010 and 020, the
+    // banks whose sockets a stock BK-0011M leaves EMPTY (WIN1_ROM_PRESENT
+    // below), so these lines are how an expansion module populates them: we
+    // emit MK_NONE and the module answers instead.
+    // Raw latched bits, NOT a decoded bank select: on the real latch a
+    // multi-bit code such as 011 sets Q4 while selecting no ROM at all (the
+    // BkEmu quirk replicated below), and the module must see the same bit the
+    // silicon does. Pure state export - the translate below is untouched, so
+    // every mapper golden stays byte-identical.
+    output logic                 rom3,   // 177716 bit 3 (window-1 ROM code 010)
+    output logic                 rom4    // 177716 bit 4 (window-1 ROM code 020)
 );
 
     import qbus_pkg::*;
@@ -217,9 +233,13 @@ module mem_mapper #(
             win1_page     <= 3'd0;
             win1_rom_en   <= 1'b0;
             win1_rom_bank <= 2'd0;
+            rom3          <= 1'b0;
+            rom4          <= 1'b0;
         end else if (bank_wr) begin
             win0_page <= ad_true[14:12];
             win1_page <= ad_true[10:8];
+            rom3      <= ad_true[3];    // D36 Q4 -> МПИ ~ROM3 (raw, see header)
+            rom4      <= ad_true[4];    // D36 Q5 -> МПИ ~ROM4
             // ROM field: value & 0o033, exact single-bit codes only; every
             // other combination (003, 011, 030, 033, ...) selects NO ROM and
             // window 1 falls through to RAM - the BkEmu quirk, replicated.

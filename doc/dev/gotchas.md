@@ -190,6 +190,32 @@
   answer is "none", expect nothing — and never accept a slack improvement alone
   as evidence, because at this placement fragility an unrelated edit moves slack
   by half a nanosecond on its own.
+- **The enable-cone rule, visits SEVEN and EIGHT (the МПИ slot, 2026-08-30).**
+  The slave-only slot bridge cost only **+21 LE** but **+27 pins**, and that
+  alone re-placed the fitter from +0.339 into a real **VIOLATION, −0.169 ns /
+  TNS −2.134** — on `bk_covox|psg_cnt → audio_mixer|s0_r[6]`, an audio cone in
+  two modules the edit never touched. Cause, for the seventh time: a wide
+  compare feeding a REGISTER ENABLE in another module. `cx_en = live &
+  (psg_cnt == 0)` is `audio_mixer`'s `src_en[6]`, so a 13-bit reduction sat
+  between the counter and that enable, across the routing between the blocks.
+  Cured with the `wait_zero` / `ref_zero` idiom a third time — `psg_zero`, the
+  compare moved onto the counter's own load path — for **+4 LE**, taking it to
+  **−0.012 / TNS −0.084**.
+  **That exposed `smk_ide|lba_a` a FOURTH time**, and this one is the lesson to
+  keep: `g_val` reached `lba_a` through four separate validity compares
+  (`== 0`, `[15:8] != 0`, `> 16`, `[15:14] != 0`, `> 125`), every one of them
+  deciding `lba_a <= bk_total_q`, i.e. all of them in `lba_a`'s enable cone.
+  Fixed at the ENDPOINT per the rule this file already records — registering the
+  five predicates off `~sb_q` at the same edge `g_val` itself is loaded, which is
+  cycle-identical by construction and left every IDE oracle byte-identical.
+  **Watch the transform, not just the timing:** the H-case test was on the LOW
+  BYTE (`g_val[7:0] == 0`) while the S and C cases test the full word, so
+  folding all three onto one `g_v_zero` would have silently accepted a geometry
+  with a non-zero high byte and zero head count. The oracles would not
+  necessarily have caught it — that specific image never appears in the test
+  set. A predicate refactor is a behaviour change until each width is checked
+  individually.
+
 - **A SINGLE-driver open-collector `tri1` net degenerates to stuck-ASSERTED in
   Quartus** (Cyclone I has no internal tri-state/pull-up). This bit the Phase-6
   keyboard on hardware: `bk_kbd014` was the *only* nVIRQ source, driving

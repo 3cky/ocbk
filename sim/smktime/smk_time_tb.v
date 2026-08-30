@@ -201,6 +201,7 @@ module smk_time_tb;
         .sel2_n   (sel[2]),
         .model_bk11(~bk10),
         .smk_en   (1'b1),
+        .rom_dsl_vec(8'h00),        // no МПИ module: host ROM fully selected
         .boot_active(1'b0),
         .bw_req   (1'b0),
         .bw_addr  ({AB{1'b0}}),

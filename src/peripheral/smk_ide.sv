@@ -224,6 +224,33 @@ module smk_ide (
     logic [15:0] g_val;
     always_ff @(posedge sclk) g_val <= ~sb_q;
 
+    // The geometry VALIDITY PREDICATES, precomputed into flops off the same
+    // source and at the same edge as g_val itself - so each is cycle-identical
+    // to writing the compare inline, and every oracle transcript is unchanged.
+    // This is a TIMING fix and it is the fourth visit to this endpoint.
+    // Every one of these compares decides `lba_a <= bk_total_q`, i.e. it sits
+    // in lba_a's REGISTER-ENABLE cone, and lba_a has now been the destination
+    // of four separate STA chases (see CLAUDE.md's envelope note). The standing
+    // lesson from the third one is the one applied here: when a chase keeps
+    // landing on the same DESTINATION, fix the endpoint rather than the leg.
+    // With these registered, g_val reaches lba_a's enable through nothing wider
+    // than a flop output, and feeds only DATA paths (g_secs/g_heads/g_cyls/
+    // g_sum) as itself.
+    logic g_v_zero;    // g_val == 0        (FULL word)
+    logic g_v_lo0;     // g_val[7:0] == 0   (LOW byte only - the H case)
+    logic g_v_hi8;     // g_val[15:8] != 0
+    logic g_v_gt16;    // g_val[7:0] > 16
+    logic g_v_hi2;     // g_val[15:14] != 0
+    logic g_v_gt125;   // g_val[7:0] > 125
+    always_ff @(posedge sclk) begin
+        g_v_zero  <= (~sb_q)        == 16'h0000;
+        g_v_lo0   <= (~sb_q[7:0])   ==  8'h00;
+        g_v_hi8   <= (~sb_q[15:8])  !=  8'h00;
+        g_v_gt16  <= (~sb_q[7:0])   >   8'd16;
+        g_v_hi2   <= (~sb_q[15:14]) !=  2'b00;
+        g_v_gt125 <= (~sb_q[7:0])   >   8'd125;
+    end
+
     // ---- bus write capture (DOUT window) + release-edge action ------------
     // Data/lanes are captured live during the DOUT window (WTBT is BYTE at
     // DOUT time - the dual-purpose gotcha); the register/dispatch ACTION
@@ -467,7 +494,7 @@ module smk_ide (
                     g_sub <= g_sub + 1'b1;
                     if (g_sub == 2'd2) begin
                         g_sub <= '0;
-                        if ((g_val[7:0]) > 8'd125) begin
+                        if (g_v_gt125) begin
                             lba_a <= bk_total_q; g_cyls <= '0;
                             st <= G_CDIV;       // invalid table -> default
                         end else begin
@@ -511,22 +538,21 @@ module smk_ide (
                         end else begin
                             unique case (g_ptr)
                                 9'd253: begin   // S: 1..255
-                                    if (g_val[15:0] == '0 || g_val[15:8] != '0)
+                                    if (g_v_zero || g_v_hi8)
                                         begin lba_a <= bk_total_q; g_cyls <= '0;
                                               st <= G_CDIV; end
                                     else begin g_secs <= g_val[7:0];
                                                g_ptr <= 9'd254; end
                                 end
                                 9'd254: begin   // H (low byte): 1..16
-                                    if (g_val[7:0] == '0 || g_val[7:0] > 8'd16)
+                                    if (g_v_lo0 || g_v_gt16)
                                         begin lba_a <= bk_total_q; g_cyls <= '0;
                                               st <= G_CDIV; end
                                     else begin g_heads <= g_val[4:0];
                                                g_ptr <= 9'd255; end
                                 end
                                 default: begin  // C: 1..16383
-                                    if (g_val[15:0] == '0
-                                        || g_val[15:14] != '0)
+                                    if (g_v_zero || g_v_hi2)
                                         begin lba_a <= bk_total_q; g_cyls <= '0;
                                               st <= G_CDIV; end
                                     else begin g_cyls <= g_val[13:0];

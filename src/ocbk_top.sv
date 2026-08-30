@@ -11,10 +11,13 @@
 // word (bk_joystick -> qbus_mem's io_word) - a read-only path with no state
 // and no reset.
 //
-// Only the pins the design uses are declared; every other device pin -
-// including the entire cartridge-slot block PIN_121-180 - is reserved as a
-// tri-stated input by the .qsf. The cartridge-slot Q-bus seam lives in qbus_slot
-// and is held disabled (SLOT_ENABLE=0) - a forward seam, not a build option.
+// Only the pins the design uses are declared; every other device pin is
+// reserved as a tri-stated input by the .qsf. The BK expansion bus (МПИ) is
+// brought out through qbus_slot to the cartridge-slot pins, slave-only: a real
+// module such as an SMK512 attaches through the passive adapter. See
+// doc/dev/mpi.md for the traced connector and doc/dev/verification.md for the
+// oracle. It stands down whenever DIP 8 selects the internal SMK512 emulation,
+// since the two claim the same addresses.
 //
 // Clock tree (one PLL only - board constraint: the PIN_28 crystal feeds a single
 // PLL). The x9 VCO yields 96.65 MHz; the pixel clock is the same VCO /3; the
@@ -111,6 +114,28 @@ module ocbk_top (
                                    //   [7] = SMK512 enable
                                    //   [1], [2], [5], [6] = unused
     input  logic        pSltRst_n, // reset button (slot RESET net; low = pressed)
+
+    // ---- МПИ expansion bus (the cartridge slot; see doc/dev/mpi.md) ------
+    // The BK expansion bus, brought out through the passive adapter so a real
+    // module (an SMK512) can attach. Slave-only: data transfer, RPLY and the
+    // host-ROM deselect. No interrupts, no DMA, no IAK chain yet.
+    // Every net here is 5 V TTL and the adapter does not level-shift: the pads
+    // take it on the PCI clamp diode (PCI_IO ON in the .qsf), the same way the
+    // MSX joystick ports already do. All signals are ACTIVE LOW.
+    inout  wire  [15:0] pSltAd,    // multiplexed address/data (bidirectional)
+    output wire         pSltSync_n,// address strobe   (host -> module)
+    output wire         pSltDin_n, // data-in strobe   (host -> module)
+    output wire         pSltDout_n,// data-out strobe  (host -> module)
+    output wire         pSltWtbt_n,// write/byte status(host -> module)
+    input  wire         pSltRply_n,// the module's reply (open-collector)
+    inout  wire         pSltInit_n,// nINIT: the host pulses it, a module may too
+    output wire         pSltRom3_n,// 177716 bank state (bk11) -> module
+    output wire         pSltRom4_n,
+    // Host-ROM deselect. The module pulls these to take a region away from us;
+    // the adapter inverts, so they arrive active low here.
+    input  wire         pSltMon10_n, // bk10 MONITOR 100000-117777
+    input  wire         pSltBas10_n, // bk10 BASIC   120000-177577
+    input  wire         pSltMon11_n, // bk11 MSTD    160000-177577
 
     // ---- PS/2 keyboard (receive-only; pins pulled up, driven Z) ----------
     inout  wire         pPs2Clk,
@@ -574,6 +599,11 @@ module ocbk_top (
                                      // stuck-asserted on Cyclone I; see bk_kbd014 footer)
     wire        dmgo_n, bsy_n;
 
+    // МПИ slot: the per-segment host-ROM deselect and the 177716 bits the
+    // expansion connector carries outward. See doc/dev/mpi.md.
+    wire [7:0]  rom_dsl_vec;
+    wire        map_rom3, map_rom4;
+
     // turbo, resynced and qualified on a BUS-IDLE edge (see turbo_ctl.sv and
     // the key_turbo block above). Power-on reset only: turbo is a user setting
     // and survives the reset button, like screen_mode.
@@ -957,6 +987,9 @@ module ocbk_top (
         .rply_n   (rply_n),
         .mem_ready(mem_ready),
         .ext_ram  (mem_ext_ram),
+        .rom_dsl_vec(rom_dsl_vec),  // МПИ module fronts these ROM segments
+        .rom3     (map_rom3),       // 177716 bits 3/4 -> the slot's ~ROM3/~ROM4
+        .rom4     (map_rom4),
         .v1_req   (ro_req),         // video clients -> arbiter ports 1/2/3
         .v1_addr  (ro_addr),
         .v1_gnt   (ro_gnt),
@@ -1184,20 +1217,36 @@ module ocbk_top (
     );
 
     // ---- cartridge-slot bridge (forward seam, held disabled) -------------
-    qbus_slot #(.SLOT_ENABLE(1'b0)) u_slot (
-        .ad_n      (ad_n),
-        .sync_n    (sync_n),
-        .din_n     (din_n),
-        .dout_n    (dout_n),
-        .wtbt_n    (wtbt_n),
-        .rply_n    (rply_n),
-        .pSltAdr   (),
-        .pSltMerq_n(),
-        .pSltRd_n  (),
-        .pSltWr_n  (),
-        .pSltIorq_n(),
-        .pSltWait_n(),
-        .pSltBdir_n()
+    // Reset is POWER-ON ONLY (vid_rst_n), the 037/audio/video precedent and
+    // bk_rply's own rule: a warm reset must not drop a reply the module is
+    // still holding, and must not re-arm the deselect under running code.
+    qbus_slot #(.SLOT_ENABLE(1'b1)) u_slot (
+        .cpu_clk    (cpu_clk),
+        .rst_n      (vid_rst_n),
+        .ad_n       (ad_n),
+        .sync_n     (sync_n),
+        .din_n      (din_n),
+        .dout_n     (dout_n),
+        .wtbt_n     (wtbt_n),
+        .init_n     (init_n),
+        .rply_n     (rply_n),
+        .model_bk11 (model_bk11),
+        .smk_en     (smk_en),       // DIP 8 on = internal SMK512: slot stands down
+        .rom3       (map_rom3),
+        .rom4       (map_rom4),
+        .rom_dsl_vec(rom_dsl_vec),
+        .pSltAd     (pSltAd),
+        .pSltSync_n (pSltSync_n),
+        .pSltDin_n  (pSltDin_n),
+        .pSltDout_n (pSltDout_n),
+        .pSltWtbt_n (pSltWtbt_n),
+        .pSltRply_n (pSltRply_n),
+        .pSltInit_n (pSltInit_n),
+        .pSltRom3_n (pSltRom3_n),
+        .pSltRom4_n (pSltRom4_n),
+        .pSltMon10_n(pSltMon10_n),
+        .pSltBas10_n(pSltBas10_n),
+        .pSltMon11_n(pSltMon11_n)
     );
 
     // ---- USB HID host (vendored; the side USB-A port) --------------------

@@ -8,7 +8,7 @@ goldens. Longer per-oracle contracts live in `sim/*/README.md`.
 
 `make sim` calls `sim/run_all.sh`. Every runner cd's to its own directory, reads
 the repository and writes only to its own `mktemp` scratch, so the suite is one
-job pool of independent processes: 25 oracles, `nproc` at a time, **longest
+job pool of independent processes: 26 oracles, `nproc` at a time, **longest
 first** so the makespan stays near the longest single oracle rather than
 stacking a slow one behind the queue. Serial the suite is ~35 min of CPU; on 16
 cores it is ~4 min of wall clock.
@@ -582,6 +582,27 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   Both are **mutation-tested** (reverting the `selected` change hangs the clear;
   the RMW leg also proved the S_REPLY refinement unnecessary — the DATIO gap
   already drops the read reply). The gen program is `mem/gen_romwr_test.py`.
+- `sim/slot/run.sh` — the **МПИ expansion-bus oracle**, the pinned contract for
+  the slave-only `src/bus/qbus_slot.sv`: a real module on the far side of the
+  bridge, driven by the real CPU through the real bus front end. **Three legs**
+  — *module attached* (DATI, DATO, DATOB both lanes, **DATIO/RMW**, a qbto
+  address nobody decodes, and the host-ROM deselect checked in BOTH directions),
+  *empty connector* (the module never replies: every slot access must trap 4 and
+  the machine keep running — the bridge must not invent a reply out of a
+  floating pin), and *DIP 8 stand-down* (a module IS attached and answering
+  while DIP 8 selects the internal SMK512 — the bridge must contribute nothing).
+  BK-0010 SoC stack, data-checking, `COSIM PASS` at the pinned success park like
+  `sim/romwr`. **Mutation-tested ×6** (`./run.sh --mutate`), including the
+  original stub's address-setup bug and the module-side SYNC-rise re-arm that
+  drops a DATIO write half.
+  **Two of its checks had to be STRUCTURAL, and that is the lesson to keep**:
+  pin driver overlap and the inward-claim gate are both invisible
+  behaviourally — the overlap window is the module's data hold *after* the CPU
+  has sampled, and on this active-low wired-AND bus an extra driver of all-ones
+  is the identity element. Behavioural legs pass either way; only looking at the
+  output enables catches them. The full contract, and what the oracle
+  deliberately does not own (timing, bk11, interrupts, anything electrical), is
+  in `sim/slot/README.md`.
 - `sim/evnt/run.sh` — the Phase-9 **EVNT/IRQ2 detector oracle** and the
   authority on `src/peripheral/bk_evnt.sv` (the authentic D28+D3:B missing-pulse pair off
   the 037's WTI/SYNCO pins). Contract = the `sim/ref014` shape: the vendored

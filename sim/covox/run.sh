@@ -110,13 +110,13 @@ mut "X6 DIP 5 ignored - always stereo" \
 
 # -- the arbitration --
 mut "X7 the PSG mute dropped entirely" \
-   "s/assign cx_en = live \& (psg_cnt == 0);/assign cx_en = live;/"
+   "s/assign cx_en = live \& psg_zero;/assign cx_en = live;/"
 mut "X8 the PSG mute has no hold (follows psg_act combinationally)" \
-   "s/assign cx_en = live \& (psg_cnt == 0);/assign cx_en = live \& ~psg_act;/"
+   "s/assign cx_en = live \& psg_zero;/assign cx_en = live \& ~psg_act;/"
 mut "X9 the arm gate dropped - the power-on latch reaches the ladders" \
-   "s/assign cx_en = live \& (psg_cnt == 0);/assign cx_en = (psg_cnt == 0);/"
+   "s/assign cx_en = live \& psg_zero;/assign cx_en = psg_zero;/"
 mut "X10 cx_en stuck asserted" \
-   "s/assign cx_en = live \& (psg_cnt == 0);/assign cx_en = 1'b1;/"
+   "s/assign cx_en = live \& psg_zero;/assign cx_en = 1'b1;/"
 mut "X11 the idle one-shot is not retriggerable (reloads only from idle)" \
    "s/else if (port_wr)       idle_cnt <= {IDLE_BITS{1'b1}};/else if (port_wr \&\& idle_cnt == 0) idle_cnt <= {IDLE_BITS{1'b1}};/"
 
@@ -124,7 +124,7 @@ mut "X11 the idle one-shot is not retriggerable (reloads only from idle)" \
 # X19 IS THE HARDWARE BUG ITSELF - the predicate Phase 12 shipped, restored
 # verbatim. It must die in 10a, and it is the reason that section exists.
 mut "X19 the pre-fix predicate: any recent write unmutes (the shipped bug)" \
-   "s/assign cx_en = live \& (psg_cnt == 0);/assign cx_en = (idle_cnt != 0) \& (psg_cnt == 0);/"
+   "s/assign cx_en = live \& psg_zero;/assign cx_en = (idle_cnt != 0) \& psg_zero;/"
 mut "X14 live arms on ANY write - a second write unmutes whatever it wrote" \
    "s/else if (wr_change)     live <= 1'b1;/else if (port_wr)       live <= 1'b1;/"
 mut "X15 the running-one-shot precondition dropped (the first change arms)" \
