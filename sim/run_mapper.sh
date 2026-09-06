@@ -26,8 +26,13 @@
 # does not cover it (that config has no BASIC ROMs), HLT11 the one mode where
 # mon_en shows (segs 0-3 dead), HLT10's HALT-debugger seg-0/extent flags, and
 # the low 32K differential-identical to the smk_en=0 reference throughout.
-# Mutation-tested x15 (5 increment-1 + 5 increment-2 + 5 bk10): see the tb
-# header.
+# Section 10 (2026-09-06): the МПИ ~ROM4 wired-AND on XT3.A22 - a module
+# open-drains D36's Q5, forcing window-1 ROM bank 3 (an empty socket -> MK_NONE,
+# no reply) and killing the Q4·Q5 term that makes the 037 front the window. It
+# overrides the 177716 latch, touches window 1 only, and does not exist on a
+# BK-0010. This is how an SMK512 takes over a BK-0011M.
+# Mutation-tested x17 (5 increment-1 + 5 increment-2 + 5 bk10 + 2 section-10):
+# see the tb header.
 set -euo pipefail
 cd "$(dirname "$0")"
 

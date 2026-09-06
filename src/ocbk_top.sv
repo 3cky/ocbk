@@ -130,7 +130,9 @@ module ocbk_top (
     input  wire         pSltRply_n,// the module's reply (open-collector)
     inout  wire         pSltInit_n,// nINIT: the host pulses it, a module may too
     output wire         pSltRom3_n,// 177716 bank state (bk11) -> module
-    output wire         pSltRom4_n,
+    inout  wire         pSltRom4_n,// ...and ~ROM4 is a WIRED-AND, not an
+                                   //   output: a module open-drains it to take
+                                   //   window 1 on a BK-0011M (qbus_slot)
     output wire         pSltE_n,   // the 037's E strobe: the read strobe a
                                    //   module's top-window ROM uses (bk10)
     // Host-ROM deselect. The module pulls these to take a region away from us;
@@ -138,7 +140,12 @@ module ocbk_top (
     input  wire         pSltMon10_n, // bk10 MONITOR 100000-117777
     input  wire         pSltBas10_n, // bk10 BASIC1+2 120000-157777
     input  wire         pSltBas2_n,  // bk10 BASIC3   160000-177577
-    input  wire         pSltMon11_n, // bk11 MSTD     160000-177577
+    input  wire         pSltMon11_n, // bk11 BOS      140000-157777
+    // Adapter presence: slot pin 44, tied to GND by the МПИ adapter and pulled
+    // up in the pad otherwise. Low = the adapter is fitted, so the bridge may
+    // own the МПИ pins and concede the BK-0011M top window; high = a bare MSX
+    // slot, and qbus_slot stands down exactly as it does for DIP 8.
+    input  wire         pSltPresent_n,
 
     // ---- PS/2 keyboard (receive-only; pins pulled up, driven Z) ----------
     inout  wire         pPs2Clk,
@@ -321,7 +328,6 @@ module ocbk_top (
     cpu_clkgen u_clkgen (
         .sys_clk    (sys_clk),
         .rst_n      (locked),
-        .model_bk11 (model_bk11),
         .turbo      (turbo_eff),       // PS/2 F12: /16 = 6.04 MHz, overrides model
         .cpu_clk    (cpu_clk),
         .cpu_clk_n  (cpu_clk_n),
@@ -483,7 +489,6 @@ module ocbk_top (
     ram_init u_raminit (
         .clk        (sys_clk),
         .rst_n      (srst_n),
-        .model_bk11 (model_bk11),
         .enable     (boot_done & ~boot_active),
         .w_req      (fi_req),
         .w_addr     (fi_addr),
@@ -605,6 +610,8 @@ module ocbk_top (
     // МПИ slot: the per-segment host-ROM deselect and the 177716 bits the
     // expansion connector carries outward. See doc/dev/mpi.md.
     wire [7:0]  rom_dsl_vec;
+    wire [15:0] mpi_word;       // МПИ start-vector contribution to 177716
+    wire        rom4_force;     // a module is holding the МПИ ~ROM4 line low
     wire        map_rom3, map_rom4;
 
     // turbo, resynced and qualified on a BUS-IDLE edge (see turbo_ctl.sv and
@@ -977,6 +984,7 @@ module ocbk_top (
                                     //   (the 037 is in no_steal) at N_TURBO
         .ide_rdata(ide_rdata),      // SMK IDE read-word merge (u_ide below)
         .joy_word (joy_word),       // 177714 read: the MSX pads (u_joy above)
+        .mpi_word (mpi_word),       // 177716 read: an МПИ module's start vector
         .boot_active(mem_boot_active),
         .bw_req   (mem_bw_req),
         .bw_addr  (mem_bw_addr),
@@ -994,6 +1002,7 @@ module ocbk_top (
         .mem_ready(mem_ready),
         .ext_ram  (mem_ext_ram),
         .rom_dsl_vec(rom_dsl_vec),  // МПИ module fronts these ROM segments
+        .rom4_force(rom4_force),    // ...and has forced the window-1 bank
         .rom3     (map_rom3),       // 177716 bits 3/4 -> the slot's ~ROM3/~ROM4
         .rom4     (map_rom4),
         .v1_req   (ro_req),         // video clients -> arbiter ports 1/2/3
@@ -1229,19 +1238,23 @@ module ocbk_top (
     qbus_slot #(.SLOT_ENABLE(1'b1)) u_slot (
         .cpu_clk    (cpu_clk),
         .rst_n      (vid_rst_n),
+        .dclo_n     (dclo_n),       // re-arms the start-vector merge
         .ad_n       (ad_n),
         .sync_n     (sync_n),
         .din_n      (din_n),
         .dout_n     (dout_n),
         .wtbt_n     (wtbt_n),
+        .sel1_n     (sel_n[1]),     // the 177716 window the vector rides
         .init_n     (init_n),
         .e_037_n    (e_037_n),
         .rply_n     (rply_n),
-        .model_bk11 (model_bk11),
+        .model_bk11 (model_bk11),   // which deselect wires physically exist
         .smk_en     (smk_en),       // DIP 8 on = internal SMK512: slot stands down
         .rom3       (map_rom3),
         .rom4       (map_rom4),
         .rom_dsl_vec(rom_dsl_vec),
+        .rom4_force (rom4_force),
+        .mpi_word   (mpi_word),
         .pSltAd     (pSltAd),
         .pSltSync_n (pSltSync_n),
         .pSltDin_n  (pSltDin_n),
@@ -1255,7 +1268,8 @@ module ocbk_top (
         .pSltMon10_n(pSltMon10_n),
         .pSltBas10_n(pSltBas10_n),
         .pSltBas2_n (pSltBas2_n),
-        .pSltMon11_n(pSltMon11_n)
+        .pSltMon11_n(pSltMon11_n),
+        .pSltPresent_n(pSltPresent_n)
     );
 
     // ---- USB HID host (vendored; the side USB-A port) --------------------

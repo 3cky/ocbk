@@ -99,6 +99,15 @@ module qbus_mem #(
     // beyond the segment index.
     input  logic [7:0]  rom_dsl_vec,
 
+    // ---- ...and the МПИ ~ROM4 line coming back in -------------------------
+    // qbus_slot's read-back of XT3.A22: 1 = a module is holding it low. Passed
+    // straight through to mem_mapper, which owns what it means (window 1 goes
+    // MK_NONE on a BK-0011M - see its rom4_force port note). Re-registered
+    // here on the bus-idle edge, like rom_dsl_vec and for the same reason: a
+    // module moves it as a side effect of a write to its OWN register, so it is
+    // not quasi-static and must not change under the FSM mid-cycle.
+    input  logic        rom4_force,
+
     // ---- SMK512 IDE read data ---------------------------------------------
     // smk_ide's registered TRUE-bus-value word: ~packed register data inside
     // its 0177740-0177757 decode, 0 outside it. OR-ed into the reply-point
@@ -114,6 +123,19 @@ module qbus_mem #(
     // timing golden stays byte-identical with it tied off. It must never be
     // left floating in a testbench: an X here poisons rdata.
     input  logic [15:0] joy_word,
+
+    // ---- 0177716 МПИ start-vector contribution -----------------------------
+    // qbus_slot's mpi_word: an expansion module's TRUE-bus contribution to the
+    // 177716 system register, non-zero only inside the one armed start-vector
+    // read (see qbus_slot.sv's start-vector section). It is the START-VECTOR
+    // HACK an SMK512 boots by - BIOS[07716] = 0166400 wire-ORs with SYS_START
+    // and the CPU masks with 0177400 - and it is the same merge this module
+    // already does for the INTERNAL SMK through ram_rdata. A DATA MUX TERM
+    // ONLY: it never touches a reply, `selected` or an output enable. All-zero
+    // = no module contributing, which is exactly what this address read before
+    // the slot existed, so every timing golden stays byte-identical with it
+    // tied off. Like joy_word it must never be left floating in a testbench.
+    input  logic [15:0] mpi_word,
 
     // ---- SDRAM domain ---------------------------------------------------
     input  logic        sclk,       // sys_clk (96.65 MHz)
@@ -248,12 +270,22 @@ module qbus_mem #(
         if (reset) turbo_q <= 1'b0;
         else       turbo_q <= turbo;
 
+    // The МПИ ~ROM4 read-back, loaded on the bus-idle edge like rom_dsl_q below
+    // and for the same reason: a module moves it as a side effect of a write to
+    // its OWN register, so it is not quasi-static and must not change under the
+    // wait FSM mid-cycle. Declared here because the mapper instance uses it.
+    logic rom4_force_q;
+    always_ff @(posedge sclk or posedge reset)
+        if (reset)        rom4_force_q <= 1'b0;
+        else if (sync_n)  rom4_force_q <= rom4_force;
+
     mem_mapper #(.ADDR_BITS(ADDR_BITS)) u_map (
         .sclk(sclk), .rst(reset), .model_bk11(model_bk11), .smk_en(smk_en_q),
         .sync_n(sync_n), .dout_n(dout_n), .wtbt_n(wtbt_n), .sel1_n(sel1_n),
         .ad_true(~ad_n), .addr0(addr[0]), .bank_wr(bank_wr),
         .addr(addr), .kind(mkind), .phys(mphys), .smk_ro(m_smk_ro),
-        .smk_wo(m_smk_wo), .rom3(rom3), .rom4(rom4)
+        .smk_wo(m_smk_wo), .rom3(rom3), .rom4(rom4),
+        .rom4_force(rom4_force_q)
     );
 
     // МПИ ROM deselect, re-registered locally and FROZEN FOR THE BUS CYCLE.
@@ -268,6 +300,7 @@ module qbus_mem #(
     always_ff @(posedge sclk or posedge reset)
         if (reset)        rom_dsl_q <= 8'h00;
         else if (sync_n)  rom_dsl_q <= rom_dsl_vec;
+
 
     wire rom_dsl = rom_dsl_q[addr[14:12]];
 
@@ -448,6 +481,7 @@ module qbus_mem #(
     // untouched - this is a data mux, never a reply or an output-enable term.
     wire [15:0] io_word  =
         !sel1_n ? ((model_bk11 ? SYS_START11 : SYS_START)
+                             | mpi_word
                              | (sel1_wflag ? 16'o000004 : 16'o0)
                              | (kbd_down   ? 16'o0 : 16'o000100)
                              | (tape_in    ? 16'o000040 : 16'o0)) :

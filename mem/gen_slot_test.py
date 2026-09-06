@@ -9,6 +9,16 @@ module itself is sim/slot/mpi_slave_model.v.
 
 Sub-tests, in order:
 
+  0. The START-VECTOR merge window is ARMED, not permanent. Under +vecboot the
+     module drives 0166400 at 0177716 on EVERY read of it (no reply - the vm1
+     self-replies for its own 177700-177717 block), and reaching this code at
+     all already proves the boot merge happened: the tb pokes 0100000, where an
+     unmerged machine lands, with a jump to the fail park. This re-read must
+     then come back as the PLAIN 0100100 - SYS_START | the idle keyboard bit -
+     because the window closed with the start-vector read. A permanently open
+     window would return 0166500 here and corrupt every MONITOR poll of the
+     keyboard (bit 6) and the tape (bit 5) on a real machine.
+
   1. DATI  - read the module's preset registers. A wrong address on the pins
      shows up here as wrong DATA, because the model presets a per-word value.
   2. DATO  - word write then read back.
@@ -30,7 +40,11 @@ Sub-tests, in order:
      160000 window, releasing it must give that window back, and both deselects
      together must hand over both windows. A bridge that does not export E
      leaves 160000 mute and the read traps, which is what a real МСТД module
-     did on the board before E was wired.
+     did on the board before E was wired. 7d then asserts **M11** alone and
+     requires that NOTHING move: the deselect wires are physically per-model on
+     a real machine (BAS/BAS2/MON10 on a BK-0010, M11/P4O on a BK-0011M) while
+     the adapter routes all of them in both cases, so the bridge's model gate is
+     what emulates which wires exist.
 
 Data-checking oracle (COSIM PASS at the pinned success park), NOT a timing
 golden. Park loops match sim/bk11 and sim/romwr: success 001004, fail 001012.
@@ -46,6 +60,8 @@ REG_BASE  = 0o177740            # the module's register file (8 words)
 REG_A     = REG_BASE + 0o2      # a scratch register used by most legs
 CTRL      = REG_BASE + 0o16     # the module's control register
 DEAD_ADDR = 0o177600            # decoded by NOBODY -> qbto -> trap 4
+SYS_REG   = 0o177716            # the system register / start-vector read
+SYS_IDLE  = 0o100100            # SYS_START | bit 6 (no key down), no module
 ROM_WIN   = 0o120000            # module ROM window 1 (BAS, normal DIN strobe)
 ROM2_WIN  = 0o160000            # module ROM window 2 (BAS2, the E strobe)
 
@@ -97,6 +113,12 @@ def build_program():
 
     a.label("start")
     a.emit(0o012706, STACK)                 # MOV #STACK,SP
+
+    # --- 0. the start-vector window is spent -------------------------------
+    # Getting here at all is the boot-merge check (the tb sends 100000 to the
+    # fail park under +vecboot). This is the ARMING check: the module may still
+    # be driving 177716, and it must no longer reach the CPU.
+    cmp_mem_imm(a, SYS_REG, SYS_IDLE)
 
     # --- 1. DATI: the module's presets come back through the bridge ---------
     cmp_mem_imm(a, REG_BASE, PRESET0)
@@ -156,6 +178,21 @@ def build_program():
     # 7b. ...and releasing it gives 160000 back to the host.
     a.emit(0o005037, CTRL)                  # CLR @#CTRL
     cmp_mem_imm(a, ROM2_WIN, HOSTROM2)
+
+    # 7d. M11 MUST BE IGNORED ON A BK-0010, even though the module asserts it.
+    # The wire is physically present only on a BK-0011M; the adapter routes it
+    # in both cases, so the bridge's model gate is what emulates that. Note the
+    # gate. On a BK-0011M M11 takes BOS at 140000-157777 (segs 4,5) so the
+    # module can put RAM there - a DIFFERENT window from the 160000 one, which
+    # needs no wire at all because МСТД is itself an МПИ board and comes out
+    # when another module goes in. This stays as the BK-0010 half of the
+    # contract; sim/slot/dsl_tb.v owns the BK-0011M half.
+    a.emit(0o012737, 0o000010, CTRL)        # MOV #10,@#CTRL  (assert M11 only)
+    cmp_mem_imm(a, ROM_WIN,  HOSTROM)       #   120000 still the host's
+    cmp_mem_imm(a, ROM2_WIN, HOSTROM2)      #   160000 still the host's - M11 is
+                                            #   a BK-0011M wire and this is a
+                                            #   BK-0010
+    a.emit(0o005037, CTRL)                  # CLR @#CTRL
 
     # 7c. both windows at once, the real МСТД configuration.
     a.emit(0o012737, 0o000005, CTRL)        # MOV #5,@#CTRL   (BAS | BAS2)

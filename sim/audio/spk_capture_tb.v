@@ -54,6 +54,7 @@ module spk_capture_tb;
         .reset     (reset),
         .ide_rdata(16'h0000),  // no SMK IDE device in this tb
         .joy_word  (joy_word),       // 0177714 read word (section 10)
+        .mpi_word(16'o000000), // no МПИ module here; never leave it floating
         .init_n    (init_n),
         .kbd_down  (1'b0),
         .tape_in   (tape_in),

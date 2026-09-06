@@ -460,9 +460,12 @@ set_location_assignment PIN_161 -to pSltRom4_n
 set_location_assignment PIN_158 -to pSltE_n
 
 # ---- host-ROM deselect (module -> host; inverted by the adapter) ---------
-# MON10/BAS10 are BK-0010 signals and MON11 is an ocbk/adapter extension; a
-# real BK-0011M connector has no pin for any of them. qbus_slot model-gates
-# them so a module cannot deselect a ROM the real machine could not.
+# MON10 (B1) and M11 (B6) are AFTER-MARKET wires the SMK512 installation adds,
+# which is why neither is on a stock schematic: MON10 takes the BK-0010 MONITOR
+# and M11 takes the BK-0011M BOS at 140000-157777, so the module can put RAM
+# there. BAS/BAS2/MON10 are wired only on a BK-0010 and M11 only on a BK-0011M,
+# while the adapter routes all four in both cases - qbus_slot model-gates them
+# so a module cannot deselect a ROM the real machine could not.
 # Four lines, and each covers a DIFFERENT ROM - see qbus_slot.sv's table,
 # traced from doc/bk0010-01.sch and doc/smk512-scheme-v1.0.sch. BAS covers
 # 120000-157777 only; the 160000 window is BAS2's, and a module that asserts
@@ -474,6 +477,16 @@ set_location_assignment PIN_180 -to pSltMon10_n
 set_location_assignment PIN_175 -to pSltBas10_n
 set_location_assignment PIN_160 -to pSltBas2_n
 set_location_assignment PIN_174 -to pSltMon11_n
+
+# ---- adapter presence (slot pin 44) --------------------------------------
+# The МПИ adapter ties this pin to GND; with no adapter the pad's own ~25k
+# pull-up holds it high. qbus_slot stands the whole bridge down when it reads
+# high, so a bare OneChipBook does not sample floating MSX-edge inputs - and
+# a BK-0011M keeps its mstd11m top-window image, which the bridge otherwise
+# concedes to the module (the МСТД board is an МПИ card, not motherboard ROM).
+set_location_assignment PIN_179 -to pSltPresent_n
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pSltPresent_n
+set_instance_assignment -name PCI_IO ON -to pSltPresent_n
 
 # ---- I/O standard: 5V-tolerant via the PCI clamp, 4mA, pulled up ---------
 set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pSltAd
@@ -491,8 +504,13 @@ set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pSltWtbt_n
 set_instance_assignment -name PCI_IO ON -to pSltWtbt_n
 set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pSltRom3_n
 set_instance_assignment -name PCI_IO ON -to pSltRom3_n
+# ~ROM4 (XT3.A22) is a WIRED-AND, not an output: ocbk pulls it low or lets go
+# and a module open-drains it to take window 1 on a BK-0011M (see qbus_slot and
+# doc/dev/mpi.md). The pull-up is what supplies the released high - the line is
+# quasi-static, so ~25k is ample here.
 set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pSltRom4_n
 set_instance_assignment -name PCI_IO ON -to pSltRom4_n
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pSltRom4_n
 set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pSltE_n
 set_instance_assignment -name PCI_IO ON -to pSltE_n
 # Open-collector / input-only nets: these MUST have the pull-up, since the

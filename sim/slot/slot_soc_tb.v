@@ -21,6 +21,18 @@
 //   +noreply    the module is mute: every slot access must qbto to trap 4, and
 //               the machine must still run. This is the "nothing plugged in"
 //               contract - the bridge must not invent a reply.
+//   +vecboot    the module also answers the CPU's 0177716 START-VECTOR read -
+//               DRIVING ONLY, no reply, because the vm1 self-replies for its
+//               own 177700-177717 block. Its 0166400 (the real SMK512
+//               BIOS[07716]) must wire-OR with SYS_START and start the machine
+//               at 0166400 instead of 0100000; 0100000 is poked with a JUMP TO
+//               THE FAIL PARK for this leg, so a bridge that misses the merge
+//               cannot pass by accident. Then the program re-reads 0177716
+//               while the module is STILL driving it and must get the plain
+//               0100100: the merge window is armed for the start vector alone.
+//               This is the 2026-09 hardware failure - a real SMK512 booted to
+//               MONITOR (bk10) or hung (bk11) because the inward path was gated
+//               on the module's reply, which this cycle never sends.
 //   +dip8       a real module IS attached and answering, but DIP 8 also selects
 //               the internal SMK512 emulation - the misconfiguration. qbus_slot
 //               must stand down COMPLETELY (slot_live=0): no reply passed
@@ -40,11 +52,14 @@ module slot_soc_tb;
     localparam [15:0] ROMSTUB1 = 16'o001000;   //   mem/gen_slot_test.py
     localparam [15:0] HOSTROM  = 16'o017171;   // the host BASIC word at 120000
     localparam [15:0] HOSTROM2 = 16'o104405;   // basic10_3.rom word 0, at 160000
+    localparam [15:0] VEC_WORD = 16'o166400;   // the module's 177716 word
+    localparam [15:0] VEC_PC   = VEC_WORD & 16'o177400;   // where the CPU starts
 
-    reg noreply, dip8;
+    reg noreply, dip8, vecboot;
     initial begin
         noreply = $test$plusargs("noreply");
         dip8    = $test$plusargs("dip8");
+        vecboot = $test$plusargs("vecboot");
     end
 
     // ---- clocks: sys_clk + /16 037 enables + CPU clk (/32) -----------------
@@ -133,6 +148,8 @@ module slot_soc_tb;
     wire [3:0]  vid_pal_nc;
     wire        stop_block_nc;
     wire [7:0]  rom_dsl_vec;
+    wire [15:0] mpi_word;
+    wire        rom4_force;
     wire        map_rom3, map_rom4;
 
     qbus_mem u_ms (
@@ -141,6 +158,7 @@ module slot_soc_tb;
         .reset    (~dclo),
         .ide_rdata(16'h0000),
         .joy_word(16'o000000),
+        .mpi_word (mpi_word),        // <- the start-vector merge, from the bridge
         .init_n   (init),
         .kbd_down (1'b0),
         .tape_in  (1'b0),
@@ -149,6 +167,7 @@ module slot_soc_tb;
         .model_bk11(1'b0),           // BK-0010: mapper pass-through
         .smk_en   (dip8),            // +dip8: the internal SMK512 owns the bus
         .rom_dsl_vec(rom_dsl_vec),   // <- from the bridge under test
+        .rom4_force(rom4_force),     // <- ditto (bk10 here, so always 0)
         .rom3     (map_rom3),
         .rom4     (map_rom4),
         .boot_active(1'b0),
@@ -198,7 +217,10 @@ module slot_soc_tb;
     // ---- THE BRIDGE UNDER TEST + the module on the far side -----------------
     tri1 [15:0] pSltAd;          // tri1 = the .qsf's WEAK_PULL_UP_RESISTOR
     wire        pSltSync_n, pSltDin_n, pSltDout_n, pSltWtbt_n;
-    wire        pSltRply_n, pSltInit_n, pSltRom3_n, pSltRom4_n, pSltE_n;
+    wire        pSltRply_n, pSltInit_n, pSltRom3_n, pSltE_n;
+    // ~ROM4 is a wired-AND pad: tri1 is the .qsf's WEAK_PULL_UP_RESISTOR, which
+    // is what supplies the high when nobody pulls it low.
+    tri1        slt_rom4;
     wire        pSltMon10_n, pSltBas10_n, pSltBas2_n, pSltMon11_n;
 
     // The .qsf gives every one of these pads a weak pull-up, which is what
@@ -212,11 +234,13 @@ module slot_soc_tb;
     qbus_slot #(.SLOT_ENABLE(1'b1)) u_slot (
         .cpu_clk    (clk),
         .rst_n      (dclo),
+        .dclo_n     (dclo),
         .ad_n       (ad),
         .sync_n     (sync),
         .din_n      (din),
         .dout_n     (dout),
         .wtbt_n     (wtbt),
+        .sel1_n     (sel[1]),
         .init_n     (init),
         .e_037_n    (va_ne),        // the 037's E -> the slot's top-window strobe
         .rply_n     (rply),
@@ -225,6 +249,8 @@ module slot_soc_tb;
         .rom3       (map_rom3),
         .rom4       (map_rom4),
         .rom_dsl_vec(rom_dsl_vec),
+        .rom4_force (rom4_force),
+        .mpi_word   (mpi_word),
         .pSltAd     (pSltAd),
         .pSltSync_n (pSltSync_n),
         .pSltDin_n  (pSltDin_n),
@@ -233,12 +259,13 @@ module slot_soc_tb;
         .pSltRply_n (slt_rply),
         .pSltInit_n (pSltInit_n),
         .pSltRom3_n (pSltRom3_n),
-        .pSltRom4_n (pSltRom4_n),
+        .pSltRom4_n (slt_rom4),
         .pSltE_n    (pSltE_n),
         .pSltMon10_n(slt_m10),
         .pSltBas10_n(slt_b10),
         .pSltBas2_n (slt_b2),
-        .pSltMon11_n(slt_m11)
+        .pSltMon11_n(slt_m11),
+        .pSltPresent_n(1'b0)        // the adapter is fitted in every SoC leg
     );
 
     mpi_slave_model u_module (
@@ -256,8 +283,9 @@ module slot_soc_tb;
         .pSltBas10_n(slt_b10),
         .pSltBas2_n (slt_b2),
         .pSltMon11_n(slt_m11),
-        .no_reply   (noreply)        // +dip8 keeps the module LIVE: the
+        .no_reply   (noreply),       // +dip8 keeps the module LIVE: the
                                      // misconfiguration is what we are testing
+        .vec_mode   (vecboot)
     );
 
     // ---- the X monitor at the reply edge ------------------------------------
@@ -283,7 +311,7 @@ module slot_soc_tb;
     // "every sim still passes" failure class from doc/dev/gotchas.md, and the
     // only way to catch it in sim is to look at the enables directly.
     always @(posedge sys_clk) if (aclo === 1'b1) begin
-        if (u_slot.g_on.slot_ad_oe && u_module.drive) begin
+        if (u_slot.g_on.slot_ad_oe && u_module.drive_any) begin
             $display("SLOT-ERROR: bridge and module both driving pSltAd, addr=%06o t=%0t",
                      addr, $time);
             $display("COSIM FAIL");
@@ -301,9 +329,43 @@ module slot_soc_tb;
     // an INTERNAL read. The hold tail after DIN rises is legitimate and is why
     // this is qualified on din.
     always @(posedge sys_clk) if (aclo === 1'b1) begin
-        if (u_slot.g_on.slot_rd && !din && !u_module.drive) begin
+        if (u_slot.g_on.slot_rd && !din && !u_module.drive_any) begin
             $display("SLOT-ERROR: bridge drove ad_n from an unclaimed cycle, addr=%06o t=%0t",
                      addr, $time);
+            $display("COSIM FAIL");
+            $finish;
+        end
+    end
+
+    // ---- the start-vector merge window, checked structurally ----------------
+    // mpi_word is a DATA term, so a window that stayed open would be invisible
+    // in every leg where the module does not drive 177716 - the "every sim
+    // still passes" class again. Two properties, both structural:
+    //   * it may only be non-zero inside a live nSEL1 READ - the CPU's own
+    //     register-select pin, never a connector pin;
+    //   * the window may open for exactly ONE read per DCLO. The +vecboot leg
+    //     also pins that behaviourally (the program re-reads 177716 while the
+    //     module is still driving it), which is the check that matters; this
+    //     one pins it in EVERY leg.
+    integer vec_opens = 0;
+    reg     vec_open_q = 1'b0;
+    always @(posedge sys_clk) if (aclo === 1'b1) begin
+        if (u_slot.mpi_word !== 16'o000000 && !(!sync && !din && !sel[1])) begin
+            $display("SLOT-ERROR: mpi_word=%06o outside an nSEL1 read, t=%0t",
+                     u_slot.mpi_word, $time);
+            $display("COSIM FAIL");
+            $finish;
+        end
+        // sel1_rd, not the raw bus, so the DIP-8 leg (where slot_live holds the
+        // window shut and the arm is never spent) does not count phantom opens.
+        if (u_slot.g_on.vec_arm && u_slot.g_on.sel1_rd) begin
+            if (!vec_open_q) vec_opens = vec_opens + 1;
+            vec_open_q = 1'b1;
+        end else begin
+            vec_open_q = 1'b0;
+        end
+        if (vec_opens > 1) begin
+            $display("SLOT-ERROR: the start-vector window opened %0d times", vec_opens);
             $display("COSIM FAIL");
             $finish;
         end
@@ -367,6 +429,16 @@ module slot_soc_tb;
         $readmemh("slot_ram.hex", u_mem.mem, 0, 16383);
         u_mem.mem['h4000] = ROMSTUBW;   // BK 100000: JMP
         u_mem.mem['h4001] = ROMSTUB1;   // BK 100002: @#001000
+        if (vecboot) begin
+            // The merge must MOVE the start PC, so 100000 - where an unmerged
+            // machine lands - is poked with a jump to the FAIL park, and the
+            // real entry goes at the merged vector inside the host's own top
+            // ROM window (BAS2 is released at reset, so ocbk still answers
+            // there). Without this the leg would pass on the old behaviour.
+            u_mem.mem['h4001]             = 16'o001012;          // -> fail park
+            u_mem.mem[VEC_PC >> 1]        = ROMSTUBW;            // JMP
+            u_mem.mem[(VEC_PC >> 1) + 1]  = ROMSTUB1;            //   @#001000
+        end
         // The host's own BASIC word at 120000, so the deselect can be checked
         // in BOTH directions: module pattern with BAS10 on, this with it off.
         u_mem.mem['h5000] = HOSTROM;

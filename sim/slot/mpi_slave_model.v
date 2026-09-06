@@ -22,6 +22,17 @@
 //                              line as a side effect.
 //   ROM_BASE .. +ROM_WORDS     a module ROM window on the NORMAL DIN strobe,
 //                              answered only while BAS is asserted.
+//   0177716 (vec_mode only)    THE START VECTOR. In its reset mode an SMK512's
+//                              rom7 window covers 0170000-0177777 INCLUDING the
+//                              register space, so it answers the CPU's start-
+//                              vector read with its BIOS word at image offset
+//                              07716 = 0166400. It DRIVES ONLY - it sends no
+//                              RPLY, because the vm1 self-replies for its own
+//                              177700-177717 block. That makes this the one
+//                              cycle on the bus where a bridge gated on the
+//                              module's reply sees nothing at all, which is why
+//                              a real SMK512 booted an МПИ-equipped ocbk into
+//                              MONITOR instead of into its BIOS.
 //   ROM2_BASE .. +ROM_WORDS    a SECOND window on the E STROBE, answered only
 //                              while BAS2 is asserted. This is the МСТД
 //                              topology and it is the whole reason this model
@@ -35,7 +46,11 @@
 //                              happened on the board.
 //                              Both windows answer ONLY while their deselect is
 //                              asserted: a module must not answer for a region
-//                              the host still owns, or both drive.
+//                              the host still owns, or both drive. The second
+//                              window takes BAS2 **or** M11 - the two lines name
+//                              the same 160000-177577 window through different
+//                              host-side mechanisms, and a module drives
+//                              whichever its installation wired.
 //
 // THE RELEASE RULE IS THE POINT OF THIS FILE.  A DATIO(B) read-modify-write
 // runs DIN then DOUT under ONE held SYNC, so a slave that returns to idle on
@@ -48,7 +63,8 @@
 // real module: the reply latency is a fixed parameter rather than an access
 // time; there is no DMA, no interrupt and no IAK participation (the bridge has
 // none either yet); and the module never drives AD except in a read data
-// phase it has claimed.
+// phase it has claimed - the start vector included, which it claims by address
+// alone because there is no reply to claim it with.
 //
 `timescale 1ns / 1ps
 
@@ -57,7 +73,9 @@ module mpi_slave_model #(
     parameter [15:0] ROM_BASE  = 16'o120000,
     parameter [15:0] ROM2_BASE = 16'o160000,
     parameter int    ROM_WORDS = 16,       // decoded window, in words
-    parameter int    LATENCY   = 4         // clk edges from strobe to RPLY
+    parameter int    LATENCY   = 4,        // clk edges from strobe to RPLY
+    parameter [15:0] VEC_ADDR  = 16'o177716,
+    parameter [15:0] VEC_WORD  = 16'o166400  // the real SMK512 BIOS[07716]
 ) (
     input  wire        clk,        // the model's own timebase (sys_clk)
     input  wire        rst_n,
@@ -77,7 +95,8 @@ module mpi_slave_model #(
     output wire        pSltMon11_n,
 
     // ---- tb control -------------------------------------------------------
-    input  wire        no_reply    // 1 = the module is mute (the qbto leg)
+    input  wire        no_reply,   // 1 = the module is mute (the qbto leg)
+    input  wire        vec_mode    // 1 = also answer the 177716 start vector
 );
 
     // ---- storage ----------------------------------------------------------
@@ -106,7 +125,12 @@ module mpi_slave_model #(
     wire sel_rom2 = !pSltSync_n && !no_reply
                    && (addr >= ROM2_BASE)
                    && (addr <  ROM2_BASE + 2*ROM_WORDS)
-                   && ctrl[2];                  // BAS2
+                   && ctrl[2];                  // BAS2 - the BK-0010 line for
+                                                //   this window. NOT M11: that
+                                                //   wire exists only on a
+                                                //   BK-0011M, so on this stack
+                                                //   asserting it must move
+                                                //   nothing (sub-test 7d)
     wire sel_any = (sel_reg || sel_rom || sel_rom2) && !no_reply;
 
     // ---- read data --------------------------------------------------------
@@ -119,12 +143,22 @@ module mpi_slave_model #(
                         : sel_rom  ? (16'o052525 ^ {3'b0, addr[13:1]})
                                    : regs[addr[3:1]];
 
+    // ---- the start vector: DRIVE, no reply --------------------------------
+    // Combinational off DIN, as a ROM output enable is: the CPU samples about
+    // 1.5 cpu_clk after DIN on its OWN self-reply, so anything clocked out of
+    // this model's LATENCY counter would arrive after the sample. No RPLY is
+    // asserted for it - that is the whole point of this leg.
+    wire vec_sel = vec_mode && !pSltSync_n && !pSltDin_n && (addr == VEC_ADDR);
+
     reg         drive;
     reg         reply;
     reg  [15:0] rd_hold;
     reg  [7:0]  cnt;
 
-    assign pSltAd     = drive ? ~rd_hold : 16'hZZZZ;
+    assign pSltAd     = drive    ? ~rd_hold : 
+                        vec_sel  ? ~VEC_WORD : 16'hZZZZ;
+    // Every AD output enable this model has, for the tb's structural checks.
+    wire   drive_any  = drive || vec_sel;
     assign pSltRply_n = reply ? 1'b0     : 1'bZ;   // open-drain, never high
 
     // ---- the deselect lines, active low on the МПИ ------------------------
@@ -133,7 +167,12 @@ module mpi_slave_model #(
     assign pSltMon10_n = ~ctrl[1];
     assign pSltBas10_n = ~ctrl[0];
     assign pSltBas2_n  = ~ctrl[2];
-    assign pSltMon11_n = ~ctrl[0];
+    // M11 has its OWN control bit, so the oracle can assert it WITHOUT BAS2.
+    // On a real machine M11 is wired only on a BK-0011M and BAS2 only on a
+    // BK-0010, while the adapter carries both in either case - so on this
+    // BK-0010 stack an M11 assert must move nothing, and sub-test 7d checks
+    // exactly that. Sharing a bit with BAS would make the check impossible.
+    assign pSltMon11_n = ~ctrl[3];
 
     wire strobes_idle = pSltDin_n && pSltDout_n;
 
@@ -187,7 +226,7 @@ module mpi_slave_model #(
     // A module that is driving AD while the bridge is also driving means the
     // direction logic is wrong; catch it here rather than as mysterious data.
     always @(posedge clk)
-        if (rst_n && drive && !pSltDin_n && pSltSync_n)
+        if (rst_n && drive_any && !pSltDin_n && pSltSync_n)
             $display("SLOT-ERROR: module driving AD outside a SYNC at t=%0t", $time);
 
 endmodule

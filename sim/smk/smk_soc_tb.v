@@ -180,6 +180,7 @@ module smk_soc_tb;
         // and 0177716 (nSEL1 wins the ternary). Keep this in sync with
         // gen_smk_test.py's JOY_WORD; both sticks up + fire A.
         .joy_word(16'o020441),
+        .mpi_word(16'o000000), // no МПИ module here; never leave it floating
         .init_n   (init),
         .kbd_down (1'b0),
         .tape_in  (1'b0),
@@ -188,6 +189,7 @@ module smk_soc_tb;
         .model_bk11(~bk10),
         .smk_en   (1'b1),            // <- the whole point of this oracle
         .rom_dsl_vec(8'h00),        // no МПИ module: host ROM fully selected
+        .rom4_force(1'b0),   // no МПИ module forcing the window-1 bank
         .boot_active(1'b0),          // no EPCS: images preloaded directly
         .bw_req   (1'b0),
         .bw_addr  ({AB{1'b0}}),

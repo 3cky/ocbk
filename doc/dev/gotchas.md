@@ -190,6 +190,27 @@
   answer is "none", expect nothing — and never accept a slack improvement alone
   as evidence, because at this placement fragility an unrelated edit moves slack
   by half a nanosecond on its own.
+- **The enable-cone rule, visit NINE — and it was the neighbouring bit-pair of
+  a flop this file had ALREADY cured (2026-09-06).** The МПИ adapter-presence
+  input is **one pin and +1 LE**, and it re-placed the fitter from +0.317 to
+  **+0.065 ns** — positive, TNS 0, but the thinnest this design has shipped, and
+  in the SDRAM-datapath family that once cost a no-boot. The cone was
+  `mem_mapper|mon_en → cpu_sdram_dp|be_o[1:0]`, and `mon_en`, `rom_vec[6]`,
+  `rom_vec[7]` and `seg_std[4]` were **all** landing on `be_o` — the endpoint
+  signature this file already records for `lba_a`.
+  The cure was **already written in the same file, for the flop next door.**
+  `wdata_o` had been ungated from `is_write` for exactly this reason (see
+  above); `be_o` was left gated on `is_read || early_rd` / `is_write` in the
+  FSM, so the mapper decode still sat in its enable. Loading `be_o` on **any
+  idle cycle** and moving the decode into its data mux took it to **+0.454 ns,
+  TNS 0**, and `be_o` left the report entirely. **+12 LE**, `make sim` 26/26
+  with every golden byte-identical — the load is behaviour-identical by the
+  same argument as `wdata_o`'s (consumed only while `req` is high, and `req`
+  rises only on a transition out of `D_IDLE`).
+  **The lesson: when you ungate one register out of an enable cone, check the
+  others loaded in the same FSM branch.** The fix left a sibling behind, and it
+  waited three phases for a one-pin increment to expose it.
+
 - **The enable-cone rule, visits SEVEN and EIGHT (the МПИ slot, 2026-08-30).**
   The slave-only slot bridge cost only **+21 LE** but **+27 pins**, and that
   alone re-placed the fitter from +0.339 into a real **VIOLATION, −0.169 ns /

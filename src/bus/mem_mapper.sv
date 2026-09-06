@@ -185,7 +185,28 @@ module mem_mapper #(
     // silicon does. Pure state export - the translate below is untouched, so
     // every mapper golden stays byte-identical.
     output logic                 rom3,   // 177716 bit 3 (window-1 ROM code 010)
-    output logic                 rom4    // 177716 bit 4 (window-1 ROM code 020)
+    output logic                 rom4,   // 177716 bit 4 (window-1 ROM code 020)
+
+    // ---- ...and the same ~ROM4 line coming BACK IN ------------------------
+    // XT3.A22 is not an output. On the real board it is a WIRED-AND: D36 Q5
+    // (К555ТМ9, a totem pole) drives S1-66, and the net also lands on D32.5
+    // (К555ЛИ6) whose Y = Q4 AND Q5 is the "window 1 = internal RAM" term -
+    // the one that open-collector NANDs the 037's AD15 low through D10 so the
+    // 037 fronts window 1. An expansion module OPEN-DRAINS the same net and
+    // wins over the totem pole, and that is how it takes window 1 on a
+    // BK-0011M: smk64.vhd declares p4o an `out` through an Altera `opndrn`
+    // buffer fed by extended_reg(2), which is 0 at reset - so a real SMK pulls
+    // A22 LOW FROM POWER-ON.
+    // Pulling it low forces Q5 = 0, which is bit 4 SET (Q is the inverted bus
+    // bit) = code 020 = window-1 ROM bank 3, one of the two sockets a stock
+    // BK-0011M leaves EMPTY - and simultaneously kills Q4·Q5 so the 037 stops
+    // fronting the window. BOTH effects fall out of one term here: MK_NONE
+    // over window 1. No reply, so the module answers; and no MK_RAM037, so
+    // qbus_mem's ext_ram stays low and va_037_sync never claims it.
+    // qbus_slot owns the pin (open-drain + read-back) and the model gate -
+    // A22 is wired only on a BK-0011M - so this is already qualified, and it
+    // is bus-idle latched there, constant for a whole cycle.
+    input  logic                 rom4_force // a module is holding A22 low
 );
 
     import qbus_pkg::*;
@@ -269,9 +290,20 @@ module mem_mapper #(
     logic [7:0] seg_std;     // seg -> standard bk11 decode passthrough
     logic       seg_rot;     // rel = seg ^ 4 (the SYS/ALL +4 rotation)
     logic       seg0_ro;     // seg 0 is read-only (HLT10)
-    logic       rom6_en;     // seg 6 = SMK BIOS ROM window (SYS/STD10/STD11)
-    logic       rom7_en;     // seg 7 = SMK BIOS ROM window incl. the register
-                             // space - the boot overlay (SYS only)
+    // The two BIOS windows are held as a PER-SEGMENT VECTOR, not as two flops,
+    // and that is a timing fix, not a tidy-up. As two flops they entered the
+    // translate mux as `(smk_seg == 6 && rom6_en) || (smk_seg == 7 && rom7_en)`
+    // - two compares plus an OR at the TOP of the priority mux that resolves
+    // phys - and the cone rom6_en -> cpu_sdram_dp|addr_o is one of the two
+    // worst setup paths in the design. It went to a real VIOLATION (-0.106 /
+    // TNS -0.572) on a build whose only edit was in qbus_slot and which REMOVED
+    // 29 LE: placement, not logic. Indexed like seg_smk right below it, the
+    // decision is a 1-LUT vector index and the flops leave the cone. Bits 0-5
+    // are never set - the SMK BIOS only ever occupies segs 6 and 7.
+    logic [7:0] rom_vec;     // seg -> the SMK BIOS ROM window covers it.
+                             // [6] = the rom6 window (SYS/STD10/STD11);
+                             // [7] = the rom7 window, which spans the register
+                             // space too - the 177716 boot overlay (SYS only).
     logic       ext7_r;      // seg-7 restricted extent readable (ALL)
     logic       ext7_w;      // seg-7 restricted extent writable (HLT10/HLT11)
     logic       mon_en;      // BK-0010: the monitor ROM (segs 0,1) is SELECTED
@@ -302,7 +334,7 @@ module mem_mapper #(
     // The mode case is a literal transcription of BkEmu
     // SmkMemoryManager.setupMemoryLayout as vectors/flags over the 8 segments
     // of 100000-177777: seg_smk (SMK RAM), seg_std (standard bk11 decode),
-    // rom6_en/rom7_en (the BIOS windows), ext7_r/ext7_w (the seg-7 extent);
+    // rom_vec (the BIOS windows), ext7_r/ext7_w (the seg-7 extent);
     // NEITHER seg_smk NOR seg_std NOR a rom window = MK_NONE (a deselected
     // window). Reset = MODE_SYS (BkEmu initMemoryLayout).
     always_ff @(posedge sclk) begin
@@ -313,8 +345,8 @@ module mem_mapper #(
             seg_std    <= 8'b0000_0000;
             seg_rot    <= 1'b1;
             seg0_ro    <= 1'b0;
-            rom6_en    <= 1'b1;           // MODE_SYS: both BIOS windows on -
-            rom7_en    <= 1'b1;           // the 177716 boot overlay is live
+            rom_vec    <= 8'b1100_0000;   // MODE_SYS: both BIOS windows on -
+                                          // the 177716 boot overlay is live
             ext7_r     <= 1'b0;
             ext7_w     <= 1'b0;
             mon_en     <= 1'b1;           // MODE_SYS keeps the bk10 monitor ROM
@@ -323,8 +355,7 @@ module mem_mapper #(
             if (smk_strobe && !smk_eff_arm) begin
                 smk_page <= {smk_eff[0], smk_eff[3], smk_eff[2], smk_eff[10]};
                 seg0_ro  <= 1'b0;
-                rom6_en  <= 1'b0;
-                rom7_en  <= 1'b0;
+                rom_vec  <= 8'b0000_0000;
                 ext7_r   <= 1'b0;
                 ext7_w   <= 1'b0;
                 // BK-0010 monitor-ROM select: on by default, cleared by the
@@ -335,11 +366,11 @@ module mem_mapper #(
                     // register-space boot overlay); win1 + BOS deselected ->
                     // seg0,1 NONE
                     3'd7:    begin seg_smk <= 8'b0011_1100; seg_std <= 8'b0000_0000; seg_rot <= 1'b1;
-                                   rom6_en <= 1'b1; rom7_en <= 1'b1; end
+                                   rom_vec <= 8'b1100_0000; end
                     // STD10: seg2..5 = P+2..5, seg7 = P+7 (extent neither);
                     // seg6 = BIOS ROM; seg0,1 NONE
                     3'd3:    begin seg_smk <= 8'b1011_1100; seg_std <= 8'b0000_0000; seg_rot <= 1'b0;
-                                   rom6_en <= 1'b1; end
+                                   rom_vec <= 8'b0100_0000; end
                     // RAM10: all eight segments = P+0..7 (extent neither)
                     3'd5:    begin seg_smk <= 8'b1111_1111; seg_std <= 8'b0000_0000; seg_rot <= 1'b0;
                                    mon_en  <= 1'b0; end
@@ -350,7 +381,7 @@ module mem_mapper #(
                     // STD11: seg0..5 standard (window-1 banking + BOS),
                     // seg6 = BIOS ROM, seg7 = P+7 (extent neither)
                     3'd6:    begin seg_smk <= 8'b1000_0000; seg_std <= 8'b0011_1111; seg_rot <= 1'b0;
-                                   rom6_en <= 1'b1; end
+                                   rom_vec <= 8'b0100_0000; end
                     // RAM11: seg0..3 standard window 1, seg4..7 = P+4..7
                     3'd2:    begin seg_smk <= 8'b1111_0000; seg_std <= 8'b0000_1111; seg_rot <= 1'b0; end
                     // HLT10: all eight = P+0..7, seg0 READ-ONLY, extent WRITABLE
@@ -402,7 +433,16 @@ module mem_mapper #(
                     phys_std = ADDR_BITS'(BK11_RAM_BASE) | ADDR_BITS'({win0_page, addr[13:1]});
                 end
                 2'b10: begin        // 100000-137777: window 1 (ROM overlay or RAM)
-                    if (win1_rom_en && WIN1_ROM_PRESENT[win1_rom_bank]) begin
+                    if (rom4_force) begin
+                        // A module is holding XT3.A22 low: window-1 ROM bank 3,
+                        // an EMPTY socket, and the 037 no longer fronts the
+                        // window. Ranked FIRST because the wired-AND overrides
+                        // the latch OUTPUT - it beats whatever the host last
+                        // wrote to 177716, exactly as the open drain beats
+                        // D36's totem pole. See the rom4_force port note.
+                        kind_std = MK_NONE;
+                        phys_std = '0;
+                    end else if (win1_rom_en && WIN1_ROM_PRESENT[win1_rom_bank]) begin
                         kind_std = MK_ROM;
                         phys_std = ADDR_BITS'(BK11_WROM_BASE)
                              | ADDR_BITS'({win1_rom_bank, addr[13:1]});
@@ -448,7 +488,7 @@ module mem_mapper #(
     // The overlay now covers ALL of 100000-177777 including the I/O page (the
     // rom7 boot overlay / the seg-7 extent both reach into it); qbus_mem owns
     // the I/O-page reply policy and carve-outs, this is translation only.
-    // Every mode has rom7_en or seg_smk[7] set, so the I/O page is always
+    // Every mode has rom_vec[7] or seg_smk[7] set, so the I/O page is always
     // overlay-owned when SMK is on; its non-covered cases (the capped extent)
     // resolve to MK_NONE, exactly what kind_std says there.
     wire smk_act  = smk_en && addr[15];
@@ -468,8 +508,7 @@ module mem_mapper #(
     always_comb begin
         smk_ro = 1'b0;
         smk_wo = 1'b0;
-        if (smk_act && ((smk_seg == 3'd6 && rom6_en)
-                     || (smk_seg == 3'd7 && rom7_en))) begin
+        if (smk_act && rom_vec[smk_seg]) begin
             // SMK BIOS ROM: ONE 2048-word image, BOTH windows (rom7 spans the
             // whole segment incl. the register space - the boot overlay).
             kind = MK_ROM;
