@@ -136,8 +136,10 @@ set_location_assignment PIN_238 -to pUsbN
 #   [0]=UP(pin 1) [1]=DOWN(2) [2]=LEFT(3) [3]=RIGHT(4) [4]=TRG_A(6) [5]=TRG_B(7)
 # The FPGA pin numbers zig-zag because they follow the connector's two rows.
 # pStrA (PIN_6) and pStrB (PIN_15) - DE-9 pin 8, the MSX strobe output - are
-# deliberately NOT assigned: a plain digital pad does not use them, so they stay
-# reserved as tri-stated inputs and remain free for a later mouse/paddle.
+# held at a constant 0. Some original MSX pads connect the common of their
+# switches to pin 8, not to GND (pin 9), and operate only when pin 8 is low.
+set_location_assignment PIN_6  -to pStrA
+set_location_assignment PIN_15 -to pStrB
 set_location_assignment PIN_1  -to pJoyA[0]
 set_location_assignment PIN_3  -to pJoyA[1]
 set_location_assignment PIN_5  -to pJoyA[2]
@@ -298,6 +300,12 @@ set_instance_assignment -name PCI_IO ON -to pJoyB[2]
 set_instance_assignment -name PCI_IO ON -to pJoyB[3]
 set_instance_assignment -name PCI_IO ON -to pJoyB[4]
 set_instance_assignment -name PCI_IO ON -to pJoyB[5]
+# DE-9 pin 8 (constant 0): esemsx3's drive strength and 5 V clamp. No pull-up -
+# the pin is always driven.
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pStrA
+set_instance_assignment -name PCI_IO ON -to pStrA
+set_instance_assignment -name CURRENT_STRENGTH_NEW 4MA -to pStrB
+set_instance_assignment -name PCI_IO ON -to pStrB
 
 # VGA sync outputs (24 mA, fast slew; mirrors ocb-test / esemsx3)
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to pVideoVS_n

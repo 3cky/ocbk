@@ -82,9 +82,22 @@ level translator: no bus, no state the CPU can see, no reset. Oracle:
   inversion — unlike the write-side devices, which each do their own `~value`)
   and `JoystickManager`'s masks. Pins: `pJoyA` = PIN_1/3/5/7/2/4, `pJoyB` =
   PIN_8/12/14/16/11/13, all with `WEAK_PULL_UP_RESISTOR` + `PCI_IO` (the 5 V
-  clamp) — esemsx3's exact treatment. `pStrA`/`pStrB` (DE-9 pin 8, PIN_6/PIN_15)
-  are left reserved-tristated: a digital pad does not use them, and they stay
-  free for a later mouse/paddle.
+  clamp) — esemsx3's exact treatment.
+- **DE-9 pin 8 (`pStrA`/`pStrB`, PIN_6/PIN_15) is driven LOW, constantly.**
+  On the MSX it is a PSG output (R15 bit 4 = port A, bit 5 = port B), and some
+  original MSX joysticks connect the common of their switches to **pin 8, not
+  to pin 9 (GND)** — they operate only because the host holds pin 8 low. Until
+  2026-09 these pins were left reserved-tristated, so on such a pad the common
+  floated and no press was ever seen, while every GND-common pad worked. The
+  MSX PSG resets R15 to 0, and esemsx3 drives `stra <= regb(4)` push-pull
+  (`psg.vhd`), so pin 8 is low on the real machine and on esemsx3 alike. ocbk
+  ties it to a constant 0 (4 mA, `PCI_IO`, no pull-up): no BK software can
+  drive pin 8, so there is no register and no DIP. The constant is safe for
+  every other DE-9 device class — a GND-common MSX pad leaves pin 8 open, and
+  Atari/Sega/Amiga pads put GND on pin 8 themselves. It is a pad-only output
+  with no internal fanout, so no oracle sees it (no testbench instantiates
+  `ocbk_top`); the board is the acceptance. **CONFIRMED ON HARDWARE
+  2026-09-11** — a pin-8-common MSX joystick that was dead before now works.
 - **Joystick 2 is the UPPER byte**, same layout shifted by 8. BkEmu models one
   joystick and leaves `[15:8]` at 0, so nothing in the reference pins the high
   byte — but **real two-player BK software does read it**, which is what the
