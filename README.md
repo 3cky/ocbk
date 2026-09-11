@@ -146,6 +146,20 @@ something broken.
 
 ## Prebuilt firmware
 
+### Web flasher
+
+The easiest way to flash a release is **[ocbk-flasher](https://3cky.github.io/ocbk-flasher/)**,
+a web page that writes the firmware over a USB Blaster straight from the
+browser with WebUSB support. Open it in Chrome, Edge or another Chromium-based browser,
+connect the USB Blaster and the device, pick a release from the list and press
+**Erase, program and verify**.
+
+On Linux the browser needs a udev rule for the cable, and on Windows the cable
+has to be switched to the WinUSB driver once; see the
+[ocbk-flasher README](https://github.com/3cky/ocbk-flasher#browser-and-driver-support).
+
+### Downloads
+
 Latest release could be downloaded from the [releases page](https://github.com/3cky/ocbk/releases/latest)
 or [directly](https://github.com/3cky/ocbk/releases/latest/download/ocbk.pof).
 Development version could be downloaded from the artifacts of
