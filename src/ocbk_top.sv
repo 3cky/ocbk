@@ -136,11 +136,17 @@ module ocbk_top (
     // Z-idle tri-state feeding internal logic degenerates to stuck-asserted on
     // Cyclone I (the virq_n trap). The released level comes from the QSF's weak
     // pull-ups, so an unplugged connector reads all-released = 0177714 reads 0.
-    // pStrA/pStrB (DE-9 pin 8, PIN_6/PIN_15) are deliberately NOT declared - a
-    // plain digital pad does not use them, so they stay reserved-tristated and
-    // remain free if a pad ever turns out to need pin 8 driven.
+    // pStrA/pStrB = DE-9 pin 8 (PIN_6/PIN_15), the MSX "strobe" output. Some
+    // original MSX pads connect the common of their switches to pin 8, not to
+    // pin 9 (GND). These pads operate only when the host holds pin 8 low. The
+    // MSX PSG does that after reset (R15 = 0), and esemsx3 does the same. We
+    // hold both pins at a constant 0: push-pull, pad-only, no internal fanout.
+    // A GND-common pad does not connect pin 8, and Atari/Sega-style pads put
+    // GND on pin 8, so a constant low is safe for all of them.
     input  logic [5:0]  pJoyA,
     input  logic [5:0]  pJoyB,
+    output logic        pStrA,     // DE-9 pin 8, port A: constant 0
+    output logic        pStrB,     // DE-9 pin 8, port B: constant 0
 
     // ---- SD card (megasd slot; the SMK512 HDD backing store) -------------
     // SPI-mode roles per esemsx3: DAT3 = chip select, CMD = MOSI,
@@ -829,6 +835,11 @@ module ocbk_top (
         .pad_b_n  (pJoyB),
         .joy_word (joy_pads)
     );
+
+    // DE-9 pin 8 = the switch common of pin-8-common MSX pads: hold it low, as
+    // the MSX PSG does after reset. See the port list.
+    assign pStrA = 1'b0;
+    assign pStrB = 1'b0;
 
     // The 0177714 read word is the MSX joys OR the Marsianka mouse OR the USB
     // gamepad.
