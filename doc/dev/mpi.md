@@ -42,8 +42,11 @@ and needed **no STA chase**: sys_clk setup +0.122 → **+0.269 ns**, TNS 0. That
 is the point of routing the merge through `io_word` as a data term rather than
 as a driver — it stays off every enable cone.
 
-**The deselect fix then made the STA point in the other direction, and it is
-worth keeping.** Dropping the model gate *removed* 29 LE (9,168 → **9,139**) and
+**The deselect work then made the STA point in the other direction, and it is
+worth keeping.** Dropping the model gate — the model-blind experiment, later
+reverted on hardware evidence (see
+[the P4O section](#the-bk-0011m-takeover-is-p4o-not-a-deselect-wire)); the STA
+cure below stayed — *removed* 29 LE (9,168 → **9,139**) and
 changed nothing outside `qbus_slot` — and the fit came back a real **VIOLATION,
 −0.106 / TNS −0.572**, on `mem_mapper|rom6_en → cpu_sdram_dp|addr_o`, the
 mapper's own worst cone, in a module the edit never touched. **A deletion can
@@ -53,6 +56,14 @@ flop: the two BIOS-window flops became a per-segment vector (`rom_vec`), so the
 translate mux indexes it like `seg_smk` right below instead of comparing
 `smk_seg` against 6 and 7. **+0.135 ns, TNS 0, 0 LE net, and the `rom6_en` cone
 left the report** — which is the test that matters, not the slack number.
+
+The adapter-presence pin (+1 LE) then left `mem_mapper|mon_en →
+cpu_sdram_dp|be_o` at +0.065 ns, in the SDRAM-datapath family that once cost a
+no-boot. The cure was already in that file: `wdata_o` had been ungated from
+`is_write` for exactly this reason, and `be_o` had been left behind. **When you
+ungate one register out of an enable cone, check the others loaded in the same
+FSM branch.** Final fit for the branch: **9,156 LE (76 %), 142 pins, sys_clk
++0.391 ns, TNS 0.**
 
 `src/bus/qbus_slot.sv` is live (`SLOT_ENABLE=1`), 30 pins are assigned, and
 `sim/slot` covers it with five legs and **19** mutations. What is
@@ -67,7 +78,7 @@ before plugging anything in.
 
 | refDes | type | what it is |
 |---|---|---|
-| **XT3** | СНП-58-64 | **the МПИ** — the full bus, 38 signals + power |
+| **XT3** | СНП-58-64 | **the МПИ** — the full bus, 40 signal pins + power |
 | XT5 | СНП-58-64 | the **keyboard** connector (`S3-*` matrix nets). Carries **no bus signal** — only `~SBROS`, `~PRT`, `~PRT1` and power |
 | XT8 | РС-24 | the internal **ROM-cartridge** socket: AD0-15, SYNC, the buffered DIN (`S1-18`), the **raw** RPLY (`S1-21`), and `D36` Q1/Q2/Q4 (the 177716 bank bits). No DOUT, no WTBT — read-only by construction |
 
@@ -104,22 +115,21 @@ pins. Outbound, 3.3 V LVTTL V<sub>OH</sub> at 4 mA clears TTL V<sub>IH</sub>
 2.0 V with margin. Real 5 V MSX cartridges work on this board through exactly
 this path.
 
-**`pSltBdir_n` is NOT a transceiver direction control.** It is MSX cartridge pin
-10, BUSDIR, a cartridge→host signal. `emsx_top.vhd:69` labels it *"Bus direction
-(not used in master mode)"* and line 1541 is `pSltBdir_n <= 'Z';`. The stub's
-header invents a role for it and must be corrected; on the adapter that pin
-carries `~DA06`.
-
 ## The adapter board
 
 `~/projects/kicad/ocbk_mpi` (gerbers 2026-08-09) is a **passive** MSX 2×25 edge
-connector → СНП-58-64 wire-through. Whole BOM: 3× BSS138, 4× 1 k, 2 caps.
+connector → СНП-58-64 wire-through. The fabricated BOM: 3× BSS138, 4× 1 k,
+2 caps. The schematic (revised 2026-08-31) adds a fourth BSS138 and a fifth 1 k
+for BAS2; on the board that transistor and the E wire were fitted by hand
+(2026-09-05, see [Two adapter wires](#two-adapter-wires)).
 
-- **Q1/Q2/Q3 sit only on MON10 / MON11 / BAS10** — gate on the МПИ side, source
-  to GND, drain to the FPGA side, 1 k gate pulldown: an inverting open-drain
-  5 V→3.3 V *receiver*. Those three are **BK-0010-specific** (they disable the
-  BK-0010's internal MONITOR and BASIC ROMs) and correspondingly have **no pin
-  on XT3** — a BK-0011M does not have them.
+- **Q1/Q2/Q3/Q4 sit only on MON10 / M11 / BAS / BAS2** (X1 pads 1 / 6 / 51 /
+  36 = B1 / B6 / A14 / A29) — gate on the МПИ side, source to GND, drain to the
+  FPGA side, 1 k gate pulldown: an inverting open-drain 5 V→3.3 V *receiver*.
+  None of the four has a pin on the stock XT3 of `doc/bk0011m.sch`: MON10, BAS
+  and BAS2 are **BK-0010** lines (they disable the BK-0010's internal MONITOR
+  and BASIC ROMs), and M11 is an **after-market BK-0011M** wire that the SMK512
+  installation adds (see [the deselect](#the-host-rom-deselect-four-lines-four-different-windows)).
 - **R1** is a 1 k pull-up on `~BSY`.
 - **Everything else — all 16 AD lines and every strobe — is bare wire.**
 
@@ -127,7 +137,8 @@ connector → СНП-58-64 wire-through. Whole BOM: 3× BSS138, 4× 1 k, 2 caps.
 
 Cross-validated two independent ways: the `IOxxx` annotations in the adapter
 schematic, and the standard MSX cartridge pinout composed with esemsx3's
-`set_location_assignment` list. Both agree on all 38 signals.
+`set_location_assignment` list. Both agree on all 34 signals in the table. XT3's
+other six signal pins are in the "NOT wired" table below.
 
 | XT3 | signal | FPGA | internal net | source / sink | dir | pull-up |
 |---|---|---|---|---|---|---|
@@ -163,7 +174,7 @@ schematic, and the standard MSX cartridge pinout composed with esemsx3's
 | B14 | ~DMGO | 173 | S1-52 | CPU `D14.4` | → | 2.2 k |
 | B13 | ~BSY | 177 | S1-53 | CPU `D14.28` | → | 2.2 k |
 | A32 | ~ROM3 | 122 | S1-65 | `D36.10` Q4 | → | — |
-| A22 | ~ROM4 | 161 | S1-66 | `D36.12` Q5 | → | — |
+| A22 | ~ROM4 | 161 | S1-66 | `D36.12` Q5, **wired-AND** with a module's open drain | ↔ | — |
 | A1 | ~RESET | **153** | S1-25 | RC power-on generator | ← | 43 k |
 | A2/A3/B2/B3 | GND | — | GND | | | |
 | A4/A12/B12 | +5 V | — | +5V | | | |
@@ -175,8 +186,10 @@ Likewise `~PRT`/`~PRT1` are IRQ2/IRQ3, not port bits; those names are historical
 
 `S1-65` and `S1-66` are `D36` (К555ТМ9) Q4 and Q5 — two bits of the **177716
 memory-management latch** — fanned out to modules *and* to `D32` (ЛИ6) for
-internal decode. `S1-65` also appears on XT8.23. Host→module. ocbk already holds
-that state in `mem_mapper`.
+internal decode. `S1-65` also appears on XT8.23. ocbk already holds that state
+in `mem_mapper`. ~ROM3 is host→module only. **~ROM4 is not**: a module can pull
+it low open-drain and win, which is how an SMK takes window 1 on a BK-0011M
+(see [The BK-0011M takeover is P4O](#the-bk-0011m-takeover-is-p4o-not-a-deselect-wire)).
 
 ### Brought out on XT3 but NOT wired on the adapter
 
@@ -184,18 +197,20 @@ that state in `mem_mapper`.
 |---|---|---|---|
 | **A20** | S1-62 | `D39.9` Q (К155ТМ2) | **CLC — the 4 MHz CPU clock.** Also clocks `D11` and `D8:B` |
 | **A21** | S1-29 | `D8.5` Q | **the 6 MHz 037 CLKIN** (→ `D19.33`, `D28`, `D10`) |
-| A30 | S1-46 | `D19.37` E (037) | the 037's E output |
+| A30 | S1-46 | `D19.37` E (037) | the 037's E output — **wired by hand 2026-09-05**, now FPGA 158 (`pSltE_n`) |
 | A19 | S1-85 | `D27.11` ~Q1 (К555ТМ7) | not traced further |
 | B9 | S1-64 | `D7.11` Y (К555ЛА3) | → `D9.3` C, `D12.1` CA (АП2), `D33.1` |
 | B10 | S1-63 | `D7.8` Y (К555ЛА3) | → `D9.4` S, `D34.3`/`D34.9` (ЛН2) |
 
 The adapter carries schematic annotations for this group — `CL (0011М)`,
-`CLC4 (0011М)`, `~ВУ`, `~ЧТРНП`, `~ЗПРНП`, `~ВБ`, `~Е (0010-01)` — but leaves
-every one of these pins unconnected. **Fine for a slave-only module; a module
-that clocks off the bus will not run.**
+`CLC4 (0011М)`, `~ВУ`, `~ЧТРНП`, `~ЗПРНП`, `~ВБ`, `~Е (0010-01)` — but the
+fabricated board leaves every one of these pins unconnected. A30 has since been
+wired by hand; the rest are still open. **Fine for a slave-only module; a
+module that clocks off the bus will not run.**
 
-XT3 has no A6-A11, A13-A18, A29, B1, B6, B8, B18 — including the A14/B1/B6
-positions the BK-0010 uses for BAS10/MON10/MON11.
+XT3 has no A6-A11, A13-A18, A29, B1, B6, B8, B18. That includes A14, A29 and B1,
+which the BK-0010 uses for BAS, BAS2 and MON10, and B6, where the SMK512
+installation adds M11 to a BK-0011M.
 
 ## RPLY: two nets, and where an external reply joins
 
@@ -271,7 +286,8 @@ Consequences for the RTL:
 
 ## The host-ROM deselect: four lines, four different windows
 
-**CONFIRMED ON HARDWARE 2026-08-30, the hard way.** Traced from
+**Found on hardware 2026-08-30, the hard way; the fix CONFIRMED ON HARDWARE
+2026-09-05**, once the A29/A30 wires were on the adapter. Traced from
 `doc/bk0010-01.sch` and `doc/smk512-scheme-v1.0.sch` after a real МСТД module
 booted into FOCAL but died with a bus error on its tests ROM.
 
@@ -294,10 +310,11 @@ Two things fall out, and both were wrong in the first implementation:
   STROBE: DS19's DIN comes from `XT3.A29`, which is the 037's **E** through the
   series resistor `R60`, so a module that holds A29 overrides R60 and wins.
 
-`DS17`'s CE is hardwired to GND, so **MON10 and M11 are after-market wires**
-the SMK512 installation adds. That is why they appear on no stock schematic —
-neither the BK-0010-01's nor the BK-0011M's — and it is why they are real
-rather than invented. **USER-AUTHORITATIVE, 2026-09-06:** M11 takes the
+**MON10 and M11 are after-market wires** the SMK512 installation adds:
+`DS17`'s CE is hardwired to GND on a BK-0010-01, and XT3.B6 is unconnected on a
+BK-0011M. That is why they appear on no stock schematic — neither the
+BK-0010-01's nor the BK-0011M's — and it is why they are real rather than
+invented. **USER-AUTHORITATIVE, 2026-09-06:** M11 takes the
 BK-0011M **BOS** at 140000–157777 so the module can put a RAM window there. It
 is *not* the 160000 window — that one needs no wire at all (see below), and the
 two are separate takeovers that do not substitute for each other.
@@ -317,6 +334,12 @@ P5.B6  = M11   -> U1.41      P5.A29 = BAS2  -> U1.120
 | BAS | A14 | 175 | BASIC 120000–**157777** | 2,3,4,5 | bk10 |
 | **BAS2** | **A29** | **160** | BASIC 160000–177577 | 6,7 | bk10 |
 | **M11** | **B6** | **174** | **BOS 140000–157777** | **4,5** | bk11 |
+
+On the МПИ side a module asserts each of the four by pulling the line to
+**+5 V**. The adapter inverts each through a BSS138, so all four arrive at the
+FPGA **active low**. That inversion is not cosmetic — a static 5 V into a
+PCI-clamped 3.3 V pad would conduct through the clamp continuously, unlike the
+bus lines where 5 V is only transient.
 
 ### On a BK-0011M there is no host ROM at 160000 to deselect
 
@@ -357,13 +380,8 @@ three separate mechanisms, and all three are needed:
 | window 1 | the **P4O** wired-AND on XT3.A22 | 100000–137777 |
 
 The BK-0010 half of M11's contract (it must move nothing there, since the wire
-does not exist on that machine) is pinned by `gen_slot_test.py` sub-test 7d and
-by mutation D8.
-
-All four arrive **active low**: they are asserted by pulling the МПИ line to
-**+5 V**, and the adapter inverts each through a BSS138. That inversion is not
-cosmetic — a static 5 V into a PCI-clamped 3.3 V pad would conduct through the
-clamp continuously, unlike the bus lines where 5 V is only transient.
+does not exist on that machine) is pinned by `mem/gen_slot_test.py` sub-test 7d
+and by mutation D8.
 
 ### Adapter presence — slot pin 44
 
@@ -391,8 +409,8 @@ Two reasons it earns a pin rather than being assumed:
   a window to a module that is not there. That was the one real cost of the
   concede, and this removes it.
 
-It is **registered**, not just synchronised. `slot_live` reaches output-enable
-cones (`slot_ad_oe`, the `pSltInit_n` open drain), and the enable-cone rule says
+It is **registered**, not just synchronised. `slot_live` reaches an output-enable
+cone (`slot_ad_oe`), and the enable-cone rule says
 a quasi-static term there gets its own flop rather than another level of logic.
 
 ### E, and why a module can be mute without it
@@ -416,8 +434,9 @@ FOCAL works perfectly. That is the failure the board showed, and mutation
 **S7** in `sim/slot` now pins it.
 
 The SMK512 does **not** connect A30, so E matters for МСТД-class modules only.
-It does connect A22 (`P4O` → U1.91), but as an input — on a real BK-0011M that
-pin is driven push-pull by `D36`, so ocbk driving it is correct.
+It does connect A22 (`P4O` → U1.91), as an **open-drain output**, not an input:
+it pulls A22 low from power-on, so ocbk must not drive that pin push-pull (see
+[The BK-0011M takeover is P4O](#the-bk-0011m-takeover-is-p4o-not-a-deselect-wire)).
 
 ### Two adapter wires
 
@@ -472,8 +491,8 @@ the board showed them.
 `joy_word`. Driving `ad_n` from the bridge instead would put a second on-chip
 driver on the internal bus for the one cycle `qbus_mem` is also driving it (the
 single-driver rule this design keeps everywhere — and in sim it is an X, not a
-wired-AND), and it would put connector pins on an **output-enable cone**, the
-STA rule that has bitten seven times. As a data-mux term it changes no reply, no
+wired-AND), and it would put connector pins on an **output-enable cone** (the
+enable-cone STA rule, → gotchas). As a data-mux term it changes no reply, no
 `selected` and no `ad_oe`.
 
 ### Armed for ONE read
@@ -481,7 +500,8 @@ STA rule that has bitten seven times. As a data-mux term it changes no reply, no
 The split bus cannot tell *"the module released the pins"* from *"the module is
 driving zeros"*. The pads carry the `.qsf`'s ~25 kΩ pull-up alone (the adapter
 has none), so with ~60 pF the lines need ~1.5 µs to rise while the CPU samples
-~330 ns after the bridge releases them: they are still near the level of the
+1.5 `cpu_clk` — a few hundred ns — after the bridge releases them at DIN: they
+are still near the level of the
 **address** they last carried, and **a low pin is an asserted bit** on this
 active-low net. For 0177716 that stale pattern merges as 0177716 and sends the
 PC to 0177400. And the exposure is not hypothetical: the SMK drives 177716 only
@@ -521,11 +541,12 @@ Three details are load-bearing:
 ### What would make this unconditional
 
 Fitting the 16 AD lines with the real board's **3.3 kΩ** pull-ups (`E1`/`E4`/`E5`
-on a stock BK) puts the rise time at ~150 ns and removes the stale-address
-hazard entirely. Then `mpi_word` could be a plain `~sel1_n & ~din_n` merge on
-every nSEL read, which is what the unbuffered board does, and the arming
-machinery could go. That is the remaining reason the AD termination in the next
-section matters.
+on a stock BK) puts the rise time at ~175 ns (3.3 k ∥ 25 k into the same
+60 pF) and removes the stale-address hazard entirely. Then `mpi_word` could be a
+plain `~sel1_n & ~din_n` merge on every nSEL read, which is what the unbuffered
+board does, and the arming machinery could go. That is the remaining reason the
+AD termination ([Termination](#termination--mostly-ocbks-job-but-the-board-helps-on-the-net-that-matters),
+below) matters.
 
 ## The BK-0011M takeover is P4O, not a deselect wire
 
@@ -591,7 +612,8 @@ pole; the module's open drain wins).
 
 ### How ocbk implements it
 
-Until 2026-09-06 `ocbk_top` drove `pSltRom4_n` **push-pull and output-only**, so
+Until 2026-09-06 `qbus_slot` drove `pSltRom4_n` **push-pull and output-only**
+(`assign pSltRom4_n = ~rom4;`), so
 a module asserting `p4` fought the pad *and* ocbk never saw the bank forced.
 That is why a real SMK512 never booted a BK-0011M. The pin is now a wired-AND:
 
@@ -666,8 +688,9 @@ have only the pads' internal ~25 kΩ to 3.3 V — about 8× weaker than the desi
 intent and to the wrong rail. That is now the whole of the open electrical
 question, and it is a much smaller one than it looked: AD is driven push-pull
 from one end or the other for the whole of every cycle, and the only moment
-nobody drives it is the turnaround, which no one samples. **Measure rise time
-and high level on the AD lines with a module attached before bring-up**;
+nobody drives it is the turnaround, which no one samples. Bring-up worked
+without it, but **rise time and high level on the AD lines are still
+unmeasured — measure them with a module attached**;
 `qbus_slot`'s `SLOT_ENABLE` and `RPLY_FILT` are the escape hatches, and
 `RPLY_FILT` can now go to 0 with more confidence than when it was written.
 
@@ -697,15 +720,18 @@ ad_n       = slot_rd ? pSltAd : Z           // the bridge drives ad_n INWARD
   mirror the window the CPU already produces. The old stub's
   `drive_ad = sync_n ? 1'b0 : din_n` released AD until *after* SYNC had fallen,
   leaving a real slave no setup at all — mutation **S2**.
-- **`slot_live = ~smk_en`.** The internal SMK512 emulation and a real module
-  claim the same addresses, so tying the slot to DIP 8 being off costs nothing,
-  needs no new switch, and makes the shipped default provably byte-identical.
+- **`slot_live = (adapter fitted) & ~smk_en`**, registered. The internal SMK512
+  emulation and a real module claim the same addresses, so tying the slot to
+  DIP 8 being off costs nothing, needs no new switch, and makes the shipped
+  default provably byte-identical. The adapter term came later — see
+  [Adapter presence](#adapter-presence--slot-pin-44).
 - **The deselect lands on `qbus_mem`'s `sel_rom`, not in `mem_mapper`.** One
   term covers the whole cycle (`selected`, the done-gate, `sel_romr`'s fetch
   enable into `cpu_sdram_dp`, the overlay merge and `turbo_mem` all derive from
   it), and it keeps the added logic off the mapper's `kind`/`phys` cone, which
   feeds one of the two worst setup paths in the design. It is an 8-bit
-  per-segment mask indexed by `addr[14:12]`, **frozen while the bus is idle** —
+  per-segment mask indexed by `addr[14:12]`, **loaded only while the bus is
+  idle**, so it is frozen for the whole of a cycle —
   a module changes its deselect lines as a side effect of a CPU write to its own
   mode register, so unlike the DIP latches this is not quasi-static and would
   otherwise move under the FSM mid-cycle.
@@ -715,7 +741,7 @@ ad_n       = slot_rd ? pSltAd : Z           // the bridge drives ad_n INWARD
   wires exist. A model-blind version was tried on hardware and is wrong; see
   [the section below](#the-bk-0011m-takeover-is-p4o-not-a-deselect-wire).
 - **`bsy_n` is deliberately NOT used**, though it is the natural source for a
-  bus-ownership gate and XT3.B13 wants it anyway. `vm1.v:62` drives it
+  bus-ownership gate and XT3.B13 wants it anyway. `vm1.v:61` drives it
   `? 1'b0 : 1'bZ` onto a plain `wire` in `ocbk_top` with zero fanout — consuming
   it would need a push-pull hook in the vendored CPU (the `pin_sel_n` precedent)
   or it comes up **stuck asserted**, the `virq_n` trap, with every sim passing.
@@ -726,22 +752,24 @@ ad_n       = slot_rd ? pSltAd : Z           // the bridge drives ad_n INWARD
 
 ### Still missing (phase 2)
 
-The stub's old defect list, with what remains:
+The old stub's defect list. Items 1–4 are **fixed** in the rewrite; 5–7 remain.
 
-1. **Address setup is lost.** `drive_ad = sync_n ? 1'b0 : din_n` releases AD
-   whenever SYNC is deasserted, so AD reaches the slot only *after* SYNC has
-   fallen. An МПИ slave latches the address on SYNC's leading edge and would get
-   zero setup.
-2. **No reclock on the inbound reply** — see the RPLY section. The slot needs its
-   own `bk_rply` instance; the internal slaves must not get a second one.
-3. **No card-present gate.** `rply_n = pSltWait_n ? 1'bZ : 1'b0` injects a
-   spurious reply onto the shared net whenever the pin floats.
-4. **`pSltBdir_n` is misdescribed** and must stop being driven as a direction
-   control.
-5. **No DMR/SACK/DMGI/DMGO arbitration** — `pin_dmgi_n` is hard-tied `1'b1` and
+1. ~~**Address setup is lost.**~~ FIXED. The stub's
+   `drive_ad = sync_n ? 1'b0 : din_n` released AD whenever SYNC was deasserted,
+   so AD reached the slot only *after* SYNC had fallen, and an МПИ slave
+   latching the address on SYNC's leading edge got zero setup. Now
+   `slot_ad_oe` mirrors the CPU's own `ad_oe` window (mutation S2).
+2. ~~**No reclock on the inbound reply.**~~ FIXED. The slot has its own
+   `bk_rply` instance (see the RPLY section); the internal slaves did not get a
+   second one.
+3. ~~**No card-present gate.**~~ FIXED. The stub's
+   `rply_n = pSltWait_n ? 1'bZ : 1'b0` injected a spurious reply onto the shared
+   net whenever the pin floated. Now the reply is synchronised, qualified by the
+   strobe window and by `slot_live` (adapter presence and DIP 8), and re-timed.
+4. **No DMR/SACK/DMGI/DMGO arbitration** — `pin_dmgi_n` is hard-tied `1'b1` and
    `dmgo_n` is unconsumed, so a DMA-capable module has no path.
-6. **No VIRQ/IAKO chain.** `bk_kbd014` has no IAKO output, which XT3.A24 needs.
-7. **PIN_153 collision.** XT3's `~RESET` lands on the pin `ocbk_top` already uses
+5. **No VIRQ/IAKO chain.** `bk_kbd014` has no IAKO output, which XT3.A24 needs.
+6. **PIN_153 collision.** XT3's `~RESET` lands on the pin `ocbk_top` already uses
    for `pSltRst_n`, the reset button, declared `input logic`. Sharing it as an
    input is right; driving INIT/RESET outward would need it to become `inout`.
 
@@ -763,7 +791,7 @@ both.
 - `ocm-pld-dev/esemsx3/emsx_top_common.qsf` + `src/emsx_top.vhd` — the
   direct-drive / `PCI_IO` precedent and the BUSDIR correction
 - `src/bus/bk_rply.sv` — why D8:B exists and what must not be re-timed twice
-- `sim/slot/README.md` — the oracle contract, the four legs and the ten
+- `sim/slot/README.md` — the oracle contract, the five legs and the 19
   mutations, including the checks that had to be structural
 - [gotchas.md](gotchas.md) — the `tri1` stuck-asserted rule that governs every
   new OR-merge here
