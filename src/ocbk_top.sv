@@ -328,6 +328,7 @@ module ocbk_top (
     cpu_clkgen u_clkgen (
         .sys_clk    (sys_clk),
         .rst_n      (locked),
+        .model_bk11 (model_bk11),
         .turbo      (turbo_eff),       // PS/2 F12: /16 = 6.04 MHz, overrides model
         .cpu_clk    (cpu_clk),
         .cpu_clk_n  (cpu_clk_n),
@@ -489,6 +490,7 @@ module ocbk_top (
     ram_init u_raminit (
         .clk        (sys_clk),
         .rst_n      (srst_n),
+        .model_bk11 (model_bk11),
         .enable     (boot_done & ~boot_active),
         .w_req      (fi_req),
         .w_addr     (fi_addr),

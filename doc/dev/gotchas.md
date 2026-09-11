@@ -368,3 +368,33 @@
   read rev(blob) and fell back). `make blob-check` verifies the RPD pages =
   rev(blob) at BOTH 0x40000 and 0x48000.
 
+- **A dropped port connection is SILENT: Quartus ties the missing input to GND,
+  and `make sim` structurally cannot see it.** 2026-09-07: the МПИ merge commit
+  (`14e648c`) deleted `.model_bk11 (model_bk11)` from **`cpu_clkgen`** and from
+  **`ram_init`** in `ocbk_top`. Verilog permits an omitted port, so the build
+  stayed 0-errors and every oracle stayed green — but `cdiv_last = turbo_q ?
+  4'd7 : (model_bk11 ? 4'd11 : 4'd15)` could no longer reach 11, so a BK-0011M
+  ran on the BK-0010 `/32` divider: **3.02 MHz instead of 4.03, 25 % slow**,
+  reported from the board as "games run slower since the slot went in". The
+  `ram_init` half quietly gave a BK-0011M the bk10 `N=6` DRAM power-on pattern.
+  Two things make this its own class of bug:
+  - **No oracle can catch it.** Nothing in `sim/` instantiates `ocbk_top`; each
+    testbench builds its own SoC and drives `cpu_clkgen` with a `model_bk11` it
+    supplies. The bug lives entirely in the wiring the oracles replace.
+  - **The build DID report it**, in a section nobody reads: the map report's
+    *Port Connectivity Checks* carried
+    `model_bk11 ; Input ; Warning ; Declared by entity but not connected by
+    instance ... the port will be connected to GND` for both instances, plus
+    `ram_init:u_raminit|model_seen ; Stuck at GND due to stuck port data_in` in
+    the register-removal list. **The design's steady state is ZERO such
+    warnings, so treat any of them as an error:**
+    ```
+    grep -A6 "Port Connectivity" ocbk.map.rpt | grep "not connected by instance"
+    ```
+    must print nothing. A "Stuck at GND/VCC due to stuck port" line in the
+    removed-register list is the same signal seen from the other end.
+  - **F12 turbo still worked**, because `turbo_q` overrides the model term. A
+    rate bug that disappears in turbo is this bug's fingerprint.
+  Restoring both connections cost +55 LE and **needed no STA chase** — it took
+  sys_clk setup from +0.122 to **+0.369 ns**, TNS 0, which is the same "one
+  build's slack is a sample, not a property" lesson pointing the other way.
