@@ -244,9 +244,7 @@ from x15 to x12 to pay for it.
   Covox precedent above). The exposure it *would* fix is real but narrow — a
   parallel-port/printer driver polling 177714 for a status line would see
   joystick bits while a control is actually held. Hardware bring-up found no
-  conflict, so this stands. **`pDip[6]` is the reserved escape hatch** if one
-  ever turns up; the decision and the pin are written down here so it is a
-  five-minute change, not a redesign.
+  conflict, so this stands.
 - **Tape-out is single-bit.** A real BK mixes write bits 6+5 resistively into a
   3-level record waveform; bit 6 alone (the dominant component) is shipped. See
   the tape bullet. **Phase 10 deliberately did NOT change this** — tape-out is a
@@ -274,9 +272,10 @@ from x15 to x12 to pay for it.
   into it.
 - **Cartridge slot / МПИ — the SLAVE-ONLY bridge is IMPLEMENTED and CONFIRMED
   ON HARDWARE 2026-09-06** (`src/bus/qbus_slot.sv`, `SLOT_ENABLE=1`; oracle
-  `sim/slot`, 5 legs + 19 mutations; 30 pins). Data transfer, RPLY, the
-  host-ROM deselect, the start-vector merge and the P4O wired-AND: a real SMK512
-  boots both models to the disk OS, and a real МСТД module runs. Still open:
+  `sim/slot`, 6 legs + 22 mutations; 30 pins). Data transfer, RPLY, the
+  host-ROM deselect, the start-vector merge, the P4O wired-AND and the DIP 7
+  force-off: a real SMK512 boots both models to the disk OS, and a real
+  МСТД module runs. Still open:
   DMR/SACK/DMGI/DMGO arbitration, the VIRQ/IAKO chain (IRQ3 is the cheapest
   first interrupt — free and module-owned), `bsy_n` (needs a push-pull hook in
   the vendored `vm1.v`, or it comes up stuck asserted), and turbo on a BK-0011M:

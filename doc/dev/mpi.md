@@ -66,7 +66,7 @@ FSM branch.** Final fit for the branch: **9,156 LE (76 %), 142 pins, sys_clk
 +0.391 ns, TNS 0.**
 
 `src/bus/qbus_slot.sv` is live (`SLOT_ENABLE=1`), 30 pins are assigned, and
-`sim/slot` covers it with five legs and **19** mutations. What is
+`sim/slot` covers it with six legs and **22** mutations. What is
 implemented is **data transfer, RPLY, the host-ROM deselect and the start
 vector** — no interrupts, no DMA/arbitration, no IAK chain. A real SMK512 now runs on the board in both models, so the
 merge gate this file used to carry is met; read the termination note below
@@ -390,13 +390,13 @@ and by mutation D8.
 **low = fitted**, and it needs no wire of its own on the adapter beyond the
 ground it already has.
 
-`qbus_slot` folds it straight into `slot_live`, next to DIP 8:
+`qbus_slot` folds it straight into `slot_live`, next to DIP 8 and DIP 7:
 
 ```systemverilog
 logic slot_live;
 always_ff @(posedge cpu_clk or negedge rst_n)
     if (!rst_n) slot_live <= 1'b0;
-    else        slot_live <= &pres_sr[2:1] & ~smk_en;
+    else        slot_live <= &pres_sr[2:1] & ~smk_en & ~slot_dis;
 ```
 
 Two reasons it earns a pin rather than being assumed:
@@ -412,6 +412,42 @@ Two reasons it earns a pin rather than being assumed:
 It is **registered**, not just synchronised. `slot_live` reaches an output-enable
 cone (`slot_ad_oe`), and the enable-cone rule says
 a quasi-static term there gets its own flop rather than another level of logic.
+
+### DIP 7 — force the slot off
+
+**Added 2026-09-11.** DIP 7 (`pDip[6]`) ON disables the slot with the module
+and the adapter still fitted, so a stock machine comes back without unplugging
+anything. It is the third input to `slot_live` (`slot_dis`), so everything that
+already stands down for DIP 8 or a missing adapter stands down for it too: no
+AD drive, no reply, no deselect, no P4O force, no start-vector merge — and on a
+BK-0011M the segs-6,7 concede goes away, so `mstd11m` answers at 160000 again.
+
+Two choices, both deliberate:
+
+- **Latched on reset**, in the same DCLO-hold block as DIP 1 and DIP 8, not
+  read live. The slot decides the memory map and the start vector; a mid-run
+  flip would move ROM under running code. Flip it, then press reset.
+- **The outward strobes are held idle whenever `slot_live` is 0** — SYNC, DIN,
+  DOUT, WTBT and E are ORed with `~slot_live`. Before this, a module the host
+  was ignoring still saw every host cycle, with AD released and floating, and
+  could decode a floating address as one of its own registers (an SMK512 with
+  a drive attached is the case that matters). Now a disabled module sees a dead
+  bus. This covers the DIP-8 and no-adapter cases as well, which had the same
+  exposure. These are data paths to output pads, not output enables, so the
+  enable-cone rule does not apply. `pSltInit_n`, `pSltRom3_n` and `pSltRom4_n`
+  are left as they were: reset and static bank state, and the host already
+  ignores the A22 read-back when the slot is not live.
+
+`sim/slot` pins it with a `+dip7` SoC leg (a module attached and answering on
+a stock BK-0010; the machine must trap on every slot access, as with an empty
+connector), a structural check that the five strobes stay high in both DIP
+legs, `dsl_tb` checks in both models, and mutations S12, S13 and D10.
+
+Fit: **9,222 LE (76 %), 142 pins (no new pin — PIN_59 was already assigned
+with its pull-up), sys_clk setup +0.417 ns, TNS 0**, no STA chase. `qbus_slot`
+is 45 LE. The worst path is `mem_mapper|rom_vec[7] → cpu_sdram_dp|addr_o[18]`,
+a cone the edit does not touch. The difference from the last recorded figure
+(9,156) also contains the later branch commits and was not isolated.
 
 ### E, and why a module can be mute without it
 
@@ -720,11 +756,13 @@ ad_n       = slot_rd ? pSltAd : Z           // the bridge drives ad_n INWARD
   mirror the window the CPU already produces. The old stub's
   `drive_ad = sync_n ? 1'b0 : din_n` released AD until *after* SYNC had fallen,
   leaving a real slave no setup at all — mutation **S2**.
-- **`slot_live = (adapter fitted) & ~smk_en`**, registered. The internal SMK512
-  emulation and a real module claim the same addresses, so tying the slot to
-  DIP 8 being off costs nothing, needs no new switch, and makes the shipped
-  default provably byte-identical. The adapter term came later — see
-  [Adapter presence](#adapter-presence--slot-pin-44).
+- **`slot_live = (adapter fitted) & ~smk_en & ~slot_dis`**, registered. The
+  internal SMK512 emulation and a real module claim the same addresses, so
+  tying the slot to DIP 8 being off costs nothing, needs no new switch, and
+  makes the shipped default provably byte-identical. The adapter term came
+  later — see [Adapter presence](#adapter-presence--slot-pin-44) — and the
+  DIP 7 force-off after that, see [DIP 7](#dip-7--force-the-slot-off). When
+  `slot_live` is 0 the outward strobes are also held idle.
 - **The deselect lands on `qbus_mem`'s `sel_rom`, not in `mem_mapper`.** One
   term covers the whole cycle (`selected`, the done-gate, `sel_romr`'s fetch
   enable into `cpu_sdram_dp`, the overlay merge and `turbo_mem` all derive from
@@ -765,7 +803,8 @@ The old stub's defect list. Items 1–4 are **fixed** in the rewrite; 5–7 rema
 3. ~~**No card-present gate.**~~ FIXED. The stub's
    `rply_n = pSltWait_n ? 1'bZ : 1'b0` injected a spurious reply onto the shared
    net whenever the pin floated. Now the reply is synchronised, qualified by the
-   strobe window and by `slot_live` (adapter presence and DIP 8), and re-timed.
+   strobe window and by `slot_live` (adapter presence, DIP 8 and DIP 7), and
+   re-timed.
 4. **No DMR/SACK/DMGI/DMGO arbitration** — `pin_dmgi_n` is hard-tied `1'b1` and
    `dmgo_n` is unconsumed, so a DMA-capable module has no path.
 5. **No VIRQ/IAKO chain.** `bk_kbd014` has no IAKO output, which XT3.A24 needs.
@@ -791,7 +830,7 @@ both.
 - `ocm-pld-dev/esemsx3/emsx_top_common.qsf` + `src/emsx_top.vhd` — the
   direct-drive / `PCI_IO` precedent and the BUSDIR correction
 - `src/bus/bk_rply.sv` — why D8:B exists and what must not be re-timed twice
-- `sim/slot/README.md` — the oracle contract, the five legs and the 19
+- `sim/slot/README.md` — the oracle contract, the six legs and the 22
   mutations, including the checks that had to be structural
 - [gotchas.md](gotchas.md) — the `tri1` stuck-asserted rule that governs every
   new OR-merge here

@@ -95,7 +95,13 @@ latches in `src/ocbk_top.sv`, and `src/sdram/ram_init.sv`.
   region, so it is the BIOS or nothing) and the BIOS **auto-detects the
   model itself** by writing 177662 with vector 4 planted: replied on a
   bk11, bus-timeout → trap 4 → `MODE_STD10` on a bk10. DIP 8 OFF + reset
-  returns a stock machine of whichever model DIP 1 selects. **DIP 4 = CMT
+  returns a stock machine of whichever model DIP 1 selects. **DIP 7 = МПИ
+  slot force-off** (2026-09-11; `~pDip[6]` → `slot_dis`, ON = the slot is
+  disabled with the module and adapter still fitted), latched in the SAME
+  DCLO-hold block as DIP 1/8 rather than read live: the slot decides the memory
+  map (host-ROM deselect, the BK-0011M concede of 160000–177577, P4O) and the
+  start vector, so a mid-run flip would move ROM under running code. See
+  [mpi.md](mpi.md#dip-7--force-the-slot-off). **DIP 4 = CMT
   tape-in mode (CONFIRMED ON HARDWARE 2026-07-25)** (ON = the right sound jack `pDac_SR` is the cassette port;
   `~pDip[3]` read LIVE — a 2-FF sys_clk sync, NOT DCLO-latched, since CMT
   never touches the CPU — so flipping it needs no reset; `pLed[6]` = mode
@@ -121,7 +127,7 @@ latches in `src/ocbk_top.sv`, and `src/sdram/ram_init.sv`.
   because the tone mutes the Covox slots anyway.
   **DIP 2 is unused** — it
   forced the on-chip test ROM, removed 2026-07-10 (ROM is always the loaded
-  SDRAM image). **TURBO is NOT a DIP** — it is the PS/2 **F12** key, with
+  SDRAM image). DIP 3 and DIP 6 are unused too. **TURBO is NOT a DIP** — it is the PS/2 **F12** key, with
   `pLed[5]` as its indicator (see the turbo bullet). Like screen_mode it is a
   live, power-on-only radial toggle rather than a DCLO-latched config bit, so
   it survives the reset button and needs no reset to take effect. Current LED

@@ -139,13 +139,20 @@
 // other drives AD push-pull, and nothing samples the turnaround. Thus the rise
 // time of AD is not a known problem. Until it is measured, three layers
 // give protection:
-//   1. slot_live = (the adapter is fitted) & ~smk_en. The internal SMK512
-//      emulation and a real module use the same addresses, so they cannot
-//      operate together. The slot operates only when DIP 8 is OFF.
+//   1. slot_live = (the adapter is fitted) & ~smk_en & ~slot_dis. The
+//      internal SMK512 emulation and a real module use the same addresses,
+//      so they cannot operate together. The slot operates only when DIP 8 is
+//      OFF. DIP 7 (slot_dis) turns the slot off with the module and the
+//      adapter still fitted. The machine is then a stock machine.
 //      The adapter ties slot pin 44 to GND. With no adapter, the
 //      bridge stays inactive and does not sample a floating MSX edge. The
 //      BK-0011M top-window concede also uses slot_live. Thus a bk11 with no
-//      adapter keeps its mstd11m image.
+//      adapter, or with DIP 7 ON, keeps its mstd11m image.
+//      When slot_live is 0, the bridge also holds the outward strobes (SYNC,
+//      DIN, DOUT, WTBT, E) at the idle level. Thus a fitted module sees a
+//      dead bus and does not do a cycle. Without this, the module sees the
+//      strobes of each host cycle with AD released (floating). It can then
+//      decode a floating address as one of its own registers.
 //   2. A strobe-window qualifier on the reply. It stops an idle-bus glitch
 //      before the glitch gets to the CPU. (The vm1 also ignores RPLY outside
 //      a transaction, but the qualifier also keeps the glitch off our
@@ -179,6 +186,8 @@ module qbus_slot #(
                                    //   deselect note)
     input  wire         smk_en,    // DIP 8, quasi-static: 1 = internal SMK512,
                                    //   and the slot is fully disabled
+    input  wire         slot_dis,  // DIP 7, quasi-static: 1 = the slot is
+                                   //   forced off, and the module stays fitted
     input  wire         rom3,      // 177716 bits 3/4 (mem_mapper's D36 Q4/Q5)
     input  wire         rom4,
 
@@ -239,13 +248,18 @@ module qbus_slot #(
             logic slot_live;
             always_ff @(posedge cpu_clk or negedge rst_n)
                 if (!rst_n) slot_live <= 1'b0;
-                else        slot_live <= &pres_sr[2:1] & ~smk_en;
+                else        slot_live <= &pres_sr[2:1] & ~smk_en & ~slot_dis;
 
-            // ---- outward: the strobes are direct buffered copies ----------
-            assign pSltSync_n = sync_n;
-            assign pSltDin_n  = din_n;
-            assign pSltDout_n = dout_n;
-            assign pSltWtbt_n = wtbt_n;
+            // ---- outward: the strobes are buffered copies -----------------
+            // When slot_live is 0, each strobe stays at its idle level (high).
+            // Thus a module that is fitted but disabled (DIP 7 or DIP 8) sees
+            // no cycle. These are data paths to output pads, not
+            // output-enables. slot_live is registered and changes only in
+            // reset (or when the adapter is removed).
+            assign pSltSync_n = sync_n | ~slot_live;
+            assign pSltDin_n  = din_n  | ~slot_live;
+            assign pSltDout_n = dout_n | ~slot_live;
+            assign pSltWtbt_n = wtbt_n | ~slot_live;
 
             // nINIT: pull low or release, never drive high. On the real
             // board, the MPI net is a wired-OR: the CPU, the 014 and the
@@ -315,8 +329,9 @@ module qbus_slot #(
             // such a module can never reply.
             // The polarity and the qualification are already correct.
             // va_037_sync's PIN_nE is `SYNC | DIN | (A >= 177600)`, i.e. a read
-            // cycle outside the I/O page. Thus it needs no inversion or gate.
-            assign pSltE_n = e_037_n;
+            // cycle outside the I/O page. Thus it needs no inversion. Its only
+            // gate is slot_live, as for the other outward strobes.
+            assign pSltE_n = e_037_n | ~slot_live;
 
             // ---- the reply of the module ---------------------------------
             logic [1:0] rply_sr;

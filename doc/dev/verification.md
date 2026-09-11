@@ -584,7 +584,7 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   already drops the read reply). The gen program is `mem/gen_romwr_test.py`.
 - `sim/slot/run.sh` — the **МПИ expansion-bus oracle**, the pinned contract for
   the slave-only `src/bus/qbus_slot.sv`: a real module on the far side of the
-  bridge, driven by the real CPU through the real bus front end. **Five legs**
+  bridge, driven by the real CPU through the real bus front end. **Six legs**
   — *module attached* (DATI, DATO, DATOB both lanes, **DATIO/RMW**, a qbto
   address nobody decodes, and the host-ROM deselect checked in BOTH directions),
   *start vector* (the module answers the 0177716 start-vector read **driving
@@ -596,14 +596,18 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   the machine keep running — the bridge must not invent a reply out of a
   floating pin), and *DIP 8 stand-down* (a module IS attached and answering
   while DIP 8 selects the internal SMK512 — the bridge must contribute nothing),
+  *DIP 7 force-off* (a module IS attached and answering while DIP 7 turns the
+  slot off on a stock machine — every slot access must trap 4; in both DIP legs
+  the five outward strobes must also stay idle on the pins, so a disabled
+  module sees a dead bus),
   and *ROM deselect* — a UNIT bench (`dsl_tb.v`) on `rom_dsl_vec` alone, because
-  that contract is **per-model** and the other four legs are all BK-0010. It
+  that contract is **per-model** and the other five legs are all BK-0010. It
   sweeps the four deselect wires in both models, and owns the BK-0011M rule no
   BK-0010 program can reach: **МСТД is itself an МПИ card**, so with the slot
   live on a BK-0011M segments 6,7 are conceded to the connector outright, wires
   or no wires.
   BK-0010 SoC stack, data-checking, `COSIM PASS` at the pinned success park like
-  `sim/romwr`. **Mutation-tested ×19** (`./run.sh --mutate`), including the
+  `sim/romwr`. **Mutation-tested ×22** (`./run.sh --mutate`), including the
   original stub's address-setup bug, the module-side SYNC-rise re-arm that drops
   a DATIO write half, **the two defects a real МСТД module found on the
   board** — the un-exported 037 E strobe (S7) and the over-wide BAS mask (S8) —
@@ -624,10 +628,12 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   loses МСТД; inverted, the bridge stands down whenever the adapter IS on. D8/D9 pin
   **M11**, the after-market wire that takes the BK-0011M BOS at 140000-157777
   (segs 4,5) so a module can put RAM there: honoured on a BK-0010, or mapped to
-  the 160000 window instead of BOS.
-  **Three of its checks had to be STRUCTURAL, and that is the lesson to keep**:
-  pin driver overlap, the inward-claim gate and the once-per-DCLO start-vector
-  window are all invisible behaviourally — the overlap window is the module's data hold *after* the CPU
+  the 160000 window instead of BOS. S12/D10 pin the **DIP 7 force-off** term
+  in `slot_live` (on the SoC leg and per model: a BK-0011M with DIP 7 ON keeps
+  МСТД), and S13 the idle strobes on the pins while the slot is off.
+  **Four of its checks had to be STRUCTURAL, and that is the lesson to keep**:
+  pin driver overlap, the inward-claim gate, the once-per-DCLO start-vector
+  window and the idle strobes of a disabled slot are all invisible behaviourally — the overlap window is the module's data hold *after* the CPU
   has sampled, and on this active-low wired-AND bus an extra driver of all-ones
   is the identity element. Behavioural legs pass either way; only looking at the
   output enables catches them. The full contract, and what the oracle

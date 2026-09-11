@@ -23,6 +23,9 @@
 //     and with it missing the МПИ pins are a bare MSX edge. That term is what
 //     keeps a BK-0011M with no adapter on its own mstd11m image instead of
 //     conceding a window to a module that is not there.
+//   * DIP 7 (slot_dis) forces the slot off with the adapter and the module
+//     still fitted. It kills the whole vector in both models too, so a
+//     BK-0011M with DIP 7 ON keeps its mstd11m image.
 `timescale 1ns/1ps
 
 module dsl_tb;
@@ -31,7 +34,7 @@ module dsl_tb;
     always #10 cpu_clk = ~cpu_clk;
 
     reg rst_n = 1'b0, dclo_n = 1'b1;
-    reg model_bk11 = 1'b0, smk_en = 1'b0;
+    reg model_bk11 = 1'b0, smk_en = 1'b0, slot_dis = 1'b0;
     reg mon10_n = 1'b1, bas10_n = 1'b1, bas2_n = 1'b1, mon11_n = 1'b1;
     reg present_n = 1'b0;       // low = the МПИ adapter is fitted
 
@@ -49,7 +52,8 @@ module dsl_tb;
         .ad_n(ad_n), .sync_n(1'b1), .din_n(1'b1), .dout_n(1'b1),
         .wtbt_n(1'b1), .sel1_n(1'b1), .init_n(1'b1), .e_037_n(1'b1),
         .rply_n(rply_n),
-        .model_bk11(model_bk11), .smk_en(smk_en), .rom3(1'b0), .rom4(1'b0),
+        .model_bk11(model_bk11), .smk_en(smk_en), .slot_dis(slot_dis),
+        .rom3(1'b0), .rom4(1'b0),
         .rom_dsl_vec(rom_dsl_vec), .mpi_word(mpi_word), .rom4_force(rom4_force),
         .pSltAd(pSltAd),
         .pSltSync_n(), .pSltDin_n(), .pSltDout_n(), .pSltWtbt_n(),
@@ -104,6 +108,14 @@ module dsl_tb;
         check(1'b0, 4'b0111, 8'b0000_0000, "bk10 DIP 8 kills the vector");
         check(1'b1, 4'b1111, 8'b0000_0000, "bk11 DIP 8 kills the concede");
         smk_en = 1'b0;
+
+        // ---- DIP 7: the slot is forced off, the module stays fitted --------
+        // A bk11 here MUST keep its mstd11m image, as with no adapter.
+        slot_dis = 1'b1;
+        check(1'b0, 4'b0111, 8'b0000_0000, "bk10 DIP 7 kills the vector");
+        check(1'b1, 4'b1111, 8'b0000_0000, "bk11 DIP 7 -> BOS + МСТД stay");
+        slot_dis = 1'b0;
+        check(1'b1, 4'b0000, 8'b1100_0000, "DIP 7 off -> bk11 concedes again");
 
         // ---- no adapter: the same stand-down, for the other reason --------
         // A bk11 here MUST keep its mstd11m image: there is no module to

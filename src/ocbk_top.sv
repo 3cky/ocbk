@@ -17,7 +17,7 @@
 // module such as an SMK512 attaches through the passive adapter. See
 // doc/dev/mpi.md for the traced connector and doc/dev/verification.md for the
 // oracle. It stands down whenever DIP 8 selects the internal SMK512 emulation,
-// since the two claim the same addresses.
+// since the two claim the same addresses, and whenever DIP 7 forces it off.
 //
 // Clock tree (one PLL only - board constraint: the PIN_28 crystal feeds a single
 // PLL). The x9 VCO yields 96.65 MHz; the pixel clock is the same VCO /3; the
@@ -80,7 +80,11 @@
 // same reason; it drove the audio self-test tone until that was retired from
 // the shipped build on 2026-07-31, once the resolution claim it existed to
 // demonstrate had been measured on hardware (a debug feature does not ship) -
-// the tone wiring is still here, see the tone_en note below. DIP 2 is unused.
+// the tone wiring is still here, see the tone_en note below. DIP 7 = MPI slot
+// force-off (ON = the slot is disabled with the module and the adapter still
+// fitted), the same DCLO-hold latch as DIP 1/8: the slot sets the memory map
+// and the start vector, so it must not change under running code. DIP 2, 3 and
+// 6 are unused.
 //
 // screen_mode (mono-512 vs colour-256) models the physical monitor-cable switch
 // of a real BK-0010, toggled by the PS/2 Print Screen key (each press
@@ -111,8 +115,9 @@ module ocbk_top (
                                    //         ON = BK-0011M)
                                    //   [3] = CMT tape-in mode (read live)
                                    //   [4] = Covox mono (read live; ON = mono)
+                                   //   [6] = МПИ slot off (ON = disabled)
                                    //   [7] = SMK512 enable
-                                   //   [1], [2], [5], [6] = unused
+                                   //   [1], [2], [5] = unused
     input  logic        pSltRst_n, // reset button (slot RESET net; low = pressed)
 
     // ---- МПИ expansion bus (the cartridge slot; see doc/dev/mpi.md) ------
@@ -144,7 +149,7 @@ module ocbk_top (
     // Adapter presence: slot pin 44, tied to GND by the МПИ adapter and pulled
     // up in the pad otherwise. Low = the adapter is fitted, so the bridge may
     // own the МПИ pins and concede the BK-0011M top window; high = a bare MSX
-    // slot, and qbus_slot stands down exactly as it does for DIP 8.
+    // slot, and qbus_slot stands down exactly as it does for DIP 7 and DIP 8.
     input  wire         pSltPresent_n,
 
     // ---- PS/2 keyboard (receive-only; pins pulled up, driven Z) ----------
@@ -298,22 +303,32 @@ module ocbk_top (
     // the SMK BIOS in either model (the SYS rom7 register-space overlay
     // redirects the 177716 start vector to 166400); flip DIP 8 off and press
     // reset to return to a stock machine.
-    logic [1:0] dipm_sr, dips_sr, dclo_sr;
-    logic       model_bk11, smk_en;
+    // --- MPI slot force-off: DIP 7 (ON = low = slot disabled) ---------------
+    // The identical DCLO-hold latch again. The slot decides the memory map
+    // (the host-ROM deselect, the BK-0011M concede of 160000-177577, the P4O
+    // window-1 takeover) and the start vector, so a mid-run flip would move
+    // ROM under running code. With DIP 7 ON, qbus_slot stands down as it does
+    // for DIP 8 or a missing adapter, and a fitted module sees a dead bus.
+    logic [1:0] dipm_sr, dips_sr, dipd_sr, dclo_sr;
+    logic       model_bk11, smk_en, slot_dis;
     always_ff @(posedge sys_clk or negedge locked) begin
         if (!locked) begin
             dipm_sr    <= 2'b00;
             dips_sr    <= 2'b00;
+            dipd_sr    <= 2'b00;
             dclo_sr    <= 2'b00;
             model_bk11 <= 1'b0;
             smk_en     <= 1'b0;
+            slot_dis   <= 1'b0;
         end else begin
             dipm_sr <= {dipm_sr[0], ~pDip[0]};
             dips_sr <= {dips_sr[0], ~pDip[7]};
+            dipd_sr <= {dipd_sr[0], ~pDip[6]};
             dclo_sr <= {dclo_sr[0], dclo_n};
             if (!dclo_sr[1]) begin
                 model_bk11 <= dipm_sr[1];
                 smk_en     <= dips_sr[1];
+                slot_dis   <= dipd_sr[1];
             end
         end
     end
@@ -1233,7 +1248,7 @@ module ocbk_top (
         .b        (pDac_VB)
     );
 
-    // ---- cartridge-slot bridge (forward seam, held disabled) -------------
+    // ---- МПИ cartridge-slot bridge (live; DIP 7 or DIP 8 turns it off) ----
     // Reset is POWER-ON ONLY (vid_rst_n), the 037/audio/video precedent and
     // bk_rply's own rule: a warm reset must not drop a reply the module is
     // still holding, and must not re-arm the deselect under running code.
@@ -1252,6 +1267,7 @@ module ocbk_top (
         .rply_n     (rply_n),
         .model_bk11 (model_bk11),   // which deselect wires physically exist
         .smk_en     (smk_en),       // DIP 8 on = internal SMK512: slot stands down
+        .slot_dis   (slot_dis),     // DIP 7 on = slot forced off: slot stands down
         .rom3       (map_rom3),
         .rom4       (map_rom4),
         .rom_dsl_vec(rom_dsl_vec),

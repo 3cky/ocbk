@@ -9,7 +9,7 @@
 # mem_mapper pass-through + SDRAM model + port-2 contention) with the REAL
 # qbus_slot bridging to sim/slot/mpi_slave_model.v.
 #
-# Four legs:
+# Five SoC legs:
 #   attached  - the module answers; every sub-test runs.
 #   vecboot   - the module ALSO answers the 0177716 start-vector read, driving
 #               only and never replying (the vm1 self-replies for its own
@@ -29,6 +29,12 @@
 #               stand down COMPLETELY. Checked structurally in the tb, not just
 #               behaviourally: rom_dsl_vec must stay 0 and slot_rd must never
 #               set, so the two SMKs can never both claim an address.
+#   DIP 7     - the slot is forced off on a STOCK BK-0010 while a module is
+#               attached and answering: the machine must run as if nothing were
+#               plugged in (every slot access traps 4), with the DIP 8
+#               structural checks.
+#   In both DIP legs the five outward strobes must stay idle on the pins, so a
+#   disabled module sees a dead bus (checked structurally in the tb).
 #
 # The RMW (DATIO) leg is the CLAUDE.md rule: a slave that re-arms on SYNC-rise
 # instead of strobes-idle drops the write half of an INC and the leg sees a
@@ -63,6 +69,7 @@ run_leg "module attached" ""
 run_leg "start vector"     "+vecboot"
 run_leg "empty connector"  "+noreply"
 run_leg "DIP 8 stand-down" "+dip8"
+run_leg "DIP 7 force-off"  "+dip7"
 
 # The host-ROM deselect vector, as a UNIT bench: it is the one part of the
 # bridge whose contract is per-MODEL, and the SoC legs are all BK-0010. See
@@ -176,7 +183,7 @@ mutate S5 "host ROM still replies in a deselected region" \
 
 # S6 - the slot does not stand down for DIP 8, so the internal SMK512 and a real
 #      module could both claim an address.
-patch "$MUT_SRC" 's|else        slot_live <= &pres_sr\[2:1\] & ~smk_en;|else        slot_live <= 1'"'"'b1;|' "$SP/m6.sv"
+patch "$MUT_SRC" 's|else        slot_live <= &pres_sr\[2:1\] & ~smk_en & ~slot_dis;|else        slot_live <= 1'"'"'b1;|' "$SP/m6.sv"
 iverilog -g2012 -o "$SP/m.vvp" -s slot_soc_tb \
    "$CPU/vm1_config.v" "$CPU/vm1.v" "$CPU/vm1_simlib.v" "$CPU/vm1_qbus.v" \
    "$CPU/vm1_plm.v" "$CPU/vm1_tve.v" \
@@ -196,7 +203,7 @@ echo "  S6 caught: slot does not stand down for DIP 8"
 #      DIN) never gets a strobe and can never reply. Found with a real МСТД
 #      module: FOCAL at 120000 ran, the tests ROM at 160000 died with a bus
 #      error. This is the mutation that would have caught it.
-patch "$MUT_SRC" 's|assign pSltE_n = e_037_n;|assign pSltE_n = 1'"'"'b1;|' "$SP/m7.sv"
+patch "$MUT_SRC" 's|assign pSltE_n = e_037_n \| ~slot_live;|assign pSltE_n = 1'"'"'b1;|' "$SP/m7.sv"
 mutate S7 "the 037's E strobe not exported (the МСТД top-ROM failure)" \
       "$MUT_MEM" "$SP/m7.sv" "$MUT_MOD"
 
@@ -231,6 +238,20 @@ mutate_leg S10 "+vecboot" "the start-vector window never closes" \
 # takes the BK-0011M BOS at 140000-157777, not the 160000 one (that window
 # needs no wire: МСТД is itself an МПИ card, so it is not in the machine).
 
+# S12 - DIP 7 not in slot_live: the slot stays live with the switch ON, the
+#       attached module answers, and the program reaches the success park
+#       that a stock machine cannot reach.
+patch "$MUT_SRC" 's|& ~smk_en & ~slot_dis;|\& ~smk_en;|' "$SP/m12.sv"
+mutate_leg S12 "+dip7" "the slot does not stand down for DIP 7" \
+      "$MUT_MEM" "$SP/m12.sv" "$MUT_MOD"
+
+# S13 - SYNC not held idle while the slot is off: a disabled module still sees
+#       host cycles on a floating address. Not visible behaviourally (the host
+#       ignores the module), so only the tb's structural strobe check sees it.
+patch "$MUT_SRC" 's|assign pSltSync_n = sync_n \| ~slot_live;|assign pSltSync_n = sync_n;|' "$SP/m13.sv"
+mutate_leg S13 "+dip7" "SYNC reaches a disabled module" \
+      "$MUT_MEM" "$SP/m13.sv" "$MUT_MOD"
+
 # D1..D5 - the ROM deselect vector, on dsl_tb (the per-model contract).
 # D1 is THE BK-0011M NO-BOOT, 2026-09-06: without the concede the host answers
 # 0166400 out of the blob's mstd11m image - but on a real BK-0011M МСТД is an
@@ -257,14 +278,19 @@ mutate_dsl D8 "M11 honoured on a BK-0010 (it is a bk11-only wire)" "$SP/d8.sv"
 patch "$MUT_SRC" 's|(mon11 ? 8.b0011_0000 : 8.h00)|(mon11 ? 8'"'"'b1100_0000 : 8'"'"'h00)|' "$SP/d9.sv"
 mutate_dsl D9 "M11 mapped to the 160000 window instead of BOS 140000-157777" "$SP/d9.sv"
 
-patch "$MUT_SRC" 's|else        slot_live <= &pres_sr\[2:1\] & ~smk_en;|else        slot_live <= ~smk_en;|' "$SP/d6.sv"
+patch "$MUT_SRC" 's|else        slot_live <= &pres_sr\[2:1\] & ~smk_en & ~slot_dis;|else        slot_live <= ~smk_en \& ~slot_dis;|' "$SP/d6.sv"
 mutate_dsl D6 "the adapter-presence term dropped (a bare bk11 loses МСТД)" "$SP/d6.sv"
 
 patch "$MUT_SRC" 's|else        pres_sr <= {pres_sr\[1:0\], ~pSltPresent_n};|else        pres_sr <= {pres_sr[1:0], pSltPresent_n};|' "$SP/d7.sv"
 mutate_dsl D7 "adapter presence sensed the wrong way round" "$SP/d7.sv"
 
+# D10 - DIP 7 not in slot_live, seen per model: a BK-0011M with DIP 7 ON
+#       still concedes 160000-177577 and loses its mstd11m image.
+patch "$MUT_SRC" 's|& ~smk_en & ~slot_dis;|\& ~smk_en;|' "$SP/d10.sv"
+mutate_dsl D10 "DIP 7 dropped from slot_live (a bk11 loses МСТД)" "$SP/d10.sv"
+
 # NOT mutation-tested, deliberately: the ~model_bk11 gate on BAS2 alone. BAS2
 # covers segs 6,7 and a BK-0011M concedes those anyway, so honouring it there
 # is provably unobservable. The gate stays for the symmetry of the four wires.
 
-echo "МПИ slot oracle: 19 mutations, all caught"
+echo "МПИ slot oracle: 22 mutations, all caught"

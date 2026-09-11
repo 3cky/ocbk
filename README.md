@@ -45,6 +45,7 @@ Everything below is confirmed running on the device.
 | **1** | **Model**: OFF = BK-0010, ON = BK-0011M. Needs reset when switched |
 | **4** | **Tape mode**: ON = the right audio jack is the cassette port |
 | **5** | **Covox**: OFF = stereo, ON = mono. Takes effect immediately |
+| **7** | **MPI slot**: ON = disabled; a plugged-in module is ignored, as if it were not there. Needs reset when switched |
 | **8** | **SMK512**: ON = the storage controller is present. Needs reset when switched |
 
 ### Special keys and buttons

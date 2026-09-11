@@ -30,7 +30,7 @@ enforces everywhere else:
 
 | file | what it is |
 |---|---|
-| `run.sh` | the runner; five legs (four SoC legs + the `dsl_tb` unit bench) plus `--mutate` |
+| `run.sh` | the runner; six legs (five SoC legs + the `dsl_tb` unit bench) plus `--mutate` |
 | `slot_soc_tb.v` | the SoC testbench (BK-0010 stack + the real bridge) |
 | `dsl_tb.v` | the unit bench on `rom_dsl_vec` — the per-model deselect contract |
 | `mpi_slave_model.v` | a behavioural МПИ expansion module — models the wire, not a chip |
@@ -43,8 +43,9 @@ enforces everywhere else:
 | **module attached** | every sub-test below |
 | **start vector** (`+vecboot`) | the module also answers the 0177716 start-vector read — **driving only, never replying**, because the vm1 self-replies for its own 177700–177717 block. Its 0166400 (the real SMK512 `BIOS[07716]`) must wire-OR with `SYS_START` and start the machine at **0166400**; 0100000, where an unmerged machine lands, is poked with a jump to the **fail** park so the leg cannot pass on the old behaviour. The program then re-reads 0177716 while the module is still driving it and must get the plain 0100100 — the window is armed for the start vector alone. **This is the 2026-09 hardware failure**: a real SMK512 booted to MONITOR (bk10) or hung (bk11) |
 | **empty connector** | the module never replies. Every slot access must bus-time-out to trap 4 and the machine must keep running — the bridge must not invent a reply out of a floating, unterminated pin |
-| **DIP 8 stand-down** | a real module **is** attached and answering, but DIP 8 also selects the internal SMK512. The bridge must stand down completely, checked structurally: `rom_dsl_vec` stays 0 and `slot_rd` never sets |
-| **ROM deselect** (`dsl_tb.v`) | a **unit** bench on `rom_dsl_vec` alone — the other four legs are all BK-0010 and this contract is **per-model**. It sweeps the four deselect wires in both models: on a BK-0010, MON10/BAS/BAS2 hit segs 0,1 / 2–5 / 6,7 and M11 does nothing; on a BK-0011M none of the three does anything, **M11 takes BOS at 140000–157777** (segs 4,5) so the module can put RAM there, and segments 6,7 are conceded **unconditionally**, because **МСТД is itself an МПИ card** and comes out when another module goes in. DIP 8 kills the whole vector in both models, and so does an **absent adapter** (slot pin 44, tied to GND by the adapter) — which is what keeps a bare BK-0011M on its own `mstd11m` image. **This is the 2026-09-06 BK-0011M fix**: the start vector was arriving correctly and the host was still answering 0166400 out of the blob's `mstd11m` image |
+| **DIP 8 stand-down** | a real module **is** attached and answering, but DIP 8 also selects the internal SMK512. The bridge must stand down completely, checked structurally: `rom_dsl_vec` stays 0, `slot_rd` never sets, and the five outward strobes (SYNC, DIN, DOUT, WTBT, E) stay high on the pins |
+| **DIP 7 force-off** (`+dip7`) | a real module **is** attached and answering, and DIP 7 forces the slot off on a **stock** BK-0010 (no internal SMK). The machine must run as if nothing were plugged in — every slot access traps 4, as in the empty-connector leg — with the same structural checks as DIP 8. The strobe check is the one that sees a disabled module still getting host cycles, which no program can observe |
+| **ROM deselect** (`dsl_tb.v`) | a **unit** bench on `rom_dsl_vec` alone — the other five legs are all BK-0010 and this contract is **per-model**. It sweeps the four deselect wires in both models: on a BK-0010, MON10/BAS/BAS2 hit segs 0,1 / 2–5 / 6,7 and M11 does nothing; on a BK-0011M none of the three does anything, **M11 takes BOS at 140000–157777** (segs 4,5) so the module can put RAM there, and segments 6,7 are conceded **unconditionally**, because **МСТД is itself an МПИ card** and comes out when another module goes in. DIP 8 kills the whole vector in both models, and so do **DIP 7** and an **absent adapter** (slot pin 44, tied to GND by the adapter) — which is what keeps a bare BK-0011M on its own `mstd11m` image. **This is the 2026-09-06 BK-0011M fix**: the start vector was arriving correctly and the host was still answering 0166400 out of the blob's `mstd11m` image |
 
 ## Sub-tests (the attached leg)
 
@@ -59,10 +60,10 @@ enforces everywhere else:
 | 6 | **deselect, both directions** — the module asserts BAS10 through its own control register and answers in the BASIC region; then releases it and ocbk's ROM answers again. Checked both ways so a stuck-asserted deselect cannot pass |
 | 7 | **the E-strobed window** (the МСТД topology) — 160000–177577 is a separate deselect (BAS2) *and* a separate read strobe (the 037's E). **7a** BAS2 alone gives 160000 to the module and leaves 120000 with the host; **7b** releasing it gives 160000 back; **7c** BAS + BAS2 together, the real МСТД configuration; **7d** M11 must move nothing on a BK-0010 (`dsl_tb` owns the BK-0011M half) |
 
-## Three checks that had to be structural
+## Four checks that had to be structural
 
-All three are the *"every sim still passes"* failure class from
-[gotchas.md](../../doc/dev/gotchas.md), and neither is observable behaviourally.
+All four are the *"every sim still passes"* failure class from
+[gotchas.md](../../doc/dev/gotchas.md), and none is observable behaviourally.
 They are the reason this oracle reaches into `u_slot.g_on` rather than only
 watching the bus:
 
@@ -82,6 +83,12 @@ watching the bus:
   non-zero only inside a live nSEL1 **read**, and it may open **once per DCLO**.
   The `+vecboot` leg pins the second one behaviourally as well, which is the
   check that matters; the structural counter pins it in every leg.
+- **Idle strobes while the slot is off.** In the DIP 8 and DIP 7 legs the host
+  ignores everything the module does, so the program passes whether or not the
+  module still sees host cycles. On the board it does matter: with AD released,
+  a module that sees SYNC/DIN/DOUT can decode a floating address as one of its
+  own registers. The tb checks that the five outward strobes stay high on the
+  pins (mutation S13).
 
 ## What this oracle does NOT own, deliberately
 
@@ -89,7 +96,7 @@ watching the bus:
   target — an external module owns its own access time and simply replies later
   — so there is no `N_SLOT` to fit. `sim/smktime`'s recipe would apply if one
   ever appears.
-- **BK-0011M on the SoC legs.** The four SoC legs run a BK-0010 stack. The
+- **BK-0011M on the SoC legs.** The five SoC legs run a BK-0010 stack. The
   per-model part of the contract — the model gate, M11's window, the segs-6,7
   concede and the adapter-presence term — is pinned in both models by the
   `dsl_tb` unit bench (D1–D9) instead. The P4O (~ROM4) read-back is **not**
@@ -104,7 +111,8 @@ watching the bus:
 
 ## Mutations
 
-Nineteen — **S1–S10** on the SoC legs and **D1–D9** on `dsl_tb` — run by
+Twenty-two — **S1–S10, S12, S13** on the SoC legs and **D1–D10** on `dsl_tb`
+(S11 is retired; its id is not reused) — run by
 `./run.sh --mutate`. Each is an anchored `sed`
 against a **copy** of the real RTL; a sed that fails to apply is a **hard
 error** (the anchor moved, so the mutation is silently testing nothing) — the
@@ -122,6 +130,8 @@ error** (the anchor moved, so the mutation is silently testing nothing) — the
 | S8 | the BAS mask covers segs 6,7, which belong to BAS2 — **the other МСТД board defect** |
 | S9 | **the SMK512 no-boot**: no start-vector merge, so the machine boots to MONITOR instead of the module BIOS |
 | S10 | the start-vector merge window never closes, so the module drives 177716 on every read |
+| S12 | the slot does not stand down for DIP 7 — the attached module answers and the program reaches the success park a stock machine cannot reach |
+| S13 | SYNC is not held idle while the slot is off, so a disabled module still sees host cycles — caught only by the structural strobe check |
 | D1 | **the BK-0011M no-boot**: the segs-6,7 concede removed, so the host answers 0166400 out of `mstd11m` and the CPU runs MSTD payload (`177736`) instead of the BIOS entry (`000766`) |
 | D2 | the concede applied on a BK-0010 too, taking BASIC bank 3 away with no BAS2 |
 | D3 | the concede masks one segment too many |
@@ -131,6 +141,7 @@ error** (the anchor moved, so the mutation is silently testing nothing) — the
 | D7 | adapter presence sensed the wrong way round — the bridge stands down exactly when the adapter is fitted |
 | D8 | M11 honoured on a BK-0010, where the wire does not exist |
 | D9 | M11 mapped to the 160000 window instead of BOS at 140000–157777 |
+| D10 | DIP 7 dropped from `slot_live` — a BK-0011M with DIP 7 ON still concedes its top window and loses МСТД |
 
 **Not** mutated, deliberately: the model gate on **BAS2**. BAS2 covers segs 6,7
 and a BK-0011M concedes those anyway, so honouring it there is provably

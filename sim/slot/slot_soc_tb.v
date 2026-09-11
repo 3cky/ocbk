@@ -38,6 +38,14 @@
 //               must stand down COMPLETELY (slot_live=0): no reply passed
 //               through, no inward data, no deselect. Proves the two can never
 //               both claim an address, which on the board would be silent.
+//   +dip7       a real module IS attached and answering, and DIP 7 forces the
+//               slot off on a STOCK BK-0010 (no internal SMK). The machine
+//               must run as if nothing were plugged in: every slot access
+//               traps 4, as in the mute leg, with the same structural
+//               stand-down checks as +dip8.
+//   In both the +dip8 and +dip7 legs, the five outward strobes (SYNC, DIN,
+//   DOUT, WTBT, E) must stay at the idle level on the pins. A disabled module
+//   must see a dead bus, not host cycles on a floating address.
 //
 `timescale 1ns / 1ps
 
@@ -55,10 +63,11 @@ module slot_soc_tb;
     localparam [15:0] VEC_WORD = 16'o166400;   // the module's 177716 word
     localparam [15:0] VEC_PC   = VEC_WORD & 16'o177400;   // where the CPU starts
 
-    reg noreply, dip8, vecboot;
+    reg noreply, dip8, dip7, vecboot;
     initial begin
         noreply = $test$plusargs("noreply");
         dip8    = $test$plusargs("dip8");
+        dip7    = $test$plusargs("dip7");
         vecboot = $test$plusargs("vecboot");
     end
 
@@ -246,6 +255,7 @@ module slot_soc_tb;
         .rply_n     (rply),
         .model_bk11 (1'b0),
         .smk_en     (dip8),
+        .slot_dis   (dip7),         // +dip7: the slot is forced off
         .rom3       (map_rom3),
         .rom4       (map_rom4),
         .rom_dsl_vec(rom_dsl_vec),
@@ -283,8 +293,9 @@ module slot_soc_tb;
         .pSltBas10_n(slt_b10),
         .pSltBas2_n (slt_b2),
         .pSltMon11_n(slt_m11),
-        .no_reply   (noreply),       // +dip8 keeps the module LIVE: the
-                                     // misconfiguration is what we are testing
+        .no_reply   (noreply),       // +dip8/+dip7 keep the module LIVE: a
+                                     // module that answers is what the
+                                     // stand-down must ignore
         .vec_mode   (vecboot)
     );
 
@@ -372,16 +383,28 @@ module slot_soc_tb;
     end
 
     // ---- the stand-down contract, checked structurally ----------------------
-    // With DIP 8 on, the slot must contribute NOTHING - if it ever drives the
-    // internal bus or a deselect bit, the two SMKs could both claim an address.
-    always @(posedge sys_clk) if (dip8 && aclo === 1'b1) begin
+    // With DIP 8 or DIP 7 on, the slot must contribute NOTHING. With DIP 8, if
+    // it ever drives the internal bus or a deselect bit, the two SMKs could
+    // both claim an address. With DIP 7, the machine must be a stock machine.
+    always @(posedge sys_clk) if ((dip8 || dip7) && aclo === 1'b1) begin
         if (rom_dsl_vec !== 8'h00) begin
-            $display("SLOT-ERROR: rom_dsl_vec=%b with DIP 8 on", rom_dsl_vec);
+            $display("SLOT-ERROR: rom_dsl_vec=%b with the slot off", rom_dsl_vec);
             $display("COSIM FAIL");
             $finish;
         end
         if (u_slot.g_on.slot_rd !== 1'b0) begin
-            $display("SLOT-ERROR: slot drove ad_n with DIP 8 on");
+            $display("SLOT-ERROR: slot drove ad_n with the slot off");
+            $display("COSIM FAIL");
+            $finish;
+        end
+        // The outward strobes must stay idle on the pins. This is structural
+        // for the usual reason: the host ignores every reply of a disabled
+        // module, so the program passes whether the module sees cycles or
+        // not. On the board, a module that sees cycles on a floating address
+        // can decode one of them as its own register.
+        if ({pSltSync_n, pSltDin_n, pSltDout_n, pSltWtbt_n, pSltE_n} !== 5'b11111) begin
+            $display("SLOT-ERROR: strobe on the pins with the slot off: sync=%b din=%b dout=%b wtbt=%b e=%b t=%0t",
+                     pSltSync_n, pSltDin_n, pSltDout_n, pSltWtbt_n, pSltE_n, $time);
             $display("COSIM FAIL");
             $finish;
         end
@@ -396,7 +419,7 @@ module slot_soc_tb;
                 if (scnt == 3) begin
                     // The mute legs must NEVER reach the success park: every
                     // slot access traps, so the program cannot get there.
-                    if (noreply || dip8) begin
+                    if (noreply || dip8 || dip7) begin
                         $display("SLOT-ERROR: success park reached with no module");
                         $display("COSIM FAIL");
                     end else begin
@@ -410,7 +433,7 @@ module slot_soc_tb;
                     // The mute legs EXPECT the fail park: the first slot read
                     // traps to 4, whose default vector is the fail park. That
                     // is the machine still running, not a hang.
-                    if (noreply || dip8) begin
+                    if (noreply || dip8 || dip7) begin
                         $display("COSIM PASS");
                     end else begin
                         $display("SLOT-ERROR: fail park 001012 reached");
