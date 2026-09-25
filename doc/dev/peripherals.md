@@ -1,4 +1,4 @@
-# Peripherals — keyboard, joysticks and the cartridge slot
+# Peripherals — keyboard, joysticks and the USB HID host
 
 `src/peripheral/` minus the SMK512 storage devices ([smk512.md](smk512.md)) and
 `bk_evnt.sv` ([video.md](video.md)); sound devices live in
@@ -490,7 +490,16 @@ escape hatch if it ever needs to be per-device; see
 
 ## Cartridge slot
 
-- Cartridge-slot Q-bus is a **forward seam**: `src/bus/qbus_slot.sv`, default
-  `SLOT_ENABLE=0` (drives nothing, slot pins stay reserved-tristated). The full
-  slot pin map lives commented in `ocbk_common.qsf`. Real BK hardware needs an
-  external 5V↔3.3V level-shifter (Cyclone I is not 5V-tolerant).
+**Moved to [mpi.md](mpi.md).** The cartridge slot is the seam for the BK's МПИ
+expansion bus, and that file now carries the whole subject: the XT3 connector
+traced pin-by-pin from `doc/bk0011m.sch`, the FPGA pin assignment, the RPLY /
+D8:B topology, the D11 input-synchroniser rule, the termination values and the
+defect list for `src/bus/qbus_slot.sv`.
+
+Two corrections to what this section used to say, kept here so they are not
+re-derived: the seam is still `src/bus/qbus_slot.sv` at `SLOT_ENABLE=0`, but its
+top-level instance also leaves **every physical port unconnected**, so it
+synthesises away entirely — and the "needs an external 5V↔3.3V level-shifter"
+claim was **wrong**. The board drives real 5 V MSX cartridges off bare FPGA pins
+with `PCI_IO ON` (the clamp diode), exactly as the joystick ports above already
+do.

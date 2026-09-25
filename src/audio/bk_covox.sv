@@ -96,6 +96,26 @@ module bk_covox #(
         else if (psg_cnt != 0) psg_cnt <= psg_cnt - 1'b1;
     end
 
-    assign cx_en = live & (psg_cnt == 0);
+    // psg_zero is (psg_cnt == 0) PRECOMPUTED into a flop, and it is a timing
+    // fix, not a style choice. `cx_en` is audio_mixer's src_en[6] - a REGISTER
+    // ENABLE in another module - so the plain compare put a 13-bit reduction
+    // between this counter and that enable cone, across the routing between the
+    // two blocks. That is the enable-cone rule (doc/dev/gotchas.md) and it went
+    // to a real VIOLATION, -0.169 ns / TNS -2.134, when the МПИ slot's pins
+    // re-placed the fitter - in a module the slot edit never touched. Same cure
+    // as sdram_ctrl's wait_zero and ref_zero: the compare moves onto the
+    // counter's own load path, where it is plain flop-to-flop with a whole
+    // clock period, and the enable becomes a single flop output.
+    //
+    // Cycle-exact by construction: the counter only reloads to all-ones or
+    // decrements, so it reaches 0 exactly one cycle after it held 1.
+    logic psg_zero;
+    always_ff @(posedge sys_clk) begin
+        if (reset)             psg_zero <= 1'b1;
+        else if (psg_act)      psg_zero <= 1'b0;
+        else if (psg_cnt != 0) psg_zero <= (psg_cnt == {{(PSG_BITS-1){1'b0}}, 1'b1});
+    end
+
+    assign cx_en = live & psg_zero;
 
 endmodule

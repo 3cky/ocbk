@@ -8,7 +8,7 @@ goldens. Longer per-oracle contracts live in `sim/*/README.md`.
 
 `make sim` calls `sim/run_all.sh`. Every runner cd's to its own directory, reads
 the repository and writes only to its own `mktemp` scratch, so the suite is one
-job pool of independent processes: 25 oracles, `nproc` at a time, **longest
+job pool of independent processes: 26 oracles, `nproc` at a time, **longest
 first** so the makespan stays near the longest single oracle rather than
 stacking a slow one behind the queue. Serial the suite is ~35 min of CPU; on 16
 cores it is ~4 min of wall clock.
@@ -582,6 +582,71 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   Both are **mutation-tested** (reverting the `selected` change hangs the clear;
   the RMW leg also proved the S_REPLY refinement unnecessary — the DATIO gap
   already drops the read reply). The gen program is `mem/gen_romwr_test.py`.
+- `sim/slot/run.sh` — the **МПИ expansion-bus oracle**, the pinned contract for
+  the slave-only `src/bus/qbus_slot.sv`: a real module on the far side of the
+  bridge, driven by the real CPU through the real bus front end. **Six legs**
+  — *module attached* (DATI, DATO, DATOB both lanes, **DATIO/RMW**, a qbto
+  address nobody decodes, and the host-ROM deselect checked in BOTH directions),
+  *start vector* (the module answers the 0177716 start-vector read **driving
+  only, never replying** — the one cycle on this bus that works that way,
+  because the vm1 self-replies for its own 177700-177717 block; its 0166400 must
+  wire-OR with `SYS_START` and start the machine there, and the program's own
+  re-read must then show the window CLOSED),
+  *empty connector* (the module never replies: every slot access must trap 4 and
+  the machine keep running — the bridge must not invent a reply out of a
+  floating pin), and *DIP 8 stand-down* (a module IS attached and answering
+  while DIP 8 selects the internal SMK512 — the bridge must contribute nothing),
+  *DIP 7 force-off* (a module IS attached and answering while DIP 7 turns the
+  slot off on a stock machine — every slot access must trap 4; in both DIP legs
+  the five outward strobes must also stay idle on the pins, so a disabled
+  module sees a dead bus),
+  and *ROM deselect* — a UNIT bench (`dsl_tb.v`) on `rom_dsl_vec` alone, because
+  that contract is **per-model** and the other five legs are all BK-0010. It
+  sweeps the four deselect wires in both models, and owns the BK-0011M rule no
+  BK-0010 program can reach: **МСТД is itself an МПИ card**, so with the slot
+  live on a BK-0011M segments 6,7 are conceded to the connector outright, wires
+  or no wires.
+  BK-0010 SoC stack, data-checking, `COSIM PASS` at the pinned success park like
+  `sim/romwr`. **Mutation-tested ×22** (`./run.sh --mutate`), including the
+  original stub's address-setup bug, the module-side SYNC-rise re-arm that drops
+  a DATIO write half, **the two defects a real МСТД module found on the
+  board** — the un-exported 037 E strobe (S7) and the over-wide BAS mask (S8) —
+  and **the three defects a real SMK512 found**: S9, no start-vector merge, so
+  the machine boots to MONITOR instead of to the SMK BIOS; S10, a merge window
+  that never closes; and **D1, the BK-0011M no-boot** — without the segs-6,7 concede the host
+  answers 0166400 out of the blob's `mstd11m` image, so the CPU runs MSTD
+  payload instead of the module's BIOS entry, which is exactly how the board
+  hung. D2 pins the model gate on the concede (a BK-0010 must keep BASIC bank
+  3), D3 its extent, and D4/D5 the model gate on MON10/BAS — the wires are
+  physically per-model while the adapter carries all of them, so the gate is
+  what emulates which wires exist (a model-blind version was tried on the board
+  and made the BK-0011M worse). The gate on **BAS2** is deliberately NOT
+  mutation-tested: BAS2 covers segs 6,7 and a BK-0011M concedes those anyway,
+  so honouring it there is provably unobservable. D6/D7 pin the **adapter
+  presence** pin (slot 44, tied to GND by the adapter): dropped, a BK-0011M
+  with no adapter concedes its top window to a module that is not there and
+  loses МСТД; inverted, the bridge stands down whenever the adapter IS on. D8/D9 pin
+  **M11**, the after-market wire that takes the BK-0011M BOS at 140000-157777
+  (segs 4,5) so a module can put RAM there: honoured on a BK-0010, or mapped to
+  the 160000 window instead of BOS. S12/D10 pin the **DIP 7 force-off** term
+  in `slot_live` (on the SoC leg and per model: a BK-0011M with DIP 7 ON keeps
+  МСТД), and S13 the idle strobes on the pins while the slot is off.
+  **Four of its checks had to be STRUCTURAL, and that is the lesson to keep**:
+  pin driver overlap, the inward-claim gate, the once-per-DCLO start-vector
+  window and the idle strobes of a disabled slot are all invisible behaviourally — the overlap window is the module's data hold *after* the CPU
+  has sampled, and on this active-low wired-AND bus an extra driver of all-ones
+  is the identity element. Behavioural legs pass either way; only looking at the
+  output enables catches them. The full contract, and what the oracle
+  deliberately does not own (timing, bk11, interrupts, anything electrical), is
+  in `sim/slot/README.md`.
+  `sim/run_mapper.sh` **section 10** is the companion piece the BK-0010 stack
+  cannot host: the МПИ `~ROM4` wired-AND (XT3.A22), how a module takes window 1
+  on a **BK-0011M** and the reason a real SMK512 would not boot one. It pins
+  that the force yields `MK_NONE` over window 1, that it **overrides the 177716
+  latch** (the open drain beats D36's totem pole, so it beats a *populated*
+  bank too), that it touches window 1 only, and that the BK-0010 decode never
+  references it — a full 64K bk10 sweep runs with it asserted. Two mutations,
+  both verified caught.
 - `sim/evnt/run.sh` — the Phase-9 **EVNT/IRQ2 detector oracle** and the
   authority on `src/peripheral/bk_evnt.sv` (the authentic D28+D3:B missing-pulse pair off
   the 037's WTI/SYNCO pins). Contract = the `sim/ref014` shape: the vendored

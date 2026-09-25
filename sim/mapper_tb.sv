@@ -13,6 +13,17 @@
 //  nINIT-preserve is structural (the module has no nINIT port); the
 //  behavioural RESET-instruction check lives in the bk11 SoC oracle.
 //
+//  Section 10 (the МПИ ~ROM4 wired-AND, XT3.A22): how an expansion module
+//  takes window 1 on a BK-0011M, and the reason a real SMK512 would not boot
+//  one (2026-09-06). Mutations, both verified caught: removing the rom4_force
+//  branch (M1 - "force: win1 lo -> NONE"), and ranking it BELOW the latch
+//  instead of above it (M2, `rom4_force && !win1_rom_en` - "force beats a
+//  populated bank"): on the board the module's open drain beats D36's totem
+//  pole, so it overrides whatever the host last wrote to 177716. The section
+//  also pins that the force touches window 1 ONLY (fixed RAM, window 0 and the
+//  top ROM all unchanged) and that the BK-0010 decode never references it -
+//  a full 64K bk10 sweep runs with the force asserted.
+//
 //  Phase 8 (SMK512, sections S1-S11): a second DIFFERENTIAL reference
 //  instance (dut_ref, smk_en tied 0, identical stimulus) pins "SMK disabled
 //  == bit-identical" over full-64K sweeps in both models, and "the SMK never
@@ -85,13 +96,18 @@ module mapper_tb;
     logic          smk_en = 1'b0;
     wire           smk_ro, smk_wo;
 
+    // The МПИ ~ROM4 wired-AND: 1 = an expansion module is holding XT3.A22 low.
+    // qbus_slot owns the pin and the model gate; this is the resolved level.
+    logic          rom4_force = 1'b0;
+
     integer errors = 0;
 
     mem_mapper #(.ADDR_BITS(AB)) dut (
         .sclk(sclk), .rst(rst), .model_bk11(model_bk11), .smk_en(smk_en),
         .sync_n(sync_n), .dout_n(dout_n), .wtbt_n(wtbt_n), .sel1_n(sel1_n),
         .ad_true(ad_true), .addr0(addr0), .bank_wr(bank_wr),
-        .addr(addr), .kind(kind), .phys(phys), .smk_ro(smk_ro), .smk_wo(smk_wo)
+        .addr(addr), .kind(kind), .phys(phys), .smk_ro(smk_ro), .smk_wo(smk_wo),
+        .rom4_force(rom4_force)
     );
 
     // Differential reference: identical stimulus, smk_en hard-tied 0. Its
@@ -105,7 +121,7 @@ module mapper_tb;
         .sync_n(sync_n), .dout_n(dout_n), .wtbt_n(wtbt_n), .sel1_n(sel1_n),
         .ad_true(ad_true), .addr0(addr0), .bank_wr(bank_wr_ref),
         .addr(addr), .kind(kind_ref), .phys(phys_ref), .smk_ro(smk_ro_ref),
-        .smk_wo(smk_wo_ref)
+        .smk_wo(smk_wo_ref), .rom4_force(rom4_force)
     );
 
     // ---- one 177716 DOUT window (the write shape qbus_mem's snoop sees) ----
@@ -404,6 +420,51 @@ module mapper_tb;
         #1;
         check(16'o040000, MK_RAM037, ram_page(3'd0, 16'o040000), "dclo win0=0");
         check(16'o100000, MK_RAM037,    ram_page(3'd0, 16'o100000), "dclo rom off");
+
+        // ---- 10. THE МПИ ~ROM4 WIRED-AND (XT3.A22) --------------------------
+        // How an expansion module takes window 1 on a BK-0011M, traced from
+        // doc/bk0011m.sch: S1-66 carries D36 Q5 (К555ТМ9, a totem pole), feeds
+        // D32.5 (К555ЛИ6) whose Y = Q4·Q5 is the "window 1 = internal RAM" term
+        // driving the 037's AD15 force, AND reaches XT3.A22 where a module can
+        // OPEN-DRAIN it and win. smk64.vhd's p4o is exactly that: an `out`
+        // through an `opndrn` buffer from extended_reg(2) = 0 at reset, so a
+        // real SMK holds A22 low FROM POWER-ON.
+        // Q5 low = bit 4 SET (Q is the inverted bus bit) = code 020 = window-1
+        // ROM bank 3, an UNPOPULATED socket, and Q4·Q5 false so the 037 stops
+        // fronting the window. Both land here as one term: MK_NONE over window
+        // 1 - no reply, so the module answers, and no MK_RAM037, so qbus_mem's
+        // ext_ram stays low and va_037_sync never claims it.
+        // A real SMK512 never booted a BK-0011M without this (2026-09-06).
+        check(16'o100000, MK_RAM037, ram_page(3'd0, 16'o100000), "10 pre: win1 RAM");
+        rom4_force = 1'b1; #1;
+        check(16'o100000, MK_NONE, '0, "10 force: win1 lo -> NONE");
+        check(16'o137776, MK_NONE, '0, "10 force: win1 hi -> NONE");
+        // IT OVERRIDES THE LATCH, not merely the RAM fallthrough: on the board
+        // the open drain beats D36's totem pole, so it wins over whatever the
+        // host last wrote to 177716 - including a POPULATED bank.
+        map_write(16'o004001, 1'b0, 1'b0, 1'b1, "10 select bank 0");
+        check(16'o100000, MK_NONE, '0, "10 force beats a populated bank");
+        // Everything OUTSIDE window 1 is untouched: it is one wire into one
+        // window, not a global deselect.
+        check(16'o000000, MK_RAM037, ram_page(3'd6, 16'o000000), "10 fixed RAM ok");
+        check(16'o040000, MK_RAM037, ram_page(3'd0, 16'o040000), "10 win0 ok");
+        check(16'o140000, MK_ROM, AB'(BK11_TOPROM_BASE) | AB'(16'o140000 >> 1 & 13'h1FFF),
+              "10 top ROM ok");
+        // Release: the latch is back in charge, and bank 0 is still selected.
+        rom4_force = 1'b0; #1;
+        check(16'o100000, MK_ROM, rom_bank(2'd0, 16'o100000), "10 release -> bank 0");
+        // BK-0010 has no A22 wire at all (qbus_slot gates it on the model), and
+        // the bk10 decode must not reference it even if one arrives.
+        rom4_force = 1'b1;
+        model_bk11 = 1'b0; #1;
+        sweep_bk10("10 bk10 ignores the force");
+        model_bk11 = 1'b1;
+        rom4_force = 1'b0; #1;
+        // Back to config 0 for the sections below.
+        @(negedge sclk) rst = 1'b1;
+        repeat (2) @(posedge sclk);
+        @(negedge sclk) rst = 1'b0;
+        #1;
 
         // ==================== Phase-8 SMK512 sections =======================
         // State on entry: bk11 mode, banking config 0, smk_en = 0.

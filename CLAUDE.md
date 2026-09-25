@@ -32,7 +32,8 @@ to do with.
 | `mem_mapper`'s SMK stage, `smk_ide`, `sd_backend` | [doc/dev/smk512.md](doc/dev/smk512.md) — SMK512 RAM/BIOS/IDE/SD, `N_EXT` |
 | `src/video/`, `bk_evnt` | [doc/dev/video.md](doc/dev/video.md) — framebuffer conventions, palette, 177662, EVNT/IRQ2 |
 | `src/audio/`, the CMT jack | [doc/dev/audio.md](doc/dev/audio.md) — mixer/DAC stage, TurboSound, tape |
-| `src/peripheral/` (keyboard, joysticks), `qbus_slot` | [doc/dev/peripherals.md](doc/dev/peripherals.md) |
+| `src/peripheral/` (keyboard, joysticks) | [doc/dev/peripherals.md](doc/dev/peripherals.md) |
+| `qbus_slot`, the МПИ expansion bus, the adapter board | [doc/dev/mpi.md](doc/dev/mpi.md) — the traced XT3 connector, RPLY/D8:B, the D11 input synchroniser, termination |
 | Quartus / Icarus / bus behaviour that surprised us once | [doc/dev/gotchas.md](doc/dev/gotchas.md) |
 | planning new work | [doc/dev/open-items.md](doc/dev/open-items.md) — what is deferred and why |
 
@@ -112,9 +113,8 @@ The constraints that shape every decision; details and the reasoning in
   is the root reason the arbiter / done-gate machinery exists.
 - **The panel is standard-VESA-only**, so the output is 1024×768@60 and the
   48.83→60 Hz gap is bridged in the framebuffer.
-- **Current fit: 9,133 / 12,060 LE (76 %)**, 4/52 M4K, 114/173 pins, one PLL,
-  sys_clk setup +0.121 ns, TNS 0 (two constant DE-9 pin-8 pads, 0 LE, moved it
-  from +0.339 onto a `va_037_sync|A → mem_mapper|smk_page` decode cone). Still thin, and it moves with placement: the
+- **Current fit: 9,222 / 12,060 LE (76 %)**, 142/173 pins, one PLL,
+  sys_clk setup +0.417 ns, TNS 0. Still thin, and it moves with placement: the
   Phase-12 Covox left it at +0.102 on the `ram_init|filling` /
   `mem_mapper|mon_en` cone and the arming fix bought it back for +33 LE; the
   joysticks then drove it to **−0.121** on `sdram_ctrl|wait_cnt → s_addr` — the
@@ -150,7 +150,17 @@ The constraints that shape every decision; details and the reasoning in
   The CRC had been added on a hypothesis the board disproved; it was removed
   rather than chased further. At this fill the cheapest STA fix is often deleting
   something that was never justified — always ask what the increment is *for*
-  before chasing what it broke. → audio, gotchas, smk512
+  before chasing what it broke.
+  **Then the МПИ slot made the same point about PINS (2026-08-30).** The bridge is
+  only **+21 LE** but **+27 pins**, and the pins alone re-placed the fitter into
+  a real **VIOLATION, −0.169 / TNS −2.134** — on `bk_covox|psg_cnt →
+  audio_mixer|s0_r[6]`, an audio cone in two modules the edit never touched, and
+  the enable-cone rule for a SEVENTH time. The `wait_zero` idiom cured it for
+  +4 LE (`psg_zero`), which exposed **`smk_ide|lba_a` a FOURTH time** — cured at
+  the ENDPOINT again, by registering the five geometry validity predicates.
+  Final: **+0.122, TNS 0**, and both cones left the report. **Budget for the
+  chase when an increment is pin-heavy, not just LE-heavy.**
+  → audio, gotchas, smk512
 
 ## Source tree
 
@@ -184,7 +194,7 @@ Update comments every time the corresponding code is changed.
 ## Build & test
 
 ```
-make sim       # Icarus regressions: the 25 oracles, in parallel (~4 min on 16 cores)
+make sim       # Icarus regressions: the 26 oracles, in parallel (~5 min on 16 cores)
 make           # Quartus: map -> fit -> sta -> asm -> POF (ocbk.pof in the project root)
 make flash     # program EPCS4 over USB-Blaster (Active Serial; JTAG TDO not wired)
 make clean     # remove build intermediates

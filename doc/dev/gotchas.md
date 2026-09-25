@@ -190,6 +190,53 @@
   answer is "none", expect nothing — and never accept a slack improvement alone
   as evidence, because at this placement fragility an unrelated edit moves slack
   by half a nanosecond on its own.
+- **The enable-cone rule, visit NINE — and it was the neighbouring bit-pair of
+  a flop this file had ALREADY cured (2026-09-06).** The МПИ adapter-presence
+  input is **one pin and +1 LE**, and it re-placed the fitter from +0.317 to
+  **+0.065 ns** — positive, TNS 0, but the thinnest this design has shipped, and
+  in the SDRAM-datapath family that once cost a no-boot. The cone was
+  `mem_mapper|mon_en → cpu_sdram_dp|be_o[1:0]`, and `mon_en`, `rom_vec[6]`,
+  `rom_vec[7]` and `seg_std[4]` were **all** landing on `be_o` — the endpoint
+  signature this file already records for `lba_a`.
+  The cure was **already written in the same file, for the flop next door.**
+  `wdata_o` had been ungated from `is_write` for exactly this reason (see
+  above); `be_o` was left gated on `is_read || early_rd` / `is_write` in the
+  FSM, so the mapper decode still sat in its enable. Loading `be_o` on **any
+  idle cycle** and moving the decode into its data mux took it to **+0.454 ns,
+  TNS 0**, and `be_o` left the report entirely. **+12 LE**, `make sim` 26/26
+  with every golden byte-identical — the load is behaviour-identical by the
+  same argument as `wdata_o`'s (consumed only while `req` is high, and `req`
+  rises only on a transition out of `D_IDLE`).
+  **The lesson: when you ungate one register out of an enable cone, check the
+  others loaded in the same FSM branch.** The fix left a sibling behind, and it
+  waited three phases for a one-pin increment to expose it.
+
+- **The enable-cone rule, visits SEVEN and EIGHT (the МПИ slot, 2026-08-30).**
+  The slave-only slot bridge cost only **+21 LE** but **+27 pins**, and that
+  alone re-placed the fitter from +0.339 into a real **VIOLATION, −0.169 ns /
+  TNS −2.134** — on `bk_covox|psg_cnt → audio_mixer|s0_r[6]`, an audio cone in
+  two modules the edit never touched. Cause, for the seventh time: a wide
+  compare feeding a REGISTER ENABLE in another module. `cx_en = live &
+  (psg_cnt == 0)` is `audio_mixer`'s `src_en[6]`, so a 13-bit reduction sat
+  between the counter and that enable, across the routing between the blocks.
+  Cured with the `wait_zero` / `ref_zero` idiom a third time — `psg_zero`, the
+  compare moved onto the counter's own load path — for **+4 LE**, taking it to
+  **−0.012 / TNS −0.084**.
+  **That exposed `smk_ide|lba_a` a FOURTH time**, and this one is the lesson to
+  keep: `g_val` reached `lba_a` through four separate validity compares
+  (`== 0`, `[15:8] != 0`, `> 16`, `[15:14] != 0`, `> 125`), every one of them
+  deciding `lba_a <= bk_total_q`, i.e. all of them in `lba_a`'s enable cone.
+  Fixed at the ENDPOINT per the rule this file already records — registering the
+  five predicates off `~sb_q` at the same edge `g_val` itself is loaded, which is
+  cycle-identical by construction and left every IDE oracle byte-identical.
+  **Watch the transform, not just the timing:** the H-case test was on the LOW
+  BYTE (`g_val[7:0] == 0`) while the S and C cases test the full word, so
+  folding all three onto one `g_v_zero` would have silently accepted a geometry
+  with a non-zero high byte and zero head count. The oracles would not
+  necessarily have caught it — that specific image never appears in the test
+  set. A predicate refactor is a behaviour change until each width is checked
+  individually.
+
 - **A SINGLE-driver open-collector `tri1` net degenerates to stuck-ASSERTED in
   Quartus** (Cyclone I has no internal tri-state/pull-up). This bit the Phase-6
   keyboard on hardware: `bk_kbd014` was the *only* nVIRQ source, driving
@@ -321,3 +368,33 @@
   read rev(blob) and fell back). `make blob-check` verifies the RPD pages =
   rev(blob) at BOTH 0x40000 and 0x48000.
 
+- **A dropped port connection is SILENT: Quartus ties the missing input to GND,
+  and `make sim` structurally cannot see it.** 2026-09-07: the МПИ merge commit
+  (`14e648c`) deleted `.model_bk11 (model_bk11)` from **`cpu_clkgen`** and from
+  **`ram_init`** in `ocbk_top`. Verilog permits an omitted port, so the build
+  stayed 0-errors and every oracle stayed green — but `cdiv_last = turbo_q ?
+  4'd7 : (model_bk11 ? 4'd11 : 4'd15)` could no longer reach 11, so a BK-0011M
+  ran on the BK-0010 `/32` divider: **3.02 MHz instead of 4.03, 25 % slow**,
+  reported from the board as "games run slower since the slot went in". The
+  `ram_init` half quietly gave a BK-0011M the bk10 `N=6` DRAM power-on pattern.
+  Two things make this its own class of bug:
+  - **No oracle can catch it.** Nothing in `sim/` instantiates `ocbk_top`; each
+    testbench builds its own SoC and drives `cpu_clkgen` with a `model_bk11` it
+    supplies. The bug lives entirely in the wiring the oracles replace.
+  - **The build DID report it**, in a section nobody reads: the map report's
+    *Port Connectivity Checks* carried
+    `model_bk11 ; Input ; Warning ; Declared by entity but not connected by
+    instance ... the port will be connected to GND` for both instances, plus
+    `ram_init:u_raminit|model_seen ; Stuck at GND due to stuck port data_in` in
+    the register-removal list. **The design's steady state is ZERO such
+    warnings, so treat any of them as an error:**
+    ```
+    grep -A6 "Port Connectivity" ocbk.map.rpt | grep "not connected by instance"
+    ```
+    must print nothing. A "Stuck at GND/VCC due to stuck port" line in the
+    removed-register list is the same signal seen from the other end.
+  - **F12 turbo still worked**, because `turbo_q` overrides the model term. A
+    rate bug that disappears in turbo is this bug's fingerprint.
+  Restoring both connections cost +55 LE and **needed no STA chase** — it took
+  sys_clk setup from +0.122 to **+0.369 ns**, TNS 0, which is the same "one
+  build's slack is a sample, not a property" lesson pointing the other way.

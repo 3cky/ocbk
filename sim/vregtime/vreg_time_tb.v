@@ -189,6 +189,7 @@ module vreg_time_tb;
         .reset    (~dclo),
         .ide_rdata(16'h0000),
         .joy_word(16'o000000), // no joysticks here; never leave it
+        .mpi_word(16'o000000), // no МПИ module here; never leave it floating
                                // floating - an X poisons rdata
         .init_n   (init),
         .kbd_down (1'b0),
@@ -197,6 +198,8 @@ module vreg_time_tb;
         .sel2_n   (sel[2]),
         .model_bk11(1'b1),
         .smk_en   (1'b0),   // stock BK-0011M
+        .rom_dsl_vec(8'h00),        // no МПИ module: host ROM fully selected
+        .rom4_force(1'b0),   // no МПИ module forcing the window-1 bank
         .boot_active(1'b0),
         .bw_req   (1'b0),
         .bw_addr  ({AB{1'b0}}),

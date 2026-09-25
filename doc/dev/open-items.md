@@ -244,9 +244,7 @@ from x15 to x12 to pay for it.
   Covox precedent above). The exposure it *would* fix is real but narrow — a
   parallel-port/printer driver polling 177714 for a status line would see
   joystick bits while a control is actually held. Hardware bring-up found no
-  conflict, so this stands. **`pDip[6]` is the reserved escape hatch** if one
-  ever turns up; the decision and the pin are written down here so it is a
-  five-minute change, not a redesign.
+  conflict, so this stands.
 - **Tape-out is single-bit.** A real BK mixes write bits 6+5 resistively into a
   3-level record waveform; bit 6 alone (the dominant component) is shipped. See
   the tape bullet. **Phase 10 deliberately did NOT change this** — tape-out is a
@@ -272,11 +270,29 @@ from x15 to x12 to pay for it.
   become a bounded-variance check.
 - **Keyboard reset chord** — `warm_rst_req` has the OR seam, no chord decodes
   into it.
-- **Cartridge slot** (`src/bus/qbus_slot.sv`, `SLOT_ENABLE=0`) drives nothing; the
-  pin map is commented in `ocbk_common.qsf`. Real 5V BK Q-bus hardware needs an
-  external level shifter — Cyclone I is not 5V-tolerant. If a second nVIRQ
-  source ever lands here, OR the active-high asserts and invert at the top —
-  never go back to tri-state Z (see the `tri1` gotcha).
+- **Cartridge slot / МПИ — the SLAVE-ONLY bridge is IMPLEMENTED and CONFIRMED
+  ON HARDWARE 2026-09-06** (`src/bus/qbus_slot.sv`, `SLOT_ENABLE=1`; oracle
+  `sim/slot`, 6 legs + 22 mutations; 30 pins). Data transfer, RPLY, the
+  host-ROM deselect, the start-vector merge, the P4O wired-AND and the DIP 7
+  force-off: a real SMK512 boots both models to the disk OS, and a real
+  МСТД module runs. Still open:
+  DMR/SACK/DMGI/DMGO arbitration, the VIRQ/IAKO chain (IRQ3 is the cheapest
+  first interrupt — free and module-owned), `bsy_n` (needs a push-pull hook in
+  the vendored `vm1.v`, or it comes up stuck asserted), and turbo on a BK-0011M:
+  turbo, where the strobe setup and bus turnaround roughly halve, is confirmed
+  with an SMK512 on a BK-0010 only. See [mpi.md](mpi.md) for the XT3 map, the
+  RPLY/D8:B topology, the D11 input-synchroniser rule and the termination values.
+  **The "needs an external level shifter" claim recorded here was WRONG** and is
+  corrected in that file: esemsx3 drives all 50 cartridge-slot lines straight off
+  FPGA pins with `PCI_IO ON` (the clamp diode) + 4 mA, which is how this board
+  already runs real 5 V MSX cartridges and how `ocbk_common.qsf` already treats
+  the joystick pins. The adapter board is passive. **Termination is mostly
+  covered:** the OneChipBook's own 1 k pull-ups land on ~RPLY and ~INIT
+  (PIN_128/138). The 16 AD lines and the other strobes have only the pads'
+  ~25 k; their rise time and high level are still unmeasured — measure them with
+  a module attached.
+  If a second nVIRQ source ever lands here, OR the active-high asserts and invert
+  at the top — never go back to tri-state Z (see the `tri1` gotcha).
 - **CRT effects** (scanline dim / gamma) in the upscaler — the `vga_out` colour
   decode is the hook.
 - **SD data CRC16 and MMC cards** — `sd_backend` uses the SPI-default CRC

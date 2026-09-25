@@ -222,13 +222,33 @@ module cpu_sdram_dp #(
         else if (state == D_IDLE && !dout_n)     wdata_o <= ad_true;
     end
 
+    // ---- the byte mask, out of the FSM for exactly the same reason ---------
+    // be_o loads on EVERY idle cycle instead of only on a decoded access, so
+    // the mem_mapper decode moves off this flop's ENABLE and into its data
+    // mux. It is the same rule as wdata_o above, and the same argument makes
+    // it behaviour-identical: be_o is only consumed by the arbiter while `req`
+    // is high, `req` only rises on a transition out of D_IDLE, and the value
+    // loaded on that edge is computed from the same is_read/is_write/byte_op
+    // the FSM branches on. Idle cycles leave a dead value nobody reads.
+    // Measured 2026-09-06: the МПИ presence pin re-placed the fitter and left
+    // mem_mapper|mon_en -> be_o at +0.065 ns - the design's chronic cone, and
+    // the SDRAM datapath family that once cost a no-boot. This is the endpoint
+    // fix, not a leg fix: mon_en, rom_vec[6], rom_vec[7] and seg_std[4] were
+    // ALL landing on be_o.
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n)                 be_o <= 2'b11;
+        else if (state == D_IDLE)   be_o <=
+            (!(is_read || early_rd) && is_write && byte_op)
+                ? (addr[0] ? 2'b10 : 2'b01)
+                : 2'b11;
+    end
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state    <= D_IDLE;
             req      <= 1'b0;
             we       <= 1'b0;
             addr_o   <= '0;
-            be_o     <= 2'b11;
             rd_hold  <= '0;
             was_read <= 1'b0;
             was_drive <= 1'b0;
@@ -240,7 +260,6 @@ module cpu_sdram_dp #(
                     if (is_read || early_rd) begin     // prefetch the read
                         we       <= 1'b0;
                         addr_o   <= phys;
-                        be_o     <= 2'b11;
                         req      <= 1'b1;
                         was_read <= 1'b1;
                         was_drive <= !rd_noe;
@@ -249,7 +268,6 @@ module cpu_sdram_dp #(
                     end else if (is_write) begin        // issue the write
                         we       <= 1'b1;
                         addr_o   <= phys;
-                        be_o     <= byte_op ? (addr[0] ? 2'b10 : 2'b01) : 2'b11;
                         req      <= 1'b1;
                         was_read <= 1'b0;
                         was_drive <= 1'b0;

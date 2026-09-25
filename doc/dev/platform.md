@@ -176,7 +176,7 @@ qbus_mem.sv         bus front-end: region reply FSM, 177662/spk/stop captures,
                     the SMK/IDE decodes, the boot-writer mux
 mem_mapper.sv       the one translate seam: (addr, map regs) -> (kind, phys word)
 qbus_sdram.sv       retired Phase-2 RAM slave (kept for its cosim only)
-qbus_slot.sv        cartridge-slot bridge (forward seam, SLOT_ENABLE=0)
+qbus_slot.sv        МПИ cartridge-slot bridge, slave only (SLOT_ENABLE=1)
 --- src/sdram/ (the SDRAM datapath and its writers) ---
 cpu_sdram_dp.sv     CPU RAM/ROM datapath on arbiter port 0 + the RPLY done-gate
 sdram_arbiter.sv    4-port fixed-priority arbiter (CPU/readout/fetch/FB write)
