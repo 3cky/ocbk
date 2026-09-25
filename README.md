@@ -29,12 +29,14 @@ Everything below is confirmed running on the device.
   **UVK-01 "Marsianka"** mouse.
 - **Tape** - the right audio jack doubles as the cassette port. Load real BK
   tape recordings from a PC, and save back to one.
-- **SMK512** - the 512 KB RAM extension, its BIOS, and an IDE drive backed by
+- **SMK512 emulation** - the 512 KB RAM extension, its BIOS, and an IDE drive backed by
   an SD card. Boots an OS from a standard AltPro HDD image.
 - **Turbo** - an optional 6.04 MHz mode, roughly **1.8×** (BK-0011M) to
   **2.2×** (BK-0010) faster than authentic.
 - **Reset button** - warm-restarts the machine with memory intact, like a real
   BK's reset. Also how you switch models.
+- **MPI slot** - the expansion connector for real BK hardware, such as a
+  floppy controller or an MSTD module.
 
 ## Controls
 
@@ -45,8 +47,8 @@ Everything below is confirmed running on the device.
 | **1** | **Model**: OFF = BK-0010, ON = BK-0011M. Needs reset when switched |
 | **4** | **Tape mode**: ON = the right audio jack is the cassette port |
 | **5** | **Covox**: OFF = stereo, ON = mono. Takes effect immediately |
-| **7** | **MPI slot**: ON = disabled; a plugged-in module is ignored, as if it were not there. Needs reset when switched |
-| **8** | **SMK512**: ON = the storage controller is present. Needs reset when switched |
+| **7** | **MPI slot**: ON = disabled; a plugged-in MPI module is ignored, as if it were not there. Needs reset when switched |
+| **8** | **SMK512 emulation**: ON = enables the emulated storage controller and disables the MPI slot. Needs reset when switched |
 
 ### Special keys and buttons
 
@@ -94,7 +96,7 @@ and will not be seen at all.
 | LED | Meaning |
 |-----|---------|
 | **9** | solid = running. **Blinking = the firmware image in flash failed its checksum** and the CPU is held in reset. |
-| **8** | SMK512 drive access - blinks while the drive is busy, one short flash for a single access |
+| **8** | emulated SMK512 drive access - blinks while the drive is busy, one short flash for a single access |
 | **7** | tape mode is on |
 | **6** | turbo is on |
 | **5** | PSG is active |
@@ -111,7 +113,7 @@ Switch **DIP 4** on (LED 7 lights). Play a BK tape recording - e.g. a WAV
 rendered from a `.BIN` - into the **right** audio channel, then load it the
 normal way. Switch DIP 4 off when you're done - that jack is the right audio channel otherwise.
 
-### SD card (SMK512)
+### SD card (SMK512 emulation)
 
 Write a raw **AltPro HDD image** to the card starting at the very beginning -
 no partition table, no filesystem, just the image at sector 0:
