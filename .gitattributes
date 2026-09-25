@@ -1,4 +1,4 @@
-# Schematics are reference AUTHORITIES (CLAUDE.md) - keep them byte-exact.
+# Schematics are reference authorities (AGENTS.md) - keep them byte-exact.
 # core.autocrlf=input would otherwise rewrite their CRLF line endings on commit,
 # so a fresh clone would not match the file the vendor shipped.
 *.sch -text

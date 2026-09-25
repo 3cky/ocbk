@@ -1070,7 +1070,7 @@ module ocbk_top (
         // (bk_turbosound) and u_cx (bk_covox) consume it; Menestrel will
         // hang off the same wires when it lands. Devices live in src/audio/ and
         // arrive at bk_audio as extra mixer slots - see the audio bullet in
-        // CLAUDE.md. The capture is oracle-pinned by spk_capture_tb driving
+        // AGENTS.md. The capture is oracle-pinned by spk_capture_tb driving
         // the real qbus_mem.
         .port_wr  (snd_port_wr),     // 1 sclk per 177714/15 bus write
         .port_data(snd_port_data),   // BK-true value, byte lanes merged

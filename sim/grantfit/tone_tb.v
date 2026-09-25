@@ -9,7 +9,7 @@
 // WHY THIS EXISTS
 // ---------------
 // The 037-fronted DRAM path diverges from a real BK-0011M in a way that is
-// PATTERN-DEPENDENT (CLAUDE.md, the beam-raced-palette-skew bullet):
+// PATTERN-DEPENDENT (AGENTS.md, the beam-raced-palette-skew bullet):
 // per DRAM access the real machine costs ~4.37 cycles more than un-arbitrated
 // SMK RAM when accesses are ~3.85 slots apart, but ~6.60 when they come in
 // back-to-back pairs; ours is flat at ~4.2 either way.  Two arbiter rules have
@@ -136,7 +136,7 @@ module tone_tb;
     // On a real BK-0011M the wired-OR bus RPLY (net S1-21) never reaches the
     // CPU directly: D8:B (K531TV9 negedge JK wired as a D-FF, clocked by CLC =
     // the CPU clock) re-times it onto the CPU's RPLY pin - which is also what
-    // CLAUDE.md's pin-sync rule demands ("nRPLY [asserted] to the falling
+    // AGENTS.md's pin-sync rule demands ("nRPLY [asserted] to the falling
     // edge").  We already satisfy that everywhere EXCEPT here: qbus_mem's wait
     // FSM runs on cpu_clk = pin_clk_n, so every fixed-N slave is D8:B-correct
     // by construction, while va_037_sync's PIN_nRPLY is combinational in the

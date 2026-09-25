@@ -57,7 +57,7 @@
 //  chain on the every-cycle path against +0.3 ns of sys_clk slack) and why not
 //  a 1-bit stream on two taps. The prescaler is PRIVATE rather than a port on
 //  purpose: taking the tick from cpu_clkgen would force every audio testbench
-//  to replicate a divider, which is exactly the replica-drift trap CLAUDE.md
+//  to replicate a divider, which is exactly the replica-drift trap AGENTS.md
 //  records for cpu_clkgen. Four flops buys a subsystem that is independent of
 //  the CPU clock tree and whose tbs exercise the REAL rate logic. Both channels
 //  share the one prescaler so L and R step on the same edge - otherwise their

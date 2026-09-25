@@ -28,7 +28,7 @@ makes it directly comparable with the cycle counts the bench prints, with our
 the board's 21.47727 MHz crystal, not of the memory model, and no RTL change
 can fix it.
 
-> ⚠️ The docs contain a **second** normalisation. CLAUDE.md's `N_EXT` table
+> ⚠️ The docs contain a **second** normalisation. AGENTS.md's `N_EXT` table
 > converts the same tones at 4.0270 MHz, answering the different question "what
 > would *our board* have to do to emit that tone" — which carries the clock
 > offset inside it, and is where its "+0.8 % control leg" residual comes from.
@@ -59,7 +59,7 @@ address in a different program, so `C ≠ H` means the bench is measuring the
 address rather than the access pattern.
 
 The baseline column reproduces eight numbers that were all derived
-independently before this bench existed (CLAUDE.md's beam-race A–D table,
+independently before this bench existed (AGENTS.md's beam-race A–D table,
 `sim/smktime/golden_std` for E, `qbus_pkg`'s ideal 3326 for F,
 `test/sndtestimm2.mac`'s ideal 3927 for G, and H ≡ C). If a future run does not,
 suspect the bench before believing the result.
@@ -101,7 +101,7 @@ This is the constraint the earlier rounds did not have.
 **C1 is the one thing we demonstrably do not model.** On a real BK-0011M the
 wired-OR bus RPLY (S1-21) never reaches the CPU directly: D8:B (К531ТВ9 negedge
 JK wired as a D-FF on the CLC net) re-times it onto the CPU's RPLY pin — which
-is also exactly what CLAUDE.md's pin-sync rule demands. We already satisfy that
+is also exactly what AGENTS.md's pin-sync rule demands. We already satisfy that
 **everywhere except here**: `qbus_mem`'s wait FSM runs on `cpu_clk = pin_clk_n`,
 so every fixed-`N` slave is D8:B-correct by construction, while
 `va_037_sync`'s `PIN_nRPLY` is combinational in the `sys_clk`/CLKIN domain and
@@ -259,7 +259,7 @@ boundary where it is always 0) — which is exactly why a control has to be
 required to reproduce a known-wrong answer, and is worth remembering before
 trusting any un-cross-checked arbiter experiment, including the earlier one.
 
-Treat the "≥3 slots wrecks `SOB`" line as **unconfirmed** (CLAUDE.md's
+Treat the "≥3 slots wrecks `SOB`" line as **unconfirmed** (AGENTS.md's
 beam-race bullet records it the same way); the conclusion it supports (the rule
 is wrong) survives either way.
 

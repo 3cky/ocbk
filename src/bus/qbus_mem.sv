@@ -237,7 +237,7 @@ module qbus_mem #(
     logic                 bank_wr;
     logic                 m_smk_ro, m_smk_wo;
     // smk_en re-registered locally - the model_bk11_q treatment, same reasons
-    // (see the CLAUDE.md "a quasi-static signal with big fanout still costs
+    // (see the AGENTS.md "a quasi-static signal with big fanout still costs
     // real setup time" gotcha). DIP 8 is latched in ocbk_top during the DCLO
     // hold and fans out across the mapper translate, the fdd/ide decodes and
     // the top-level muxes, so the fitter routes it far; that route landing in

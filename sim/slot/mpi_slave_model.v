@@ -55,7 +55,7 @@
 // THE RELEASE RULE IS THE POINT OF THIS FILE.  A DATIO(B) read-modify-write
 // runs DIN then DOUT under ONE held SYNC, so a slave that returns to idle on
 // SYNC-rise sits through the DOUT phase and silently drops the write (the
-// CLAUDE.md RMW rule; found on real hardware once already - see
+// AGENTS.md RMW rule; found on real hardware once already - see
 // doc/dev/gotchas.md). This model re-arms on STROBES-IDLE, and the oracle's
 // RMW leg fails if the bridge does not preserve that window.
 //

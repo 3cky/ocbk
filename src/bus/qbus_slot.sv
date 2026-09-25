@@ -67,7 +67,7 @@
 // drivers are on again well before DOUT, because the vm1 cannot start DOUT
 // until the ack of the read reply is clear. The slave at the other end must
 // obey the same rule from its side. It must go back to idle on STROBES-IDLE,
-// never on SYNC-rise (the CLAUDE.md RMW rule).
+// never on SYNC-rise (the AGENTS.md RMW rule).
 //
 // DELIBERATE DEVIATION: the outward drivers are off for all of each read.
 // Thus a module cannot monitor INTERNAL read data, as it can on the real
@@ -237,7 +237,7 @@ module qbus_slot #(
             // The pin has a 3-FF sync, as the deselect wires have. It is a
             // hard tie, not a signal. But it must not be a metastable input
             // to slot_live, and slot_live goes into an OUTPUT-ENABLE cone
-            // (slot_ad_oe). The CLAUDE.md enable-cone rule says that a
+            // (slot_ad_oe). The AGENTS.md enable-cone rule says that a
             // quasi-static term there gets its own flop, not an extra level
             // of logic.
             logic [2:0] pres_sr;

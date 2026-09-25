@@ -65,7 +65,7 @@ assign pin_bsy_n     = pin_bsy_out  ? 1'b0 : 1'bZ;
 // `? 1'b0 : 1'bZ`. qbus_mem consumes nSEL1/nSEL2 for the 177716/177714
 // register decode, and a lone Z-idle OC driver feeding on-chip logic
 // degenerates to stuck-asserted in Quartus on Cyclone I (no internal
-// tri-state/pull-up - the virq_n trap, see CLAUDE.md). The CPU is the
+// tri-state/pull-up - the virq_n trap, see AGENTS.md). The CPU is the
 // only possible SEL driver, so push-pull is lossless.
 //
 assign pin_sel_n[1]  = ~pin_sel_out[1];

@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 `ocbk` runs the Soviet **Elektronika BK-0010 / BK-0011M** (PDP-11-class) as
 alternative firmware on the 1chipMSX / OneChipBook (Altera Cyclone I
@@ -40,7 +40,7 @@ to do with.
 Per-oracle contracts live next to their runner: `sim/ref037/`, `sim/ref014/`,
 `sim/evnt/`, `sim/audio/`, `sim/ts/`, `sim/grantfit/` each have a `README.md`.
 
-RTL and testbench comments cite rules by name ("the CLAUDE.md RMW rule", "the
+RTL and testbench comments cite rules by name ("the AGENTS.md RMW rule", "the
 SEED-3 lesson", "the `model_bk11_q` idiom"). Those passages now live in
 `doc/dev/` — grep the quoted phrase.
 

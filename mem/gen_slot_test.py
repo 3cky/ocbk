@@ -26,7 +26,7 @@ Sub-tests, in order:
      pins the dual-purpose WTBT across the bridge (write flag at SYNC, byte
      flag at DOUT).
   4. DATIO - INC @#reg, a read-modify-write under ONE held SYNC. The mandated
-     RMW coverage (the CLAUDE.md rule): a bridge that let the module re-arm on
+     RMW coverage (the AGENTS.md rule): a bridge that let the module re-arm on
      SYNC-rise would drop the write half and this leg would see a stale value.
   5. qbto  - a read of an address neither ocbk nor the module decodes must get
      no reply at all -> trap 4. Proves the bridge does not "helpfully" answer.

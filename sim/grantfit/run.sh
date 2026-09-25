@@ -39,7 +39,7 @@
 # offset is real but is a property of the board's crystal, not of the memory
 # model, and nothing in the RTL can fix it.
 #
-# The project docs contain a SECOND normalisation: CLAUDE.md's N_EXT table
+# The project docs contain a SECOND normalisation: AGENTS.md's N_EXT table
 # converts the same tones at 4.0270 MHz, which answers the different question
 # "what would OUR board have to do to emit that tone" and therefore carries the
 # clock offset inside it (that is where its "+0.8 %" control-leg residual comes
@@ -66,7 +66,7 @@
 #
 # The `was` column is the pre-fix behaviour, reproducible with
 # `./run.sh --setup 0 --nod8b`.  Each of those eight numbers had been derived
-# independently before this bench existed (CLAUDE.md's beam-race A-D table,
+# independently before this bench existed (AGENTS.md's beam-race A-D table,
 # sim/smktime/golden_std for E, qbus_pkg's ideal 3326 for F,
 # test/sndtestimm2.mac's ideal 3927 for G, and H must equal C exactly), which is
 # what validated the bench in the first place.  If a run does not reproduce

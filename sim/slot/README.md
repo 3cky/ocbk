@@ -23,7 +23,7 @@ enforces everywhere else:
 - **the reply re-timing rule** — an external module's RPLY lands on the bus net
   **before** D8:B, the flop `src/bus/bk_rply.sv` models, so the slot needs its
   own instance and the internal slaves must not get a second one;
-- **the RMW rule** (`CLAUDE.md`, `doc/dev/gotchas.md`) — a slave FSM returns to
+- **the RMW rule** (`AGENTS.md`, `doc/dev/gotchas.md`) — a slave FSM returns to
   idle on **strobes-idle**, never on SYNC-rise.
 
 ## Files
@@ -55,7 +55,7 @@ enforces everywhere else:
 | 1 | **DATI** — the module's presets read back. The model presets a per-word value, so a wrong address on the pins shows up as wrong *data*, not as a missing reply |
 | 2 | **DATO** — word write, read back |
 | 3 | **DATOB** — both byte lanes, then a word read back: the dual-purpose WTBT (write flag at SYNC, byte flag at DOUT) across the bridge |
-| 4 | **DATIO** — `INC @#reg`, read-modify-write under one held SYNC. **The CLAUDE.md RMW rule** |
+| 4 | **DATIO** — `INC @#reg`, read-modify-write under one held SYNC. **The AGENTS.md RMW rule** |
 | 5 | **qbto** — a read of an address neither ocbk nor the module decodes gets no reply at all → trap 4 |
 | 6 | **deselect, both directions** — the module asserts BAS10 through its own control register and answers in the BASIC region; then releases it and ocbk's ROM answers again. Checked both ways so a stuck-asserted deselect cannot pass |
 | 7 | **the E-strobed window** (the МСТД topology) — 160000–177577 is a separate deselect (BAS2) *and* a separate read strobe (the 037's E). **7a** BAS2 alone gives 160000 to the module and leaves 120000 with the host; **7b** releasing it gives 160000 back; **7c** BAS + BAS2 together, the real МСТД configuration; **7d** M11 must move nothing on a BK-0010 (`dsl_tb` owns the BK-0011M half) |

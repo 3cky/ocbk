@@ -6,7 +6,7 @@ tree and the BK-0011M memory model. Read this before any change that touches
 clocking, memory layout, or where a new file belongs.
 
 Per-module design rules live in the sibling files indexed by
-[CLAUDE.md](../../CLAUDE.md).
+[AGENTS.md](../../AGENTS.md).
 
 ## What this is
 

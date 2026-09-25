@@ -548,7 +548,7 @@ Cycle accuracy is the whole point. All `make sim` oracles must stay green:
   the real SoC stack at the /24 CPU rate under port-2 contention and walks
   the whole Bk11MemoryManager contract: fill/verify all 8 pages through both
   windows, page-6 aliasing both directions, **RMW in EXT** (the one bus path
-  with no bk10 coverage — the CLAUDE.md RMW rule), ROM overlays +
+  with no bk10 coverage — the AGENTS.md RMW rule), ROM overlays +
   write-ignore, the 033 quirk, fixed top ROM, **RESET-instruction preserves
   the map**, the write-only map register, the **177662 video register**
   (word writes replied + RESET-preserved — the tb checks the `vid_*` taps

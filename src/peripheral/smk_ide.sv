@@ -230,7 +230,7 @@ module smk_ide (
     // This is a TIMING fix and it is the fourth visit to this endpoint.
     // Every one of these compares decides `lba_a <= bk_total_q`, i.e. it sits
     // in lba_a's REGISTER-ENABLE cone, and lba_a has now been the destination
-    // of four separate STA chases (see CLAUDE.md's envelope note). The standing
+    // of four separate STA chases (see AGENTS.md's envelope note). The standing
     // lesson from the third one is the one applied here: when a chase keeps
     // landing on the same DESTINATION, fix the endpoint rather than the leg.
     // With these registered, g_val reaches lba_a's enable through nothing wider

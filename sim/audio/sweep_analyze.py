@@ -12,7 +12,7 @@ What it produces:
     reference step nearest 1 kHz -> THE ANALOG RC CORNER (acceptance item 2);
   * the 2nd/3rd harmonic of each tone, which is what resolves the voice-A
     excess-3rd-harmonic anomaly the 2026-07-31 staircase recording turned up
-    (see the analog-stage bullet in CLAUDE.md): a chain-response explanation
+    (see the analog-stage bullet in AGENTS.md): a chain-response explanation
     predicts the 3rd harmonic tracks the RESPONSE curve at 3f, a nonlinearity
     explanation predicts it tracks the SIGNAL level instead;
   * the noise floor in the silent marker step. NOTE this is NOT acceptance

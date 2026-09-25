@@ -32,7 +32,7 @@ sweep can keep re-rejecting them.
             at en_neg, `both` = at either strobe.
 
 Every register added here is RESET - without that RASEL goes X and the sim
-hangs (the experiment note in CLAUDE.md, learned the hard way).
+hangs (the experiment note in AGENTS.md, learned the hard way).
 """
 import os
 import sys

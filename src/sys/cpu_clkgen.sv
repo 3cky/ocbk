@@ -80,7 +80,7 @@ module cpu_clkgen (
     // --- programmable CPU-clock toggle divider ----------------------------
     logic [3:0] cdiv;
     logic       cpu_clk_r;              // the SDC generated-clock anchor
-    // turbo re-registered locally - the model_bk11_q idiom (CLAUDE.md: "a
+    // turbo re-registered locally - the model_bk11_q idiom (AGENTS.md: "a
     // quasi-static signal with big fanout still costs real setup time"). It
     // comes from a top-level flop and fans out to the 037 and qbus_mem as well,
     // so the fitter routes it far; one flop here ends that route next to the

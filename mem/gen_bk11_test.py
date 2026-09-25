@@ -19,7 +19,7 @@ not a timing golden - see sim/bk11/):
 
 Stage 2 walks the whole Bk11MemoryManager contract: page fill/verify through
 window 0, EXT verify through window 1, page-6 aliasing both directions, RMW
-(DATIO) in EXT - the CLAUDE.md RMW-coverage rule; this is the one bus path
+(DATIO) in EXT - the AGENTS.md RMW-coverage rule; this is the one bus path
 with no bk10 coverage - ROM overlay codes with write-timeout (a write to a
 mapped ROM overlay gets no reply -> trap 4, proven via a vector-4 detour;
 authentic mask-ROM behaviour, BkEmu-confirmed) and empty-socket read-timeout

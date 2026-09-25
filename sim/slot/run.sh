@@ -36,7 +36,7 @@
 #   In both DIP legs the five outward strobes must stay idle on the pins, so a
 #   disabled module sees a dead bus (checked structurally in the tb).
 #
-# The RMW (DATIO) leg is the CLAUDE.md rule: a slave that re-arms on SYNC-rise
+# The RMW (DATIO) leg is the AGENTS.md rule: a slave that re-arms on SYNC-rise
 # instead of strobes-idle drops the write half of an INC and the leg sees a
 # stale value.
 set -euo pipefail
@@ -169,7 +169,7 @@ patch "$MUT_SRC" 's|else if (!din_n)            slot_rd <= ~slot_rply_rt_n;|else
 mutate S3 "inward AD driven on every read, not only a claimed one" \
       "$MUT_MEM" "$SP/m3.sv" "$MUT_MOD"
 
-# S4 - THE CLAUDE.md RMW RULE, from the module's side: a slave that re-arms on
+# S4 - THE AGENTS.md RMW RULE, from the module's side: a slave that re-arms on
 #      SYNC-rise sits through the DOUT half of a DATIO and drops the write.
 patch "$MUT_MOD" 's|if (strobes_idle) begin|if (pSltSync_n) begin|' "$SP/m4.v"
 mutate S4 "module re-arms on SYNC-rise instead of strobes-idle (DATIO write lost)" \

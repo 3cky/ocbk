@@ -142,7 +142,7 @@ module cpu_sdram_dp #(
     // to ~20.7 ns, at sync_sr[0] to ~10.35 ns. Measured (sim/smktime), the
     // one-cycle-earlier version is worth 601.7 Hz vs 598.9 against a real
     // board's 601 Hz - i.e. ~0.5 %, against halving the margin on a path no
-    // tool is checking. Not worth it: the SEED-3 lesson in CLAUDE.md is
+    // tool is checking. Not worth it: the SEED-3 lesson in AGENTS.md is
     // exactly about unverified placement luck at this end of the design.
     // There are ~22 sys_clk between the issue and an N=1 reply point.
     // pre_done keeps it to ONE early issue per SYNC, which is what keeps a

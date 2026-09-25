@@ -208,7 +208,7 @@ difference shows.
 **Item 1 is DONE — the resolution claim is CONFIRMED ON HARDWARE 2026-07-31.**
 Items 2–4 are still open, so the *analog stage* remains uncharacterised; see the
 caveat at the end of this section. The discipline for what is still unmeasured
-is the same as the BK-0010 `/32` prediction in CLAUDE.md.
+is the same as the BK-0010 `/32` prediction in AGENTS.md.
 
 1. ✅ **DIP 5 on**, record Sound-L/R while the staircase runs. FFT each step; a
    straight 6 dB/step line down through the sub-ladder-step levels, with the

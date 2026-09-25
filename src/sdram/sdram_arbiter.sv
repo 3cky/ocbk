@@ -6,7 +6,7 @@
 // requestor, runs that one access to completion (accept, and for reads until the
 // data returns), then re-arbitrates. This bounds every requestor's worst-case wait
 // to ONE in-flight word + refresh regardless of priority - the property the CPU's
-// RPLY-window margin relies on once the SDRAM is contended (see CLAUDE.md's
+// RPLY-window margin relies on once the SDRAM is contended (see AGENTS.md's
 // "SDRAM arbiter ports" bullet - there is NO fairness, so port 1 must stay paced).
 //
 // Priority = port index: port 0 is highest. Integration mapping:
@@ -105,7 +105,7 @@ module sdram_arbiter #(
                     // and cmd_req/state below still carry the `any` term. Gating them
                     // too would put `any` - and through it p_req[3] = fb_video's f_req,
                     // which arrives from the far side of the die - in the clock-enable
-                    // cone of 42 registers, which is the CLAUDE.md enable-cone rule and
+                    // cone of 42 registers, which is the AGENTS.md enable-cone rule and
                     // measured -0.015 ns on this exact path. Enabling on state alone
                     // keeps that cone local. Same cycle behaviour: when !any the load is
                     // dead (cmd_req stays 0), and cur/cmd_we are only read after the

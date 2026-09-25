@@ -157,7 +157,7 @@ module spk_capture_tb;
         end
     endtask
 
-    // DATIO(B): DIN then DOUT under ONE SYNC (INC/BIS/... on memory). CLAUDE.md
+    // DATIO(B): DIN then DOUT under ONE SYNC (INC/BIS/... on memory). AGENTS.md
     // requires RMW coverage in any bus-path oracle - the read half must not
     // produce a port strobe and the write half must produce exactly one.
     // `e` is the value the READ half must return - the joystick word at 177714.
@@ -183,7 +183,7 @@ module spk_capture_tb;
                 din_n  = 1'b1;
             // The vm1 gates dout_start on the read reply's ack having cleared,
             // so a DATIO always has a BOTH-STROBES-IDLE gap between the halves
-            // (CLAUDE.md's ROM-write-timeout note). Model it - driving the
+            // (AGENTS.md's ROM-write-timeout note). Model it - driving the
             // write data while the slave is still driving the read data makes
             // the bus X, and the capture then latches X.
             repeat (2) @(posedge cclk);
@@ -469,7 +469,7 @@ module spk_capture_tb;
         expect_port(16'o002222, 1'b1, 2'b11, 2, "back-to-back writes");
 
         // -- 6. DATIO(B) RMW: the read half must not strobe, the write half
-        //    must strobe exactly once (the CLAUDE.md RMW rule).
+        //    must strobe exactly once (the AGENTS.md RMW rule).
         port_strobes = 0;
         bus_rmw_word(16'o177714, 16'o017417, 16'o000000);  // sticks idle here
         expect_port(16'o017417, 1'b1, 2'b11, 1, "DATIO RMW write half");
@@ -544,7 +544,7 @@ module spk_capture_tb;
         bus_read(16'o177716, 16'o100104, "10d: 177716 = vector|wflag|kbd, no joystick");
         bus_read(16'o177716, 16'o100100, "10d: ...and again, flag cleared");
 
-        // -- 10e. DATIO(B) on 0177714 (the CLAUDE.md RMW rule): the read half
+        // -- 10e. DATIO(B) on 0177714 (the AGENTS.md RMW rule): the read half
         //    returns the joystick word and the write half still reaches the
         //    Covox/AY seam with exactly one strobe, under ONE SYNC.
         port_strobes = 0;

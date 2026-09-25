@@ -169,7 +169,7 @@ module va_037_sync #(
    // the design's worst. The 1-cycle lag cannot matter - ocbk_top only moves
    // the level on a bus-idle edge, where grant_raw is 0 either way. RESET is
    // mandatory, not stylistic: an unreset register in this module makes RASEL
-   // go X and the sim hang (the CLAUDE.md experiment note).
+   // go X and the sim hang (the AGENTS.md experiment note).
    //
    // The a15_037 line above is left byte-for-byte intact on purpose: it is a
    // verbatim anchor in sim/grantfit/patch037.py (A_DECL).
